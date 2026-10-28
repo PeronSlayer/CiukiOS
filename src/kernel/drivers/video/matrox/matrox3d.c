@@ -1013,7 +1013,7 @@ static int fullsize_compare(struct matrox3d_device *d,struct render3d_resource *
     }
     d->hardware_checksum=ah; d->reference_checksum=bh; return 0;
 }
-#include "../render3d_precision.h"
+#include "matrox3d_precision.h"
 static void precision_scene(const struct matrox3d_device *d,struct render3d_request *q,struct render3d_resource *const r[R3D_REFS],unsigned phase)
 {
     fullsize_scene(d,q,r[0]->width,r[0]->height,0);

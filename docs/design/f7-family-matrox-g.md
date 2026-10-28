@@ -391,8 +391,9 @@ and the heap claimed and mapped. The same orchestration as the Savage
 4. **Precision probe**: the Savage's 23 phases (ramps, checkers, mip scenes,
    filter-level sweep with ≥192 levels per unit, 256/128 textures in both
    units, sampled alpha, ten blend pairs, ±16 CLAMP coordinates) through the
-   shared envelope (`render3d_precision.h`, moved from the Savage directory
-   and included by both backends). Pass → `PROJECTIVE_BILINEAR`, 256-square
+   family envelope (`matrox3d_precision.h`, derived from the original
+   Savage envelope; integration 6 keeps its newer Savage header separately).
+   Pass → `PROJECTIVE_BILINEAR`, 256-square
    textures and all ten blend factors are advertised.
 
 Refusals: a numeric mismatch keeps the lower capability level (minimum or
@@ -550,7 +551,7 @@ Verified against the lead's read-only cache; paths below are relative to
 The source audit also keeps early alpha testing disabled, validates bounded
 RHW/UV and gradients before mip arithmetic, refuses imprecise zero-row split
 setups, and validates scanout/cursor endpoints before heap arithmetic.
-The shared precision envelope retains its arithmetic and skips disabled
+The Matrox precision envelope retains its arithmetic and skips disabled
 texture stages in two loops, allowing the single-unit family to use it
 without dereferencing a nonexistent sampler. Two-stage semantics remain
 unchanged. The independent interpreter decodes G200 TEXCTL/ALPHACTRL, G400
@@ -573,3 +574,30 @@ lead must adapt it if f7-13 is present on the integration branch. Hardware
 qualification and the canonical image remain the lead's work. Full exact
 commands/results, sanitizer environment limits and H1 counts are recorded in
 `build/codex/f7-25-report.md`. Host/model results do not qualify silicon.
+
+
+## Integration 6 merge boundary
+
+Earlier references to a checkout without f7-13 describe the premerge family
+branch. Integration 6 contains Savage's background orchestration. Matrox
+retains its existing opt-in synchronous hook; this merge does not transplant
+Savage lifecycle behavior into another family or qualify Matrox mode switches.
+
+Savage's precision header and oracle fixture remain byte-for-byte equal to
+integration 6. The Matrox precision envelope
+(`matrox/matrox3d_precision.h`) stays separate so its G200 single-stage checks do not alter Savage qualification. The shared contract
+and default GL build retain integration 6 behavior. `GL_KERNEL_FAMILY_MATROX`
+selects the Matrox H1 fixture without the T23-specific full-screen lease and
+mode-switch replay; these Savage hardware paths are not Matrox evidence.
+The normal production GL/provider/wire workload and Matrox fallback counts
+remain exercised at both H1 sizes.
+
+Integration 6 enforces `KHEAP_MAX_REQUEST` at compile time. Matrox probe
+services, resource shadows, rings and mip staging therefore use the existing
+`desktop_buffer_alloc(..., MM_IO_REQUEST)` page-backed interface, following
+Savage's owner allocation contract. Page-rounded charges, allocation prefixes
+and the family resident bytes share the existing `R3D_RAM_LIMIT`; refusal
+returns `-ENOMEM`, with the existing cleanup and quarantine behavior. No
+heap limit, physical memory limit or public interface is changed. The owner
+fixture enforces the small-heap limit separately and checks page allocation
+sizes, charges and matching frees.

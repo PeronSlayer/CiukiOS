@@ -437,6 +437,7 @@ static int perf_accept(struct du_ui *u, int button, void *ctx)
     }
     if (!system_perf_valid(&p)) { snprintf(d->text, sizeof(d->text), "Sizes must be multiples of 16 MiB, from 16 to 1024, minimum <= maximum."); return 1; }
     int e = a->host.perf_save ? a->host.perf_save(a->host.ctx, &p) : -ENOSYS;
+    if (e == -EPERM) { snprintf(d->text, sizeof(d->text), "Only administrators can change performance settings."); return 1; } /* sec-sysvc2 */
     if (e) { snprintf(d->text, sizeof(d->text), "Cannot save performance settings (error %d).", e < 0 ? -e : e); return 1; }
     a->perf_settings = p;
     text(a, H_PF_NOTE, "Settings saved. Restart the computer for the changes to take effect.");

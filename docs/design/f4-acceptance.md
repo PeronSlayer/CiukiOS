@@ -377,6 +377,14 @@ by host evidence. Complete commands/output and handoff are retained in
 
 ## f4-03
 
+**Round 2 policy amendment:** `fx-classaudit.md`, lead amendment 1, supersedes
+the dirty-bit refusal below only when `$LogFile` proves clean and there is no
+active hibernation. The amended contract and primary sources are in the NTFS
+section of `f4-audio-media-contract.md`; replay-required and hibernated volumes
+still refuse. Historical qualification results below describe their original
+source state. New dirty-state fixtures and host evidence are recorded in
+`build/codex/fx-classaudit-report.md`.
+
 Directive: [NTFS read-only library](../directives/f4-03-ntfs-ro-library.md).
 This is a freestanding read parser, not a mounted VFS service. QEMU and
 hardware qualification remain the lead's work.

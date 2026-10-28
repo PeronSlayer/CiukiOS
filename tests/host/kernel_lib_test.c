@@ -125,7 +125,10 @@ static void test_bootinfo(void)
     CHECK(bootinfo_validate(&bi, &why) != 0 && !strcmp(why, "display_mode"));
     NEG(bi.version = 3, "version");
     NEG(bi.size = 0x1000, "size");
-    NEG(bi.flags |= 1u << 23, "undefined_flag_bits"); /* G14 defines 15-22 and 24-31 */
+    /* fx-selftest defined bit 23 (CBI_F_SELF_TEST), the last undefined flag
+     * bit: every flag bit is now defined and a self-test boot validates. */
+    good_info(&bi); bi.flags |= CBI_F_SELF_TEST;
+    CHECK(CBI_F_DEFINED_MASK == 0xFFFFFFFFu && CBI_F_SELF_TEST == 1u << 23 && bootinfo_validate(&bi, &why) == 0);
     NEG(bi.flags &= ~CBI_F_A20_MASK, "a20_method");
     NEG(bi.reserved1[3] = 1, "reserved_nonzero");
     NEG(bi.uart_state = CBI_UART_BUDGET + 1, "uart_state");

@@ -538,7 +538,7 @@ config_read:
     mov [preferred_mode], dx
     jmp .next
 .apply:
-    ; safe=0, serial=1, accel=0, usbscan=0, ecpoll=0/1 and setup=1 change nothing
+    ; safe=0, serial=1, accel=0, usbscan=0, ecpoll=0/1, setup=1 and 3d=probe change nothing
     ; here: a normal option never clears a positive safe-mode source;
     ; B(options) keeps accel=0 (the kernel declines acceleration before
     ; marker I/O), usbscan=0 and ecpoll=0/1 (f2-96: the ThinkPad EC volume
@@ -593,7 +593,7 @@ config_read:
 .done:
     ret
 ; Exact BOOT.CFG options; an empty name ends the list.
-option_tokens db 'safe=0',0,'serial=1',0,'accel=0',0,'usbscan=0',0,'ecpoll=0',0,'ecpoll=1',0,'setup=1',0
+option_tokens db 'safe=0',0,'serial=1',0,'accel=0',0,'usbscan=0',0,'ecpoll=0',0,'ecpoll=1',0,'setup=1',0,'3d=probe',0
 safe_option db 'safe=1',0
 serial_option db 'serial=0',0
 menu_option db 'menu=1',0
@@ -672,6 +672,10 @@ boot_menu:
     je .hardware
     cmp al, 'H'
     je .hardware
+    cmp al, 't'
+    je .selftest
+    cmp al, 'T'
+    je .selftest
 .deadline:
     call deadline_expired
     jnc .poll
@@ -733,6 +737,16 @@ boot_menu:
     call .cancel_cfg
     or dword [B(flags)], CBI_F_HW_CHECK | CBI_F_VERBOSE
     mov byte [screen_quiet], 0
+    jmp .done
+.selftest:
+    ; fx-selftest: one unattended self-test boot that ends at the desktop
+    ; (docs/design/self-test.md). Like H it replaces a BOOT.CFG sweep; a
+    ; positive safe-mode source persists. No BOOT.CFG token exists for it.
+    call .cancel_cfg
+    or byte [B(flags)+2], CBI_F_SELF_TEST >> 16
+    mov byte [screen_quiet], 0
+    mov si, selftest_selected
+    call print
     jmp .done
 .probe:
     call .cancel_cfg
@@ -797,6 +811,7 @@ source_cfg db 'cfg'
 newline db 13,10,0
 safe_confirmation db 'Safe mode; P for a probe, or wait',13,10,0
 safe_selected db 'L:SAFE=1',13,10,0
+selftest_selected db 'L:SELFTEST=1',13,10,0
 menu_text db 'SELECT_READY',13,10
     db 'CiukiOS ', CIUKI_VERSION, ': N Normal / S Safe / L Log / H Hardware / P Probe (3 s)',13,10,0
 probe_prompt db 'fN:<probe> run=<8hex>: ',0
@@ -888,6 +903,6 @@ menu_tick dd 0
 menu_polls dw 0
 
 f4_probe_names db 'optical',0,'audio-native',0,'ntfs-ro',0,'vm-audio',0,'media-remove',0,'vm-audio-jitter',0,0
-f5_probe_names db 'f5-core',0,'w32-exceptions',0,'w32-memory',0,'w32-objects',0,'w32-dialogs',0,'w32-upper-dlls',0,'w32-media',0,'w32-fixtures',0,'w32-kernel32',0,'w32-fullscreen',0,'w32-registry',0,'w32-audio',0,'w32-gdi32',0,'w32-crash',0,'w32-user32',0,'w32-codecs',0,'w32-ddraw',0,'w32-input',0,'w32-restart',0,'w32-installer-nsis',0,'w32-gl',0,'win32-diablo-shareware',0,'win32-sc',0,'win32-aoe-trial',0,'win32-half-life-uplink',0,'win32-ut-demo-348',0,'win32-wa',0,'win32-heroes3-demo',0,'win32-rct-demo',0,'win32-jazz2-shareware',0,'win32-ta-demo',0,0
+f5_probe_names db 'f5-core',0,'w32-exceptions',0,'w32-memory',0,'w32-objects',0,'w32-dialogs',0,'w32-upper-dlls',0,'w32-media',0,'w32-fixtures',0,'w32-kernel32',0,'w32-fullscreen',0,'w32-registry',0,'w32-audio',0,'w32-gdi32',0,'w32-crash',0,'w32-user32',0,'w32-codecs',0,'w32-ddraw',0,'w32-input',0,'w32-restart',0,'w32-installer-nsis',0,'w32-gl',0,'q3-lease-eio',0,'win32-diablo-shareware',0,'win32-sc',0,'win32-aoe-trial',0,'win32-half-life-uplink',0,'win32-ut-demo-348',0,'win32-wa',0,'win32-heroes3-demo',0,'win32-rct-demo',0,'win32-jazz2-shareware',0,'win32-ta-demo',0,0
 f6_probe_names db 'net-arp',0
 f6_browser_name db 'browser',0,0

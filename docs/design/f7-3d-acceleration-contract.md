@@ -139,7 +139,7 @@ blend and alpha test. All unimplemented entries select software. The existing
 | 9 mach64 | Mesa 7.11.2 `mach64`, historical out-of-tree DRM `mach64`, [Utah-GLX](https://utah-glx.sourceforge.net/) | Rage Pro: Mesa exposes 2 stages, 1024 textures, D16, B/A; one uploaded mip level | MMIO/GUI FIFO/DMA; not implemented; chips without triangle setup stay software |
 | 10 unichrome | Mesa 7.11.2 `unichrome`, Linux `via` | 2 units, default 512 textures (1024 with excess_mipmap), D16/D24S8/D32, B/A | MMIO/AGP command regulator; not implemented |
 | 11 sis | Mesa 7.11.2 `sis`, Linux `sis` | SiS300 2 units, 1024 textures, D16/D24/D32, B/A; 315 is not covered by this driver | MMIO/AGP queue; neither generation implemented |
-| 12 nv2d | Mesa classic `nouveau` nv04/nv10/nv20, Linux `nouveau`; 21.3 mainline then Amber | TNT 2 / GeForce1–2 2 / GeForce3–4 4 units; 1024/2048/4096 textures, D16/D24S8, B/A | PFIFO PIO/DMA push buffers; not implemented |
+| 12 nv2d | Mesa classic `nouveau` nv04/nv10/nv20, Linux `nouveau`; 21.3 mainline then Amber | TNT 2 / GeForce1–2 2 / GeForce3–4 4 units; 1024/2048/4096 textures, D16/D24S8, B/A | PFIFO PIO/DMA push buffers; software-only under f7-26, complete PIO 3D/context lifecycle not established ([evidence](f7-family-nvidia-nv04-nv20.md)) |
 | 13 riva128 | [Utah-GLX](https://utah-glx.sourceforge.net/), NVIDIA public NV3 class references; no Mesa classic DRI shipping claim | 1 unit, 1024 textures, D16, B/A restrictions need qualification | PIO FIFO; not implemented |
 | 14 i740 | Utah-GLX i740; no supported Mesa classic DRI/Linux DRM pairing established here | 1 unit, 1024 textures, D16, B/A restrictions need qualification | MMIO/FIFO/AGP; not implemented |
 | 15 s3virge | historical Mesa `s3v` / Utah-GLX; no maintained Linux DRM module; last release not established | 1 unit, 128/256 texture limits depend on revision, D16, restricted B/A | MMIO FIFO; not implemented |
@@ -318,6 +318,24 @@ Mesa 7.7 `savageDDDepthFunc_s4`, `savage_3d_reg.h`, `tileInfo_pro` and X.Org
 2.3.9 `SAVAGEDRISetupTiledSurfaceRegs`/`GetTileAperturePitch`, pinned above.
 No additional register writes, hardware caps or silicon qualification follow
 from this host-model coverage.
+
+### f7-14 implementation note (2026-10-26): native API and Graphics Demo consumer
+
+[f7-14](../directives/f7-14-native-gl-hardware.md) implements the native half
+of section 7 and the f7-05 consumer with the native OpenGL library instead of
+a separate `ciuki3d_` API: `libgl` builds the opengl32 engine, journal,
+admission and provider sources, so native and Win32 programs share one GL
+semantics, capability snapshot and whole-context fallback (7.2). The backend
+policy of 7.1 is `ciuki_gl_set_backend` (automatic, software, hardware with
+`-ENODEV` when unavailable); completion accounting is `ciuki_gl_status`;
+full screen is the common lease of section 6 (v2 `DESK_LEASE`, kernel grant
+to the desktop's channel peer) presented by `ciuki_gl_present` as `gpu-copy`
+or `cpu-copy`. Graphics Demo gains the backend, native-resolution and
+full-screen controls and logs completed-copy FPS with GPU/CPU frame counts,
+refusals and fallbacks. Decisions and evidence:
+[opengl-software.md](opengl-software.md), [graphics-demo.md](graphics-demo.md),
+[f7-14 validation](../validation/f7-14-native-gl.md). The T2 textured scene
+(floor, wall, eight cubes) is not part of f7-14.
 
 Research and repository comparison: **2026-10-14**. Directive:
 [f7-00](../directives/f7-00-3d-acceleration-contract.md). Status: original research contract; the amendments above record the f7-02 implementation
@@ -983,3 +1001,32 @@ for speculative writes.
 F7-00 is complete when this source-backed contract and its handoff report are
 available. Lead cross-review/integration, production implementation, canonical
 builds, QEMU and physical T23 performance evidence remain subsequent work.
+
+
+## 10. Matrox G family integration (f7-25, integration 6)
+
+The Matrox descriptor is `R3D_UNQUALIFIED` until its per-boot qualification
+succeeds. The family implementation and its independent MMIO model are
+specified in [Matrox G family](f7-family-matrox-g.md). G200 has one texture
+unit; G400/G450/G550 have two. Unsupported state and failed qualification
+retain whole-context software fallback. Host model results do not qualify
+physical silicon.
+
+Integration 6 remains the reference for the Savage engine, precision header,
+GL fixtures and universal `render3d.h`. Matrox retains its separate
+`matrox/matrox3d_precision.h` envelope with disabled-stage checks for G200; Savage
+continues to use its unchanged, budget-aware family header. The default
+Win32 GL host build still uses the integration 6 Savage engine. The Matrox
+H1 fixture selects its own engine and backend through optional build
+arguments and `GL_KERNEL_FAMILY_MATROX`; T23-specific lease replay remains
+exclusive to the default Savage fixture.
+
+Source checks: Mesa 7.11.2 `mga_xmesa.c:504-515` selects one versus two
+texture units; Linux v6.1 `mga_drv.h:377-382,675-683` defines the engine-idle
+mask/test; X.Org 2.0.0 `mga_reg.h:544,561,609-610` agrees on texture-control
+and dual-stage register addresses. Primary distributions:
+[Mesa 7.11.2](https://archive.mesa3d.org/older-versions/7.x/7.11.2/),
+[Linux v6.1 mga](https://github.com/torvalds/linux/tree/v6.1/drivers/gpu/drm/mga),
+[X.Org mga 2.0.0](https://www.x.org/releases/individual/driver/xf86-video-mga-2.0.0.tar.gz).
+The pinned local source hashes and register-level decisions remain in the
+family design. This merge changes no register programming or public ABI.

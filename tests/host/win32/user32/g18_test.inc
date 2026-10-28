@@ -129,3 +129,31 @@ static void test_g18_shell(void) {
   discard();
   puts("PASS G18 USER: ANSI/Unicode tray packets, flags, callbacks/generation, balloons, flash return, startup show, native file list to HDROP and atomic malformed refusal");
 }
+/* fx-q3vise: the shell's folder window asks the desktop to open Files on a
+ * folder (DESK_V3_LAUNCH "files" <path>); the ANSI path goes out as UTF-8,
+ * the desktop's refusal is the call's failure, nothing is ever truncated. */
+extern BOOL W32API CiukiShellOpenFolder(HWND,const char *);
+static void test_shell_folder(void) {
+  struct u32_window *w=u32_window(windows[0]); CHECK(w && w->wire);
+  discard();
+  UINT begin=outgoing_count;
+  CHECK(CiukiShellOpenFolder(w->handle,"/WINDOWS/Start Menu/Programs/Quake 3 Arena Demo"));
+  CHECK(outgoing_count==begin+1);
+  struct desk_packet p;
+  CHECK(desk_parse(&outgoing[begin],1,0,&p) && p.opcode==DESK_V3_LAUNCH && p.window_id==w->wire &&
+        !strcmp(p.title,"files") && !strcmp(p.argument,"/WINDOWS/Start Menu/Programs/Quake 3 Arena Demo"));
+  CHECK(CiukiShellOpenFolder(w->handle,"/Documents/Caf\xe9"));
+  CHECK(desk_parse(&outgoing[outgoing_count-1],1,0,&p) && !strcmp(p.argument,"/Documents/Caf\xc3\xa9"));
+  reject_opcode=DESK_V3_LAUNCH;
+  CHECK(!CiukiShellOpenFolder(w->handle,"/Documents") && GetLastError()==8);
+  begin=outgoing_count;
+  char long_path[200]="/"; memset(long_path+1,'a',160); long_path[161]=0;
+  CHECK(!CiukiShellOpenFolder(w->handle,long_path) && GetLastError()==206);
+  long_path[160]=0; CHECK(CiukiShellOpenFolder(w->handle,long_path));   /* exactly DESK_ARG_MAX bytes */
+  CHECK(!CiukiShellOpenFolder(w->handle,"Documents") && GetLastError()==87);
+  CHECK(!CiukiShellOpenFolder(w->handle,"/") && GetLastError()==87);
+  CHECK(!CiukiShellOpenFolder((HWND)(uintptr_t)0x7777,"/Documents") && GetLastError()==1400);
+  CHECK(outgoing_count==begin+1);
+  discard();
+  puts("PASS fx-q3vise USER: folder launch request to the desktop, UTF-8 path, refusal, length and window checks");
+}

@@ -33,12 +33,13 @@ class AddRemoveTests(unittest.TestCase):
         work=ROOT/'build/host/f2-87';work.mkdir(parents=True,exist_ok=True)
         with tempfile.TemporaryDirectory(dir=work) as temporary:
             folder=Path(temporary)
-            for name in ('Games/Test/Sub','Programs/UserDirectory','Programs/DosUser','Programs/Win','Windows/Desktop','Windows/Start Menu/Programs','Documents/Desktop','system/licenses','system/settings','System'):
+            for name in ('Games/Test/Sub','Programs/UserDirectory','Programs/DosUser','Programs/Win','Windows/Desktop','Windows/Start Menu/Programs','Documents/Desktop','system/licenses','system/settings','System',
+                         'Windows/Profiles/u000003e8/Start Menu/Programs','Windows/Profiles/u000003e8/Documents/Desktop'):  # sec-user-04
                 (folder/name).mkdir(parents=True,exist_ok=True)
             (folder/'Games/Test/Sub/data').write_bytes(b'fixture')
             (folder/'Programs/UserDirectory/file').write_bytes(b'fixture')
             (folder/'system/settings/dos-game-3.cfg').write_text('kernel=0\n')
-            for package in ('wolf3d-shareware','doom-shareware','quake-shareware','war2-demo'):
+            for package in ('wolf3d-shareware','doom-shareware','quake-shareware','war2-demo','duke3d-shareware'):
                 shutil.copyfile(ROOT/f'third_party/games/{package}/UPSTREAM.json',folder/f'system/licenses/{package}-UPSTREAM.json')
             env=dict(os.environ,TMPDIR=temporary)
             command=['clang','-std=c17','-O1','-g','-Wall','-Wextra','-Werror','-D_POSIX_C_SOURCE=200809L',
@@ -83,6 +84,7 @@ class AddRemoveTests(unittest.TestCase):
             folder=Path(temporary);harness=folder/'delegation.c';binary=folder/'delegation'
             harness.write_text(r'''#include <ciuki/kernel.h>
 #include <ciuki/desktop.h>
+#include <ciuki/security.h>
 #include <assert.h>
 static struct process supervisor,parent,child;
 static struct desktop_description grants[2];
@@ -105,7 +107,9 @@ int main(void){
 }
 ''')
             subprocess.run(['clang','-std=c17','-O1','-g','-Wall','-Wextra','-Werror',
-                            '-fsanitize=address,undefined','-I'+str(ROOT/'src/kernel/include'),harness,'-o',binary],check=True)
+                            '-fsanitize=address,undefined','-ffunction-sections','-fdata-sections','-Wl,--gc-sections',
+                            '-I'+str(ROOT/'src/kernel/include'),harness,
+                            str(ROOT/'tests/host/security/subject_fixture.c'),'-o',binary],check=True)
             subprocess.run([binary],check=True)
 
     def test_dosvm_harness_links_and_syscalls(self):

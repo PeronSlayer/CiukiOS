@@ -51,6 +51,29 @@ class NativeTests(unittest.TestCase):
                 str(ROOT / "src/kernel/drivers/video/swdib.c"), str(ROOT/'tests/host/display_driver_stubs.c'), "-o", str(binary)], check=True)
             subprocess.run([str(binary)], check=True)
 
+    def test_software_3d(self):
+        folder = ROOT / "build/host"
+        folder.mkdir(parents=True, exist_ok=True)
+        with tempfile.TemporaryDirectory(prefix="nv2d-render3d-", dir=folder) as tmp:
+            binary = Path(tmp) / "fallback"
+            sanitizer = "address,undefined" if os.environ.get("CIUKI_DISPLAY_ASAN") else "undefined"
+            subprocess.run(["clang", "-std=c17", "-O1", "-g", "-Wall", "-Wextra", "-Werror",
+                "-fsanitize=" + sanitizer, "-fno-sanitize-recover=undefined",
+                "-I", str(ROOT / "src/kernel/include"), str(ROOT / "tests/host/nv2d_render3d_test.c"),
+                str(ROOT / "src/kernel/drivers/video/registry.c"),
+                str(DRIVER / "engine.c"), str(DRIVER / "hardware.c"), str(DRIVER / "dma_hw.c"),
+                str(ROOT / "src/kernel/drivers/video/swdib.c"),
+                str(ROOT / "src/kernel/drivers/video/render3d.c"),
+                str(ROOT / "src/kernel/drivers/video/render3d_scalar.c"),
+                str(ROOT / "src/kernel/drivers/video/render3d_native.c"),
+                str(ROOT / "src/kernel/drivers/video/render3d_transport.c"),
+                str(ROOT / "src/kernel/lib/fmt.c"), str(ROOT / "tests/host/display_driver_stubs.c"),
+                "-o", str(binary)], check=True)
+            symbols = subprocess.check_output(["nm", "-g", "--defined-only", str(binary)], text=True)
+            names = [line.split()[-1] for line in symbols.splitlines() if len(line.split()) == 3]
+            self.assertEqual(len(names), len(set(names)), symbols)
+            subprocess.run([str(binary)], check=True)
+
     def test_target(self):
         spec = importlib.util.spec_from_file_location("nv2d_flags", ROOT / "scripts/build_kernel.py")
         module = importlib.util.module_from_spec(spec)

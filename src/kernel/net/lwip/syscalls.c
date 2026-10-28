@@ -2,6 +2,7 @@
  * and never published to the socket/core workers.
  * SPDX-License-Identifier: GPL-2.0-only */
 #include <ciuki/kernel.h>
+#include <ciuki/security_device.h>
 #include <ciuki/net_stack.h>
 #include <ciuki/net_control.h>
 #include <ciuki/files.h>
@@ -226,8 +227,9 @@ int32_t net_socket_call(struct trap_frame *tf)
 {
     if (tf->eax == CIUKI_SYS_NETCTL) {
         struct process *p = proc_current();
-        if (!p || (!p->network_capability && !(p->dhcp_capability &&
-            (tf->ebx==CIUKI_NETCTL_RELEASE || tf->ebx==CIUKI_NETCTL_RENEW)))) return -EPERM;
+        if (!security_process_live(p)) return -EPERM;
+        if (tf->ebx > CIUKI_NETCTL_RELEASE) return -EINVAL;
+        if (tf->ebx != CIUKI_NETCTL_GET && !security_device_admin(p)) return -EPERM;
         if (tf->esi || tf->edi || tf->ebp || tf->edx != sizeof(struct ciuki_net_control)) return -EINVAL;
         struct ciuki_net_control record;
         int e = copy_from_user(&record, tf->ecx, sizeof(record));
@@ -240,6 +242,8 @@ int32_t net_socket_call(struct trap_frame *tf)
         struct proc_thread *t = proc_thread_for(g_current);
         if (t) { t->cleanup = user_free; t->operation = &output; }
         e = pin(&output, tf->ecx, sizeof(record));
+        if (!e && (!security_process_live(p) ||
+            (tf->ebx!=CIUKI_NETCTL_GET && !security_device_admin(p)))) e=-EPERM;
         struct ciuki_net_config config = record.config; unsigned index = record.index, generation = record.generation;
         memset(&record, 0, sizeof(record)); record.version = CIUKI_NETCTL_VERSION;
         record.size = sizeof(record); record.index = index; record.config = config; record.generation = generation;
@@ -249,6 +253,7 @@ int32_t net_socket_call(struct trap_frame *tf)
         user_free(&output); return e;
     }
     struct process *p = proc_current(); if (!p) return -ENOSYS;
+    if (!security_process_live(p)) return -EACCES;
     struct user_operation local = { .process = p };
     bool data = tf->eax == CIUKI_SYS_SENDTO || tf->eax == CIUKI_SYS_RECVFROM || tf->eax == CIUKI_SYS_POLL || tf->eax==CIUKI_SYS_NET_INFO;
     struct user_operation *o = data ? user_new(p) : &local;

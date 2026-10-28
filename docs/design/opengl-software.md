@@ -1,5 +1,77 @@
 # Software OpenGL subset (F7-01, 2026-10-15)
 
+## f7-14 amendment (2026-10-26): one GL engine for native and Win32 programs
+
+Directive: [f7-14](../directives/f7-14-native-gl-hardware.md). This section
+supersedes the F7-01 statements below that native programs use TinyGL's own
+pipeline, that `glTexParameteri`/`glTexEnvi` are no-ops and that the library
+never calls the kernel; the rest of the record stays as history.
+
+Research checked 2026-10-26:
+[OpenGL 1.1](https://registry.khronos.org/OpenGL/specs/gl/glspec11.pdf)
+sections 3.8 (texture parameters and environment) and 5.5 (`glFlush` submits,
+`glFinish` completes); the F7 contract sections 6 (presentation lease),
+7.1 (backend policy `auto`/`software`/`hardware-required`) and 7.2 (whole
+context in software for unsupported state; do not alternate CPU/GPU
+fragments); [Mesa 7.7 savagetris.c](https://chromium.googlesource.com/chromium/deps/mesa/+/3a0db227ffe90888ad760c61a63226988c974e00/src/mesa/drivers/dri/savage/savagetris.c)
+(`savageRenderStart`: software fallback for unsupported raster state); and
+[IDirectDraw7::SetCooperativeLevel](https://learn.microsoft.com/en-us/windows/win32/api/ddraw/nf-ddraw-idirectdraw7-setcooperativelevel)
+(exclusive full screen is bound to the application's focus window and is
+given up and restored with activation), the model for the native lease below.
+
+Repository comparison: before f7-14 `sdk/libgl` linked TinyGL's raster with
+its own `GL/gl.h`, so native programs could never reach `render3d`, while
+`sdk/win32/opengl32` carried the engine, the bounded journal, the admission
+encoder and the provider (`sdk/win32/gdi32/render3d.c`). Two GL semantics
+existed, against contract 7.2.
+
+Decisions:
+
+- `libgl.a` now builds the same engine sources as opengl32 (`engine`, `state`,
+  `texture`, `pixels`, `validate`, `geometry`, `backend`, `census`, and the
+  context helpers moved to `common.c`) over the retained TinyGL front-end
+  (transform, lighting, clipping), the scalar backend and a native provider.
+  TinyGL's public names are renamed `tgl_*` inside the library
+  (`sdk/libgl/native/tinygl_rename.h`); the engine owns every public `gl*`
+  entry point. `sdk/win32/opengl32/generate.py` generates the native
+  `<GL/gl.h>` (the 336 OpenGL 1.1 functions plus the advertised extensions of
+  `extensions.json`) and the cdecl forwarding unit `sdk/libgl/native/api.c`
+  from the same `abi.json`/`extensions.json` as the DLL exports.
+- The provider body is shared: `sdk/win32/opengl32/provider.inc` is included
+  by gdi32 (Win32) and by `sdk/libgl/native/provider.c` (native). Both send
+  the copied `W32_RENDER3D` record of `CIUKI_SYS_W32`; the kernel accepts that
+  record from native processes (`records.c`), its handler is process keyed
+  and personality neutral (`core/render3d_transport.c`). Capability
+  snapshots, admission (`encode.h`), the journal and the whole-context
+  fallback are therefore the same code. The native provider caches the
+  capability query for one frame (the engine probes before every call
+  outside `glBegin`); a submission failure still falls back as in opengl32.
+- `<ciuki/gl.h>` adds `ciuki_gl_set_backend` (automatic, software,
+  hardware; hardware returns `-ENODEV` and keeps rendering in software when
+  no qualified provider answers, or after a permanent fallback),
+  `ciuki_gl_status` (completion accounting: frames, hardware frames whose
+  every draw and clear ran on the provider, software frames, hardware and
+  software draws, temporary refusals, permanent fallbacks, presents and GPU
+  presents), `ciuki_gl_present` (full-screen presentation through a desktop
+  lease: GPU copy on a qualified provider, otherwise the finished pixels by
+  `W32_DISPLAY_FRAME`) and `ciuki_gl_get_proc_address`.
+- Full screen for native programs uses the common present lease: the
+  desktop's v2 `DESK_LEASE`/`DESK_LEASE_EVENT` carry the v3 lease payloads;
+  the kernel grants the lease to a native process holding a channel with the
+  desktop (`channel_connected`), beside the Win32 service links. Focus loss
+  revokes it and refocus reactivates a wanted lease, as for v3 windows.
+- The scene goldens (`tests/host/opengl-goldens.json`) changed with the
+  engine: the shared scalar raster replaces TinyGL's, and the demo's texture
+  parameters (bilinear, edge clamp, modulate) are now honoured.
+- The SDK ships `licenses/opengl-engine-LGPL-2.1.txt` beside the TinyGL
+  notice: the engine files carry SPDX `LGPL-2.1-or-later`.
+
+Host evidence: `tests/host/test_libgl.py` (`test_native_hardware_replay`
+runs the gfxdemo scenes through `libgl`, the copied wire, `render3d`, its
+validator, the Savage BCI emitter and the fake Savage of
+`tests/host/savage3d_backend_test.c`; see
+[the f7-14 validation record](../validation/f7-14-native-gl.md)).
+
 ## Research and implementation decision
 
 The [OpenGL 1.1 specification](https://registry.khronos.org/OpenGL/specs/gl/glspec11.pdf),

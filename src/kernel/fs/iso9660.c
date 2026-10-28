@@ -62,6 +62,15 @@ static int values(struct fs_ro_volume *v, uint64_t lba, const char *source,
                 category == 0 ? "invalid" : category == 1 ? "endian_mismatch" : "directory_rounding");
     return e;
 }
+/* Volume set fields only catalogue a disc; Linux isofs_read_inode accepts
+ * any value and period mastering tools wrote 0. Diagnose, never refuse. */
+static void informative(struct fs_ro_volume *v, uint64_t lba, const char *source,
+                        enum iso_field field, const uint8_t *p, uint64_t available)
+{
+    uint32_t le = fs_rd16(p), be = be16(p + 2);
+    if (le != 1) values(v, lba, source, field, 0, 0, le, be, 1, 1, 1, available);
+    else if (le != be) values(v, lba, source, field, 0, 1, le, be, 1, 1, 1, available);
+}
 /* Match Linux isofs: a valid BE half never rescues an impossible LE value. */
 static int number(struct fs_ro_volume *v, uint64_t lba, const char *source,
                   enum iso_field field, const uint8_t *p, unsigned width, uint32_t *out,
@@ -109,15 +118,19 @@ static __attribute__((noinline)) int record_named(struct fs_ro_volume *v, uint64
     r->length = (uint8_t)length; r->extended = p[1]; r->flags = p[25];
     r->unit = p[26]; r->gap = p[27]; r->name_length = p[32];
     memcpy(r->identifier, p + 33, r->name_length);
-    if ((r->flags & 0x60) || (!r->unit && r->gap) || ((r->flags & 2) && (r->unit || r->gap || (r->flags & 0x80)))) {
+    /* Reserved metadata bits do not alter the directory/extent layout.
+     * Linux isofs ignores them; keep unsupported interleave combinations
+     * separate because they change where file bytes are read. */
+    if ((!r->unit && r->gap) || ((r->flags & 2) && (r->unit || r->gap || (r->flags & 0x80)))) {
         if (log_once(v, ISO_FLAGS, 0))
             iso_log("[optical] iso session=%llu lba=%llu descriptor=%s field=flags_interleave result=%d flags=%u reserved_mask=96 directory_mask=2 multi_extent_mask=128 unit=%u gap=%u",
                     (unsigned long long)v->start, (unsigned long long)lba, source, -FS_EIO, r->flags, r->unit, r->gap);
         return -FS_EIO;
     }
+    if (r->flags & 0x60)
+        values(v,lba,source,ISO_FLAGS,0,0,r->flags,0,0,0x9f,1,r->length);
     struct iso_state *s = v->state;
-    uint32_t sequence;
-    e = number(v, lba, source, ISO_SEQUENCE, p + 28, 2, &sequence, 1, 1, s->blocks); if (e) return e;
+    informative(v, lba, source, ISO_SEQUENCE, p + 28, s->blocks);
     if (r->extended > s->blocks)
         return values(v, lba, source, ISO_EXTENT, -FS_EIO, 0, fs_rd32(p + 2), be32(p + 6),
                       0, s->blocks, 1, r->extended);
@@ -178,7 +191,7 @@ static int following(struct fs_ro_volume *v, uint64_t *id, struct iso_record *r)
 static bool same_section(const struct iso_record *a, const struct iso_record *b)
 {
     return a->name_length == b->name_length && !memcmp(a->identifier, b->identifier, a->name_length) &&
-        (a->flags & ~0x80u) == (b->flags & ~0x80u) && a->unit == b->unit && a->gap == b->gap;
+        (a->flags & ~0xe0u) == (b->flags & ~0xe0u) && a->unit == b->unit && a->gap == b->gap;
 }
 static int metadata(struct fs_ro_volume *v, uint64_t id, struct fs_ro_node *out)
 {
@@ -301,9 +314,9 @@ static int descriptor(struct fs_ro_volume *v, uint64_t lba, const uint8_t *b, ui
     if (e) return e;
     uint32_t value;
     e = number(v, lba, name, ISO_BLOCK_SIZE, b + 128, 2, &value, ISO_BLOCK, ISO_BLOCK, v->sectors); if (e) return e;
-    e = number(v, lba, name, ISO_SET_SIZE, b + 120, 2, &value, 1, 1, v->sectors); if (e) return e;
-    e = number(v, lba, name, ISO_SEQUENCE, b + 124, 2, &value, 1, 1, v->sectors); if (e) return e;
-    if (b[881] != 1) return values(v, lba, name, ISO_STRUCTURE_VERSION, -FS_EIO, 0, b[881], 0, 1, 1, 1, v->sectors);
+    informative(v, lba, name, ISO_SET_SIZE, b + 120, v->sectors);
+    informative(v, lba, name, ISO_SEQUENCE, b + 124, v->sectors);
+    if (b[881] != 1) values(v, lba, name, ISO_STRUCTURE_VERSION, 0, 0, b[881], 0, 1, 1, 1, v->sectors);
     /* We traverse directory records, never path tables. Like isofs, don't
      * refuse readable files because an unused table copy is broken. */
     struct iso_state *s = v->state;
@@ -345,11 +358,11 @@ static int mount_iso(struct fs_ro_volume *v)
         iso_log("[optical] iso session=%llu lba=%llu descriptor=%s type=%u field=header result=0",
                 (unsigned long long)v->start, (unsigned long long)lba, name, b[0]);
         if (b[0] == 255) {
-            if (b[6] != 1) return values(v, lba, name, ISO_DESCRIPTOR_VERSION, -FS_EIO, 0, b[6], b[0], 1, 1, 1, v->sectors);
+            if (b[6] != 1) values(v, lba, name, ISO_DESCRIPTOR_VERSION, 0, 0, b[6], b[0], 1, 1, 1, v->sectors);
             terminated = true; break;
         }
         if (b[0] == 1 && !primary) {
-            if (b[6] != 1) return values(v, lba, name, ISO_DESCRIPTOR_VERSION, -FS_EIO, 0, b[6], b[0], 1, 1, 1, v->sectors);
+            if (b[6] != 1) values(v, lba, name, ISO_DESCRIPTOR_VERSION, 0, 0, b[6], b[0], 1, 1, 1, v->sectors);
             e = descriptor(v, lba, b, 0, &primary); if (e) return e;
             blocks = s->blocks;
             memcpy(v->volume_label,b+40,32); v->volume_label[32]=0;
@@ -365,14 +378,14 @@ static int mount_iso(struct fs_ro_volume *v)
         } else if (b[0] == 2 && b[6] == 1 && b[88] == '%' && b[89] == '/') {
             uint8_t level = b[90] == '@' ? 1 : b[90] == 'C' ? 2 : b[90] == 'E' ? 3 : 0;
             if (!level) continue; /* an unimplemented character set */
-            if (b[7]) { v->diagnostic = "malformed_joliet"; return values(v, lba, name, ISO_VOLUME_FLAGS, -FS_EIO, 0, b[7], 0, 0, 0, 1, v->sectors); }
+            if (b[7]) values(v, lba, name, ISO_VOLUME_FLAGS, 0, 0, b[7], 0, 0, 0, 1, v->sectors);
             uint64_t root; e = descriptor(v, lba, b, level, &root);
             if (e) { v->diagnostic = "malformed_joliet"; return e; }
             if (level > preferred) { preferred = level; supplementary = root; supplementary_blocks = s->blocks; }
         } /* Boot, partition, repeated PVD and unknown descriptors are ignored. */
     }
     if (!primary) return values(v, v->start + 16, "set", ISO_PRIMARY, -FS_EIO, 0, primary, supplementary, 1, ISO_DESCRIPTORS, 1, v->sectors);
-    if (!terminated) return values(v, v->start + 16, "set", ISO_TERMINATOR, -FS_EIO, 0, terminated, primary / ISO_BLOCK, 1, ISO_DESCRIPTORS, 1, v->sectors);
+    if (!terminated) values(v, v->start + 16, "set", ISO_TERMINATOR, 0, 0, terminated, primary / ISO_BLOCK, 1, ISO_DESCRIPTORS, 1, v->sectors);
     s->blocks = supplementary ? supplementary_blocks : blocks;
     s->joliet = preferred; s->root = supplementary ? supplementary : primary;
     v->diagnostic = preferred ? "joliet" : "iso9660";

@@ -13,7 +13,7 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[3]
 FOLDER = ROOT / "build/host/icons"
-SOURCES = ["apps/libdeskui/icons.c", "apps/libdeskui/icon_map.c"]
+SOURCES = ["apps/libdeskui/icons.c", "apps/libdeskui/icon_map.c", "apps/libdeskui/iconx.c", "apps/libdeskui/fileicon.c"]
 
 
 def load(name, path):
@@ -40,7 +40,7 @@ def _fresh(path, expected, produce):
 
 
 def store():
-    icons = load("host_icon_store", ROOT / "apps/desktop/convert_icons.py")
+    icons = load("host_icon_store", ROOT / "apps/desktop/system_icons.py")
     return _fresh(FOLDER / "tango.cis", icons.store_record()["store_sha256"], lambda: icons.build_store()[0])
 
 

@@ -1,0 +1,11 @@
+--- a/tests1.dat
++++ b/tests1.dat
+@@ -7673,7 +7673,7 @@
+ flex-basis: 0px
+ flex-direction: row
+ flex-grow: 0.000
+-flex-shrink: 1.000
++flex-shrink: 0.000
+ flex-wrap: nowrap
+ float: none
+ font-family: sans-serif

@@ -1,6 +1,7 @@
 /* T0: production DOS lifecycle/BIOS/disk/monitor and paging functions.
  * Only CPU, scheduler, PMM and VFS transport are fake. No DOS boot claimed.
  * SPDX-License-Identifier: GPL-2.0-only */
+#include <ciuki/kheap_limits.h>
 #define _POSIX_C_SOURCE 200809L
 #include <stdio.h>
 #include <stdlib.h>
@@ -55,6 +56,8 @@ uint64_t g_tsc_per_ms;
 static uint64_t fake_tsc;
 static uint64_t (*tsc_clock_hook)(void);
 static uint64_t read_tsc_serialized(void) { return tsc_clock_hook ? tsc_clock_hook() : fake_tsc; }
+/* fx-doomwin: exit boundary stamps (dosvm_perf_stamp) read the same fake TSC. */
+static uint64_t read_tsc_unserialized(void) { return read_tsc_serialized(); }
 static void write_cr3(uint32_t x) { cpu_cr3 = x; cr3_reloads++; }
 static uint32_t fake_cr2 = 0xDEAD000;
 static uint32_t read_cr2(void) { return fake_cr2; }
@@ -114,7 +117,7 @@ uint32_t pmm_alloc_contig(uint32_t pages)
 {
     creation_cost_charge(4000 * pages);
     if (allocation_fails() || ++contiguous_calls == fail_contiguous_at) return 0;
-    for (unsigned first = 4096; first + pages <= HOST_PAGES; first++) {
+    for (unsigned first = PMM_NORMAL_START_PFN; pages && pages <= HOST_PAGES && first <= HOST_PAGES - pages; first++) {
         unsigned n = 0;
         while (n < pages && !allocated[first + n]) n++;
         if (n != pages) { first += n; continue; }
@@ -211,8 +214,7 @@ void klog_diag(const char *fmt,...)
  * fail here too (f3-06 lookup table, vm-window QEMU 2026-10-12). The fake
  * scheduler's own task/stack storage uses harness_alloc instead. */
 static void *harness_alloc(size_t n) { if (allocation_fails()) return 0; void *p = malloc(n); if (p) heap_blocks++; return p; }
-void *dosvm_host_alloc(size_t n) { return harness_alloc(n); }
-void *kmalloc(size_t n) { return n > 2040 ? 0 : harness_alloc(n); }
+void *(kmalloc)(size_t n) { if (n > KHEAP_MAX_REQUEST) return 0; return harness_alloc(n); }
 void kfree(void *p) { if (p) { CHECK(heap_blocks); heap_blocks--; free(p); } }
 /* Generated from the unmodified production user-address-space section. */
 #define AS_AUDIT_CHARGE creation_cost_charge
@@ -611,12 +613,26 @@ static void creation_cost_store(cvga_state *v, uint32_t at, uint8_t byte)
  * here exercise the supported read-only system-volume launch path. */
 void fs_service(void) { }
 int dos_save_store_open(struct dos_save_file *f,struct dos_save *s,const struct dos_save_identity *id,
-                        char path[128],unsigned *archived)
+                        const char *root,char path[DOS_SAVE_PATH],unsigned *archived)
 {
     (void)s; *archived=0; f->fd=-1; f->absent=true;
-    snprintf(path,128,DOS_SAVE_ROOT "\\G%uK%u%s.COW",id->game,id->kernel,id->base);
+    CHECK(!strcmp(root,DOS_SAVE_ROOT)); /* internal/bootstrap identities: machine namespace */
+    snprintf(path,DOS_SAVE_PATH,"%s\\G%uK%u%s.COW",root,id->game,id->kernel,id->base);
     return -FS_EROFS;
 }
+/* sec-k05: the scratch and title directories exist in this transport; the
+ * identity adapter's host-view gate is never reached (no D:/E: here). */
+static char last_mkdir[DOS_IDENTITY_PATH];
+int vfs_mkdir(struct vfs_table *table,const char *path,uint8_t attr)
+{
+    (void)file_slot(table);
+    CHECK(!attr && (!strcmp(path,"C:\\SYSTEM\\DOS") || !strcmp(path,"C:\\SYSTEM\\DOS\\SAVES") ||
+          !strncmp(path,"C:\\Windows\\Profiles\\",20)) && strlen(path)<sizeof(last_mkdir));
+    strcpy(last_mkdir,path);
+    return -FS_EEXIST;
+}
+void vfs_lock(struct vfs *v,uint32_t mask) { (void)v; (void)mask; CHECK(false); }
+void vfs_unlock(struct vfs *v) { (void)v; CHECK(false); }
 #include "../../src/kernel/vm/dos_save.c"
 #include "../../src/kernel/vm/dosvm_disk.c"
 #include "../../src/kernel/vm/dosvm_bios.c"
@@ -642,7 +658,7 @@ int dos_save_store_open(struct dos_save_file *f,struct dos_save *s,const struct 
 static unsigned program_calls;
 static int program_result;
 int dosvm_game_program(unsigned game,bool remove,uint32_t *size)
-{ CHECK(game && game<=4);(void)remove;program_calls++;*size=8192;return program_result; }
+{ CHECK(game && game<=CIUKI_DOSVM_GAME_COUNT);(void)remove;program_calls++;*size=8192;return program_result; }
 /* fx-4: the production inventory names its failed step; this fixture
  * reports the step/detail a case selects (dosvm_fx4_test.inc). */
 static const char *program_step="fixture",*program_detail="none";
@@ -655,8 +671,16 @@ int dosvm_game_program_checked(unsigned game,bool remove,uint32_t *size,const ch
  * NORMAL (pmm_alloc_zone CHECKs it); a case may set the DMA figure. */
 static uint32_t fake_dma_free_pages;
 uint32_t pmm_zone_free(int zone) { return zone==ZONE_NORMAL ? pmm_free_count() : zone==ZONE_DMA ? fake_dma_free_pages : 0; }
-int dosvm_game_data(unsigned game,unsigned op,struct ciuki_dosvm_command *c)
-{ CHECK(game && game<=3 && op>=14 && op<=16); c->changed=1024; c->reason=DOS_SAVE_QUOTA; return 0; }
+/* sec-k05: the store the caller's identity names (own data only). */
+static char game_data_root[DOS_IDENTITY_PATH];
+static uint32_t game_data_uid;
+int dosvm_game_data(unsigned game,unsigned op,struct ciuki_dosvm_command *c,const struct dos_identity *owner)
+{
+    CHECK(game && game<=CIUKI_DOSVM_GAME_COUNT && op>=14 && op<=16 && owner && !owner->system);
+    CHECK(!dos_identity_root(owner,DOS_ROOT_STORE,game_data_root,sizeof(game_data_root)));
+    game_data_uid=owner->credential.uid;
+    c->changed=1024; c->reason=DOS_SAVE_QUOTA; return 0;
+}
 #include "../../src/kernel/vm/dosvm_client.c"
 #include "../../src/kernel/vm/vga_hardware.c"
 #include "../../src/kernel/vm/dosvm_fullscreen.c"
@@ -668,6 +692,7 @@ int dosvm_game_data(unsigned game,unsigned op,struct ciuki_dosvm_command *c)
 #undef as_map
 #undef memcpy
 #undef memset
+#include "../../src/kernel/vm/dos_identity.c"
 #include "dosvm_network_seams.inc"
 #include "../../src/kernel/vm/dpmi_desc.c"
 #include "../../src/kernel/vm/dpmi_switch.c"
@@ -1027,12 +1052,15 @@ static void test_memory_services(bool locked)
 #include "dosvm_paging_test.inc"
 #include "dosvm_wait_present_test.inc"
 #include "dosvm_floppy_test.inc"
+#include "dosvm_identity_test.inc" /* sec-k05: VM identity, INT 13h private provider */
 #include "dosvm_uart_test.inc"
 #include "dosvm_fx4_test.inc"
 #include "dosvm_fx16_test.inc"     /* fx-16: T23 trial e831e685 replays */
+#include "dosvm_dospic_test.inc"   /* fx-dospic: early EOI and handler completion */
 #include "dosvm_fx22_test.inc"     /* fx-22: T23 trial f441c5bd full-screen return */
 #include "dosvm_properties_test.inc"
 #include "dosvm_fx27_test.inc"     /* fx-27: windowed DOS graphics budgets */
+#include "dosvm_doomfs2_test.inc" /* fx-doomfs2: full-screen sound load */
 #ifndef T23_HEAD_BASELINE
 #include "dosvm_t23dosperf_test.inc" /* t23-dosperf: trial c42f556e DOS window lag */
 #else
@@ -1042,9 +1070,19 @@ static void test_t23dosperf(void) {}
 #include "dosvm_vbe_window_test.inc"  /* war2vbe: windowed VBE without a native provider */
 #include "dosvm_101_revoke_race_test.inc"
 #include "dosvm_101_native_test.inc"
+#include "dosvm_mouse_test.inc"
+#ifndef FX_DOSWIN3_BASELINE
+#include "dosvm_doswin3_r2_test.inc"
+#include "dosvm_doswin3_test.inc"
+#endif
+#include "dosvm_doomwin_test.inc"   /* fx-doomwin: trial 6c3b7800 DOOM window */
 int main(void)
 {
     ram=calloc(HOST_PAGES,PAGE_SIZE); CHECK(ram);
+    if (getenv("CIUKI_VM_DOSMOUSE")) { test_dos_mouse(); free(ram); fflush(stdout); return 0; }
+#ifndef FX_DOSWIN3_BASELINE
+    if (getenv("CIUKI_VM_DOSWIN3")) { test_doswin3(); free(ram); fflush(stdout); return 0; }
+#endif
     if (getenv("CIUKI_VM_101_REVOKE_RACE")) { test_101_revoke_races(); free(ram); fflush(stdout); return 0; }
     if (getenv("CIUKI_VM_101_BENCH")) { bench_101_video(); free(ram); fflush(stdout); return 0; }
     if (getenv("CIUKI_VM_101_VIDEO")) { test_101_video(); free(ram); fflush(stdout); return 0; }
@@ -1053,6 +1091,7 @@ int main(void)
     if (getenv("CIUKI_VM_101_NATIVE")) { test_101_native(); free(ram); fflush(stdout); return 0; }
     if (getenv("CIUKI_VM_MPU")) { test_mpu_uart(); test_vm_midi(); free(ram); fflush(stdout); return 0; }
     if (getenv("CIUKI_VM_PROPERTIES")) { test_dos_properties(); free(ram); fflush(stdout); return 0; }
+    if (getenv("CIUKI_VM_DOSFULL")) { test_fullscreen_service(); test_fullscreen_dosfull(); free(ram); fflush(stdout); return 0; }
     if (getenv("CIUKI_VM_CLIPBOARD")) { test_programmatic_clipboard(); free(ram); fflush(stdout); return 0; }
     if (getenv("CIUKI_VM_SAVE_TEST")) {
         test_persistent_provider(); test_client_boundary();
@@ -1066,9 +1105,12 @@ int main(void)
         free(ram);fflush(stdout);return 0;
     }
     if (getenv("CIUKI_VM_FX16")) { test_fx16(); printf("fx-16 checks=%u\n", checks); fflush(stdout); free(ram); return 0; }
+    if (getenv("CIUKI_VM_DOSPIC")) { test_dospic(); printf("fx-dospic checks=%u\n", checks); fflush(stdout); free(ram); return 0; }
     if (getenv("CIUKI_VM_FX22")) { test_fx22(); printf("fx-22 checks=%u\n", checks); fflush(stdout); free(ram); return 0; }
     if (getenv("CIUKI_VM_FX27")) { test_fx27(); printf("fx-27 checks=%u\n", checks); fflush(stdout); free(ram); return 0; }
+    if (getenv("CIUKI_VM_DOOMFS2")) { test_doomfs2(); printf("fx-doomfs2 checks=%u\n", checks); fflush(stdout); free(ram); return 0; }
     if (getenv("CIUKI_VM_T23DOSPERF")) { test_t23dosperf(); printf("t23-dosperf checks=%u\n", checks); fflush(stdout); free(ram); return 0; }
+    if (getenv("CIUKI_VM_DOOMWIN")) { test_doomwin(); printf("fx-doomwin checks=%u\n", checks); fflush(stdout); free(ram); return 0; }
     if (getenv("CIUKI_VM_SERIAL")) { test_serial_uart(); free(ram); fflush(stdout); return 0; }
     if (getenv("CIUKI_VM_WAIT_PRESENT")) {
         test_wait_present(); test_client_boundary(); test_video_presenter(); test_fullscreen_vbe();
@@ -1082,6 +1124,7 @@ int main(void)
     if (getenv("CIUKI_VM_DISK_TRACE")) { test_disk_trace(); free(ram); return 0; }
     if (getenv("CIUKI_VM_FX4")) { test_fx4_vm_create(); test_fx4b_launch_paths(); printf("fx-4 checks=%u\n",checks); fflush(stdout); free(ram); return 0; }
     if(getenv("CIUKI_VM_PROGRAMS")){test_client_boundary();fflush(stdout);free(ram);return 0;}
+    if (getenv("CIUKI_VM_IDENTITY")) { test_vm_identity(); test_client_boundary(); printf("H06 VM identity checks=%u\n",checks); fflush(stdout); free(ram); return 0; }
     if(getenv("CIUKI_VM_KERNEL_CHOICE")){
         test_kernel_choice();test_client_boundary();
         printf("H55-04 native selector/overlay tests: PASS (%u checks)\n",checks);
@@ -1093,7 +1136,7 @@ int main(void)
     test_maximum_creation();
     test_maximum_teardown();
     test_vga_transaction_bound();
-    test_admission(); test_creation_failures(); test_memory_disk(); test_bios_bounds(); test_lifecycle_records(); test_cleanup_errors(); test_memory_services(true); test_memory_services(false); test_devices(); test_audio(); test_dpmi();
+    test_admission(); test_creation_failures(); test_memory_disk(); test_bios_bounds(); test_vm_identity(); test_lifecycle_records(); test_cleanup_errors(); test_memory_services(true); test_memory_services(false); test_devices(); test_audio(); test_dpmi(); test_dos_mouse();
     test_video();
     test_programmatic_clipboard();
     test_wait_present();
@@ -1107,6 +1150,7 @@ int main(void)
     test_fx4b_launch_paths();
     test_timer();
     test_fx16();
+    test_dospic();
     test_menu();
     test_irq_stall();
     test_isr_recovery_boundary(); test_isr_nested_hardware();
@@ -1115,13 +1159,20 @@ int main(void)
     test_speed();
     test_cost_bursts();
     test_fx27();
+    test_doomfs2();
     test_t23dosperf();
+#ifndef FX_DOSWIN3_BASELINE
+    test_doswin3();
+#endif
+    test_doomwin();
     test_101_video();
     test_exit_cost();
     test_idle();
     test_fullscreen_transport();
     test_fullscreen_service();
+    test_fullscreen_dpmi_refusal();
     test_fullscreen_more_modes();
+    test_fullscreen_dosfull();
     test_fullscreen_vbe();
     test_vbe_window();
     test_vbe_native_war2_t23();

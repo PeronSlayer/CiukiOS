@@ -1,8 +1,8 @@
-/* Boot-only fixed-point sample envelope shared by hardware backends; no
+/* Matrox-only fixed-point sample envelope derived from the f7-25 baseline; no
  * allocation or engine access. The caller includes render3d.h first.
  * SPDX-License-Identifier: GPL-2.0-only */
-#ifndef CIUKI_RENDER3D_PRECISION_H
-#define CIUKI_RENDER3D_PRECISION_H
+#ifndef CIUKI_MATROX3D_PRECISION_H
+#define CIUKI_MATROX3D_PRECISION_H
 struct precision_arithmetic { unsigned bits; bool rounded,separable; };
 static int32_t sample_floor(int32_t a)
 { return a>=0 ? a/65536 : -1-(-1-a)/65536; }

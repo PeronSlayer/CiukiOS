@@ -9,7 +9,7 @@
 #include <errno.h>
 
 static char saved[CFG_TEXT_MAX]; static size_t saved_n; static unsigned saves, applies;
-static int load(void *c, char *t, size_t s, size_t *n) { (void)c; if (!saved_n || saved_n > s) return -1; memcpy(t, saved, saved_n); *n = saved_n; return 0; }
+static int load(void *c, char *t, size_t s, size_t *n) { (void)c; if (!saved_n || saved_n > s) { errno=saved_n ? EFBIG : ENOENT; return -1; } memcpy(t, saved, saved_n); *n = saved_n; return 0; }
 static int save(void *c, const char *t, size_t n) { (void)c; if (n >= sizeof(saved)) return -1; memcpy(saved, t, n); saved[n] = 0; saved_n = n; saves++; return 0; }
 static int apply(void *c, unsigned r, int v, int m) { (void)c; (void)v; (void)m; assert(r == DESK_SETTINGS_RELOAD); applies++; return 0; }
 static struct cp_app app; static struct du_ui ui;

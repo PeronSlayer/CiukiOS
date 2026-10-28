@@ -24,6 +24,7 @@ static void irq_restore(uint32_t f) { (void)f; }
 /* The production file declares these weak (kernels without ACPI link);
  * here they are the T23 fixture, defined below. */
 int acpi_pm_blocks(struct apm_pm_blocks *) __attribute__((weak));
+int power_firmware_pm_blocks(struct apm_pm_blocks *) __attribute__((weak));
 int acpi_ec_firmware_hold(unsigned ms) __attribute__((weak));
 void acpi_ec_firmware_release(void) __attribute__((weak));
 bool registry_smi_snapshot(struct registry_smi *) __attribute__((weak));
@@ -138,6 +139,18 @@ int acpi_pm_blocks(struct apm_pm_blocks *out)
     if (!fadt_present) return -ENOENT;
     *out = (struct apm_pm_blocks){.pm1a_evt = 0x1000, .pm1a_cnt = 0x1004, .pm_tmr = 0x1008, .gpe0 = 0x1028,
         .gpe1 = 0x102c, .smi_cmd = 0xb2, .pm1_evt_len = 4, .pm1_cnt_len = 2, .pm_tmr_len = 4, .gpe0_len = 4, .gpe1_len = 4};
+    return 0;
+}
+/* sec-wire: the power code's read-only FADT parse (core/power_acpi_s5.c),
+ * consulted when the inventory loaded no tables: QEMU/SeaBIOS PIIX4 blocks. */
+static bool firmware_fadt;
+static unsigned firmware_fadt_calls;
+int power_firmware_pm_blocks(struct apm_pm_blocks *out)
+{
+    firmware_fadt_calls++;
+    if (!firmware_fadt) return -ENOTSUP;
+    *out = (struct apm_pm_blocks){.pm1a_evt = 0x600, .pm1a_cnt = 0x604, .pm_tmr = 0x608, .gpe0 = 0xafe0,
+        .smi_cmd = 0xb2, .pm1_evt_len = 4, .pm1_cnt_len = 2, .pm_tmr_len = 4, .gpe0_len = 4};
     return 0;
 }
 bool registry_smi_snapshot(struct registry_smi *out)
@@ -301,6 +314,23 @@ int main(void)
     acpi_settled = false; power_source_acpi_settled(CIUKI_POWER_OWNED); pm1_cnt = 1; reset_machine();
     CHECK(discover() == -EBUSY && backend.state == APM_EXCLUDED && strstr(log_line, "reason=acpi_owner"));
     unsigned c0 = connects; CHECK(connects == c0);
+
+    /* 7. sec-wire (QEMU run of image ae977fbe: "[apm] window ranges=2
+     * source=none", then SeaBIOS's 5307h wrote 2000h to 604h and the VM
+     * refused it): without inventory blocks the window takes the FADT from
+     * the power code's read-only parse, by the same fx-18 rule. The
+     * inventory's blocks still win where they exist (the T23 path). */
+    reset_machine(); fadt_present = chip_present = false; firmware_fadt = true; firmware_fadt_calls = 0;
+    install_window();
+    CHECK(firmware_fadt_calls == 1 && window.source == APM_PORT_SOURCE_FADT && window.count == 6);
+    CHECK(strstr(log_line, "[apm] window ranges=") && strstr(log_line, "source=fadt pm1_cnt=0604"));
+    CHECK(apm_port_check(&window, 0x604, 2, true, 0x2000, 0x5307, &k, &why) == APM_PORT_ALLOW && k == APM_PORT_PM1_CNT);
+    CHECK(apm_port_check(&window, 0x604, 2, true, 0x2000, 0x530a, &k, &why) == APM_PORT_DENY && !strcmp(why, "slp_en"));
+    CHECK(apm_port_check(&window, 0x608, 4, false, 0, 0x530a, &k, &why) == APM_PORT_ALLOW && k == APM_PORT_PM_TMR);
+    firmware_fadt = false; install_window();
+    CHECK(window.source == 0 && strstr(log_line, "source=none pm1_cnt=0000"));
+    fadt_present = chip_present = true; firmware_fadt = true; firmware_fadt_calls = 0; install_window();
+    CHECK(!firmware_fadt_calls && strstr(log_line, "source=fadt+chipset pm1_cnt=1004"));
     printf("APM T23 fixture: %u checks, %u failures (steady cost window: %u calls, max %u us)\n",
            checks, failures, cost.calls, cost.max_us);
     return failures != 0;

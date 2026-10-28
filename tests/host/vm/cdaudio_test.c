@@ -6,6 +6,7 @@
  * guest's requests are laid out as id Software's WinQuake cd_audio.c (GPL
  * release) builds them; the VFS is a fake holding synthetic CD-DA WAV tracks.
  * SPDX-License-Identifier: GPL-2.0-only */
+#include <ciuki/kheap_limits.h>
 #include <stdio.h>
 #include <string.h>
 #include <ciuki/kernel.h>
@@ -52,7 +53,7 @@ static unsigned contig_runs;
 uint32_t pmm_alloc_contig(uint32_t n)
 { if (host_page_count + n > 160) return 0; contig_runs++; host_page_count += n; return host_page_count - n + 1; }
 void pmm_free(uint32_t p) { (void)p; }
-void *kzalloc(size_t n) { return calloc(1, n); }
+void *(kzalloc)(size_t n) { if (n > KHEAP_MAX_REQUEST) return 0; return calloc(1, n); }
 void kfree(void *p) { free(p); }
 gen_t gen_alloc(void) { static gen_t next; return ++next; }
 void kwait_init(struct kwait *q) { memset(q, 0, sizeof(*q)); }

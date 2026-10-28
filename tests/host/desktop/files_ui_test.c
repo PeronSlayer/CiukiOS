@@ -124,7 +124,9 @@ static int remove_media(unsigned d,uint32_t gen)
 {
     assert((d==4 && gen==77) || (d==3 && gen==88)); removal_calls++;
     if (removal_error) return removal_error;
-    fake_nodes[fake_lookup(d==3 ? "/mnt/d" : "/mnt/e")].live=0; media_state.removable_mask &= ~(1u<<d); media_state.type[d]=d==3 ? 0 : CIUKI_MEDIA_SAFE_REMOVED; return 0;
+    fake_nodes[fake_lookup(d==3 ? "/mnt/d" : "/mnt/e")].live=0; media_state.removable_mask &= ~(1u<<d);
+    media_state.type[d]=d==3 ? CIUKI_MEDIA_OPTICAL : CIUKI_MEDIA_SAFE_REMOVED; /* fx-emptydrive: D: stays */
+    return 0;
 }
 static int blockers(unsigned drive,uint32_t generation,struct ciuki_media_blockers *b)
 {
@@ -158,17 +160,68 @@ static void removable_ui_tests(void)
     e=(struct du_event){.type=DU_EV_TICK,.id=2};files_event(&ui,&e,&app);
     row=list_find("D:");assert(row>=0 && !strcmp(app.rows[row].text[2],"CD-ROM Drive") && app.rows[row].icon16 && app.rows[row].icon32);
     assert(!files_navigate(&app,"/mnt/d"));
-    fake_nodes[fake_lookup("/mnt/d")].live=0;media_state.removable_mask=0;media_state.generation[3]=0;media_state.type[3]=0;
-    files_event(&ui,&e,&app);assert(!app.model.path[0] && list_find("D:")<0);
+    /* fx-emptydrive: the kernel keeps type[3] optical after the disc leaves. */
+    fake_nodes[fake_lookup("/mnt/d")].live=0;media_state.removable_mask=0;media_state.generation[3]=0;
+    files_event(&ui,&e,&app);row=list_find("D:");
+    assert(!app.model.path[0] && row>=0 && !strcmp(app.rows[row].text[0],"Compact Disc (D:)") && !strcmp(app.rows[row].text[2],"CD-ROM Drive"));
     fake_create("/mnt/d",FM_DIR);media_state.removable_mask=1u<<3;media_state.generation[3]=88;media_state.type[3]=CIUKI_MEDIA_OPTICAL;
     files_event(&ui,&e,&app);row=list_find("D:");assert(row>=0);fm_select(&app.model,(unsigned)row,0);files_update(&app);
     struct du_event context={.type=DU_EV_CONTEXT,.id=107,.index=row,.x=300,.y=200};files_event(&ui,&context,&app);
     int eject=0;for(unsigned i=0;i<app.popup_count;i++)if(app.popup[i].label && strstr(app.popup[i].label,"Eject"))eject=app.popup[i].id;
     assert(eject==action);du_popup(&ui,NULL,0,0,0,0);
-    removal_error=0;activate(action);assert(list_find("D:")<0 && strstr(app.note,"disc has been ejected"));
+    removal_error=0;activate(action);row=list_find("D:");
+    assert(row>=0 && !strcmp(app.rows[row].text[0],"Compact Disc (D:)") && strstr(app.note,"disc has been ejected"));
     files_destroy(&app);fake_assert_clean();
     puts("PASS Files removable Computer view: E: Tango icon/type, context action, busy error, generation, safe detach and refresh");
     puts("PASS Files optical Computer view: runtime insertion/removal, D: CD-ROM icon/type, expired folder returns to Computer, reinsertion and eject text");
+}
+/* fx-emptydrive: an empty CD-ROM drive (Windows 98): listed in Computer and
+ * the tree as "Compact Disc (D:)" with the CD-ROM icon and type; opening it
+ * asks "Please insert a disk into drive D:" with Retry/Cancel; a disc
+ * inserted before Retry is browsed; after the eject D: stays listed. */
+static void dialog_answer(int index);
+static void empty_optical_ui_tests(void)
+{
+    fake_image_tree(); memset(&app,0,sizeof(app)); du_init(&ui,pixels,WIDTH,HEIGHT);
+    app.media_read=read_media; app.media_remove=remove_media;
+    media_state=(struct ciuki_media_state){.version=CIUKI_MEDIA_VERSION,.size=sizeof(media_state)};
+    media_state.type[3]=CIUKI_MEDIA_OPTICAL;
+    assert(!files_setup(&app,&ui,&fake_vfs,FM_COMPUTER));
+    int row=list_find("D:");
+    assert(row>=0 && !strcmp(app.rows[row].text[0],"Compact Disc (D:)") && !strcmp(app.rows[row].text[2],"CD-ROM Drive"));
+    assert(app.rows[row].icon16 && app.rows[row].icon32 && app.rows[row].icon16==du_icon_argb(du_icon_name("place:optical"),16));
+    int tree_d=0; for (unsigned i=0;i<app.tree_count;i++) tree_d|=!strcmp(app.tree[i].path,"/mnt/d"); assert(tree_d);
+    dump("empty-cd-computer");
+    /* No disc: the Windows 98 prompt, Retry asks again, Cancel stays put. */
+    assert(!files_navigate(&app,"D:\\"));
+    assert(!app.model.path[0] && strstr(ui.dialog.text,"Please insert a disk into drive D:"));
+    assert(ui.dialog.buttons==2 && ui.dialog.cancel==1);
+    dump("empty-cd-insert");
+    dialog_answer(0); assert(strstr(ui.dialog.text,"Please insert a disk into drive D:"));
+    dialog_answer(1); assert(!du_dialog_id(&ui) && !app.model.path[0]);
+    /* A disc arrives (the kernel mounts it at the same letter); Retry browses it. */
+    assert(!files_navigate(&app,"D:\\")); assert(strstr(ui.dialog.text,"Please insert a disk into drive D:"));
+    fake_create("/mnt/d",FM_DIR); fake_file("/mnt/d/SETUP.EXE",64,1);
+    media_state.removable_mask=1u<<3; media_state.generation[3]=88;
+    dialog_answer(0); assert(!du_dialog_id(&ui) && !strcmp(app.model.path,"/mnt/d") && list_find("SETUP.EXE")>=0);
+    /* The 500 ms media poll (paused while the prompt was open) sees the disc. */
+    struct du_event poll={.type=DU_EV_TICK,.id=2}; files_event(&ui,&poll,&app); files_test_wait(&app);
+    assert(!strcmp(app.model.path,"/mnt/d") && (app.media.removable_mask&(1u<<3)));
+    /* Eject from Computer: D: stays, empty again. */
+    assert(!files_navigate(&app,FM_COMPUTER)); row=list_find("D:"); assert(row>=0);
+    fm_select(&app.model,(unsigned)row,0); files_update(&app);
+    struct du_event context={.type=DU_EV_CONTEXT,.id=107,.index=row,.x=300,.y=200}; files_event(&ui,&context,&app);
+    int eject=0; for (unsigned i=0;i<app.popup_count;i++) if (app.popup[i].label && strstr(app.popup[i].label,"Eject")) eject=app.popup[i].id;
+    assert(eject); du_popup(&ui,NULL,0,0,0,0);
+    fake_nodes[fake_lookup("/mnt/d/SETUP.EXE")].live=0;
+    removal_error=0; removal_calls=0; activate(eject); assert(removal_calls==1);
+    row=list_find("D:"); assert(row>=0 && !strcmp(app.rows[row].text[0],"Compact Disc (D:)") && strstr(app.note,"disc has been ejected"));
+    /* No Eject entry on the empty drive. */
+    fm_select(&app.model,(unsigned)row,0); files_update(&app); files_event(&ui,&context,&app);
+    eject=0; for (unsigned i=0;i<app.popup_count;i++) if (app.popup[i].label && strstr(app.popup[i].label,"Eject")) eject=app.popup[i].id;
+    assert(!eject); du_popup(&ui,NULL,0,0,0,0);
+    files_destroy(&app); fake_assert_clean();
+    puts("PASS fx-emptydrive Files: empty CD-ROM D: listed as Compact Disc (D:) in Computer and the tree, Insert-disk prompt with Retry/Cancel, browse after insertion, D: kept after eject");
 }
 /* fx-17b: floppy drives. A: is listed whenever the controller found the
  * drive; opening it reads the diskette (MEDIA_FLOPPY_LOAD) and without one
@@ -309,6 +362,58 @@ static void label_cache_tests(void)
     key(DU_KEY_F5);assert(label_calls[4]==6 && label_calls[5]==3);
     files_destroy(&app);fake_assert_clean();
     puts("PASS Files labels: cached UI/selection/layout, unchanged polls, per-drive generation, volume/AUTORUN metadata changes, retry, absence/reinsert and F5");
+}
+/* fx-autorun: My Computer's AutoPlay verb (Microsoft "Enabling and Disabling
+ * AutoRun", "Autorun.inf Entries" shell): a drive whose AUTORUN.INF names a
+ * program gets a bold AutoPlay item first, double-click/Enter runs it, Open
+ * still browses; a drive without one keeps Open as its default. */
+static unsigned autoplay_infos, autoplay_records;
+static struct desk_launch_record autoplay_last;
+static int autoplay_info(unsigned d,char out[33],int *autoplay,struct desk_launch_record *r)
+{
+    autoplay_infos++; snprintf(out,33,"%s",d==3 ? "Half-Life" : "Stick"); *autoplay=d==3;
+    if (d==3) { memset(r,0,sizeof(*r)); strcpy(r->label,"Half-Life"); strcpy(r->target,"/mnt/d/AUTORUN.EXE"); strcpy(r->directory,"/mnt/d"); r->show=1; }
+    return 0;
+}
+static int autoplay_record_open(struct files_app *a,const struct desk_launch_record *r)
+{ (void)a; autoplay_records++; autoplay_last=*r; return 0; }
+static int popup_item(const char *label,unsigned *flags)
+{
+    for (unsigned i=0;i<app.popup_count;i++) if (app.popup[i].label && !strcmp(app.popup[i].label,label)) { if (flags) *flags=app.popup[i].flags; return app.popup[i].id; }
+    return 0;
+}
+static void autoplay_verb_tests(void)
+{
+    fake_image_tree(); fake_create("/mnt/d",FM_DIR); fake_file("/mnt/d/AUTORUN.EXE",64,1); fake_create("/mnt/e",FM_DIR);
+    memset(&app,0,sizeof(app)); du_init(&ui,pixels,WIDTH,HEIGHT);
+    memset(label_keys,0,sizeof(label_keys)); label_error=0; autoplay_infos=autoplay_records=0;
+    app.media_read=read_media; app.media_label_key=label_source; app.media_autoplay=autoplay_info; app.shell_record=autoplay_record_open;
+    media_state=(struct ciuki_media_state){.version=CIUKI_MEDIA_VERSION,.size=sizeof(media_state),.removable_mask=(1u<<3)|(1u<<4)};
+    media_state.generation[3]=90; media_state.generation[4]=91; media_state.type[3]=CIUKI_MEDIA_OPTICAL; media_state.type[4]=CIUKI_MEDIA_USB;
+    assert(!files_setup(&app,&ui,&fake_vfs,FM_COMPUTER));
+    assert(autoplay_infos==2 && app.drive_labels[3].autoplay && !app.drive_labels[4].autoplay);
+    int row=list_find("D:"); assert(row>=0 && !strcmp(app.rows[row].text[0],"Half-Life (D:)"));
+    fm_select(&app.model,(unsigned)row,0); files_update(&app);
+    struct du_event context={.type=DU_EV_CONTEXT,.id=107,.index=row,.x=300,.y=200}; files_event(&ui,&context,&app);
+    unsigned flags=0; int autoplay=popup_item("Auto&Play",&flags);
+    assert(autoplay && app.popup[0].id==autoplay && (flags & DU_ITEM_DEFAULT));
+    int open=popup_item("&Open",&flags); assert(open && !(flags & DU_ITEM_DEFAULT));
+    du_popup(&ui,NULL,0,0,0,0);
+    activate(autoplay);
+    assert(autoplay_records==1 && !strcmp(autoplay_last.target,"/mnt/d/AUTORUN.EXE") && !strcmp(autoplay_last.directory,"/mnt/d") && !app.model.path[0]);
+    struct du_event twice={.type=DU_EV_OPEN,.id=107,.index=row}; files_event(&ui,&twice,&app); files_test_wait(&app);
+    assert(autoplay_records==2 && !app.model.path[0]);           /* double-click: the default verb */
+    activate(open); files_test_wait(&app);
+    assert(autoplay_records==2 && !strcmp(app.model.path,"/mnt/d")); /* Open browses the disc */
+    assert(!files_navigate(&app,FM_COMPUTER)); files_test_wait(&app);
+    row=list_find("E:"); assert(row>=0); fm_select(&app.model,(unsigned)row,0); files_update(&app);
+    context.index=row; files_event(&ui,&context,&app);
+    assert(!popup_item("Auto&Play",NULL) && popup_item("&Open",&flags) && (flags & DU_ITEM_DEFAULT));
+    du_popup(&ui,NULL,0,0,0,0);
+    twice.index=row; files_event(&ui,&twice,&app); files_test_wait(&app);
+    assert(autoplay_records==2 && !strcmp(app.model.path,"/mnt/e"));
+    files_destroy(&app); fake_assert_clean();
+    puts("PASS fx-autorun Files: AutoPlay verb first and default on an autorun drive, double-click runs it, Open browses, other drives unchanged");
 }
 static void blocker_dialog_tests(void)
 {
@@ -586,6 +691,25 @@ static void file_drag_tests(void)
     files_destroy(&app); fake_assert_clean();
 }
 
+static int ntfs_status(unsigned slot,struct ciuki_ntfs_status *r)
+{
+    if (slot>2) return -ENOENT;
+    *r=(struct ciuki_ntfs_status){.disk=1,.partition=slot+1,.error=slot ? -EUCLEAN : 0};
+    snprintf(r->reason,sizeof(r->reason),"%s",slot==1 ? "NTFS needs recovery. Start Windows and check this disk." :
+             slot==2 ? "Windows is hibernated. Resume Windows and shut it down fully." : "");
+    return 0;
+}
+static void ntfs_warning_tests(void)
+{
+    fake_image_tree(); memset(&app,0,sizeof(app)); du_init(&ui,pixels,WIDTH,HEIGHT);
+    app.ntfs_status=ntfs_status;
+    assert(!files_setup(&app,&ui,&fake_vfs,FM_COMPUTER));
+    assert(app.ntfs_notified && strstr(ui.dialog.text,"Disk 1, partition 2") && strstr(ui.dialog.text,"needs recovery"));
+    assert(strstr(ui.dialog.text,"partition 3") && strstr(ui.dialog.text,"hibernated") && !strstr(ui.dialog.text,"partition 1"));
+    du_dialog_close(&ui); key(DU_KEY_F5); assert(!du_dialog_id(&ui));
+    files_destroy(&app); fake_assert_clean();
+    puts("PASS Round 2 Files: refused NTFS volumes carry plain-language recovery/hibernation reasons, shown once in Computer");
+}
 int main(int argc, char **argv)
 {
     out_dir = argc > 1 ? argv[1] : NULL;
@@ -770,10 +894,13 @@ int main(int argc, char **argv)
     files_destroy(&app);
     fake_assert_clean();
     computer_ui_tests();
+    ntfs_warning_tests();
     removable_ui_tests();
+    empty_optical_ui_tests();
     floppy_ui_tests();
     external_removal_tests();
     label_cache_tests();
+    autoplay_verb_tests();
     blocker_dialog_tests();
     /* Default associations run through the actual Files controller. */
     fake_image_tree(); fake_file("/Programs/paint",100,1); fake_file("/Programs/viewer",100,1); fake_file("/Programs/music",100,1);

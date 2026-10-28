@@ -3,6 +3,8 @@
 #include "worker_role.h"
 #include "autoplay.h"
 #include "shell_link.h"
+#include "diag_record.h"
+#include "exe_kind.h"
 #include <errno.h>
 #include <pthread.h>
 #include <stdio.h>
@@ -41,6 +43,20 @@ static void budget_log(const struct ap_worker *w)
     fprintf(stderr,"%s\n",line);
 #endif
 }
+/* fx-accept: one line per AutoPlay event, also in quiet boots: the content
+ * probe of a new volume (the root listing count the acceptance suite compares
+ * with the generated disc), the prompt and the launched action. */
+static void autoplay_record(const char *line, int n)
+{
+    if (n<=0 || n>=128) return;
+    desk_diag_record(line,n);
+}
+static void probe_log(const struct ap_worker *w,int result)
+{
+    char line[128]; int n=snprintf(line,sizeof(line),"[desktop] autoplay probe drive=%c entries=%u run_kind=%u music=%u pictures=%u result=%d",
+        'A'+w->volume.drive,w->content.entries,(unsigned)w->content.run_kind,!!w->content.music[0],!!w->content.picture[0],result);
+    autoplay_record(line,n);
+}
 static void *autoplay_worker(void *arg)
 {
     desk_worker_role("autoplay");
@@ -54,11 +70,13 @@ static void *autoplay_worker(void *arg)
         pthread_mutex_unlock(&w->lock);
         w->error=0; w->saved=-1;
         if (job==AP_JOB_PROBE) {
-            if (ap_probe_workspace(w->fs,w->volume.drive,&w->content,w->workspace)) {
+            int probed=ap_probe_workspace(w->fs,w->volume.drive,&w->content,w->workspace);
+            if (probed) {
                 memset(&w->content,0,sizeof(w->content));
                 snprintf(w->content.root,sizeof(w->content.root),"/mnt/%c",'a'+w->volume.drive);
             }
             if (w->content.budget) budget_log(w);
+            probe_log(w,probed);
             activity(w,"preference-read");
             if (!w->content.budget && w->volume.id[0] && w->preference)
                 w->saved=w->preference(w->desktop,w->volume.id,NULL,-1);
@@ -152,15 +170,34 @@ int desk_autoplay_enabled(const struct desktop *d,int a)
 {
     const struct ap_content *c=&d->sh.autoplay.content;
     if (c->cd_audio) return a==AP_MUSIC || a==AP_NOTHING;
-    return a==AP_FOLDER || a==AP_NOTHING || (a==AP_MUSIC && c->music[0]) || (a==AP_PICTURES && c->picture[0]) || (a==AP_RUN && c->run_kind==1);
+    return a==AP_FOLDER || a==AP_NOTHING || (a==AP_MUSIC && c->music[0]) || (a==AP_PICTURES && c->picture[0]) ||
+        (a==AP_RUN && (c->run_kind==1 || c->run_kind==2));
 }
 const char *desk_autoplay_label(const struct desktop *d,int a,char *out,size_t size)
 {
     const struct ap_content *c=&d->sh.autoplay.content;
     if (c->cd_audio && a==AP_MUSIC) return "Play audio CD";
     if (a!=AP_RUN) return ap_action_name(a);
-    const char *name=strrchr(c->program,'/'); name=name ? name+1 : c->inf.open;
-    snprintf(out,size,"Run %.40s%s",name,c->run_kind==2 ? " (Windows; available in F5)" : c->run_kind!=1 ? " (unavailable)" : ""); return out;
+    const char *name=c->program[0] ? strrchr(c->program,'/') : NULL; name=name ? name+1 : c->inf.open;
+    /* fx-autorun: Windows (PE and 16-bit NE) programs start through the
+     * Win32 personality; an entry that cannot start says why. */
+    if (c->run_kind==1 || c->run_kind==2) snprintf(out,size,"Run %.40s",name);
+    else snprintf(out,size,"Run %.40s (%s)",name,c->run_reason ? c->run_reason : "unavailable");
+    return out;
+}
+/* fx-autorun: Windows 98 Resource Kit, App. G "Shortcuts for Objects,
+ * Folders, and Windows Explorer": "To bypass Autorun when inserting a
+ * compact disc: Press SHIFT while inserting the compact disc." Microsoft
+ * "Enabling and Disabling AutoRun": "Users can manually suppress AutoRun by
+ * holding down the SHIFT key when they insert the CD-ROM." The desktop sees
+ * every key first (desk_shell_key keeps the modifier state), so Shift held
+ * when the new medium is observed, or when its probe completes, skips
+ * AutoPlay for that insertion only; the drive stays usable. */
+static int shift_skip(struct desktop *d,char letter)
+{
+    if (!(d->sh.modifiers & DU_SHIFT)) return 0;
+    char line[96]; int n=snprintf(line,sizeof(line),"[desktop] autoplay skipped drive=%c reason=shift",letter);
+    autoplay_record(line,n); return 1;
 }
 void desk_autoplay_update(struct desktop *d,const struct ciuki_media_volume v[26])
 {
@@ -176,7 +213,11 @@ void desk_autoplay_update(struct desktop *d,const struct ciuki_media_volume v[26
         }
         if (a->phase==AP_READY && a->active.drive==i) a->phase=AP_IDLE;
         a->waiting&=~(1u<<i); a->seen[i]=generation;
-        if (generation) { a->pending[i]=v[i]; a->waiting|=1u<<i; if (d->media_sound) d->media_sound(d,1); }
+        if (generation) {
+            if (d->media_sound) d->media_sound(d,1);
+            if (shift_skip(d,(char)('A'+i))) continue;
+            a->pending[i]=v[i]; a->waiting|=1u<<i;
+        }
     }
 }
 void desk_autoplay_cd_update(struct desktop *d,const struct ciuki_media_cd_state s[4])
@@ -192,7 +233,7 @@ void desk_autoplay_cd_update(struct desktop *d,const struct ciuki_media_cd_state
             a->open=0; a->want_commit=0;
             if (a->phase==AP_READY || a->phase==AP_LAUNCH_PENDING) a->phase=AP_IDLE;
         }
-        if (gen) a->cd_waiting|=1u<<i;
+        if (gen && !shift_skip(d,s[i].drive<26 ? (char)('A'+s[i].drive) : '?')) a->cd_waiting|=1u<<i;
     }
 }
 static int current_media(const struct desk_autoplay *a)
@@ -212,6 +253,17 @@ static void remember(struct desktop *d)
 {
     struct desk_autoplay *a=&d->sh.autoplay;
     if (a->always && a->active.id[0] && d->autoplay_preference) a->phase=AP_SAVE_PENDING;
+}
+/* A refused Windows image (-ENOEXEC) is already explained by the Win32
+ * personality's own dialog ("is not a valid Win32 application", "is a
+ * 16-bit Windows program ..."); any other failure is AutoPlay's to report. */
+static void launch_failed(struct desktop *d,int result)
+{
+    const struct ap_content *c=&d->sh.autoplay.content;
+    if (result==-ENOEXEC) return;
+    const char *name=strrchr(c->program,'/'); name=name ? name+1 : c->inf.open;
+    char text[200]; snprintf(text,sizeof(text),"%.48s could not be started.\n%.80s (error %d)",name,strerror(-result),-result);
+    desk_shell_message(d,"AutoPlay",text,1);
 }
 static void execute_later(struct desktop *d)
 {
@@ -238,17 +290,46 @@ int desk_autoplay_launch(struct desktop *d)
         free(r);
     } else if (action==AP_MUSIC) pid=desk_task_launch(d,"music",a->content.music);
     if (action==AP_PICTURES) pid=desk_task_launch(d,"viewer",a->content.picture);
-    if (action==AP_RUN) { const char *args[]={a->content.command}; pid=desk_task_launch_args(d,"dosbox",args,1); }
+    int windows=action==AP_RUN && a->content.run_kind==2;
+    if (action==AP_RUN && !windows) { const char *args[]={a->content.command}; pid=desk_task_launch_args(d,"dosbox",args,1); }
+    if (windows) {
+        /* fx-autorun: the program from the disc root through the ordinary
+         * launch worker (PE, or an NE setup stub for the kernel's
+         * InstallShield 5 admission). The worker reports the result to
+         * desk_autoplay_completed; the origin travels with the request. */
+        struct desk_launch_record *r=calloc(1,sizeof(*r));
+        if (!r) pid=-ENOMEM;
+        else { pid=ap_launch_record(&a->content,r); if (!pid) pid=d->v3_launch ? d->v3_launch(d,r) : -ENOSYS; free(r); }
+    }
     memset(&d->launch_request,0,sizeof(d->launch_request)); /* the CD Player route does not consume it */
-    if (pid<0) desk_shell_message(d,"AutoPlay","The selected program could not be started.",1);
+    char line[128]; int n=snprintf(line,sizeof(line),"[desktop] autoplay launch action=%d pid=%d",action,pid);
+    autoplay_record(line,n);
+    if (windows && !pid) { a->phase=AP_LAUNCHING; a->launching_ns=d->now_ns; return 0; }
+    if (windows && pid<0) launch_failed(d,pid);
+    else if (pid<0) desk_shell_message(d,"AutoPlay","The selected program could not be started.",1);
     else remember(d);
     return pid;
+}
+void desk_autoplay_completed(struct desktop *d,int result)
+{
+    struct desk_autoplay *a=&d->sh.autoplay;
+    char line[128]; int n=snprintf(line,sizeof(line),"[desktop] autoplay run kind=%s result=%d",desk_exe_name(a->content.exe_kind),result);
+    autoplay_record(line,n);
+    if (a->phase!=AP_LAUNCHING) return;
+    a->phase=AP_IDLE;
+    if (result<0) launch_failed(d,result);
+    else remember(d);
 }
 void desk_autoplay_service(struct desktop *d)
 {
     struct desk_autoplay *a=&d->sh.autoplay;
     if (!d->autoplay_fs || d->sh.gate || d->power.state || !d->shell || !d->presents || !a->worker) return;
     if (a->phase==AP_LAUNCH_PENDING) return;
+    if (a->phase==AP_LAUNCHING) {
+        if (d->now_ns-a->launching_ns<AP_LAUNCH_NS) return;
+        desk_autoplay_completed(d,-ETIMEDOUT);
+        return;
+    }
     if (a->phase==AP_SAVE_PENDING) {
         if (submit(a,AP_JOB_SAVE)) a->phase=AP_SAVING;
         return;
@@ -283,11 +364,23 @@ void desk_autoplay_service(struct desktop *d)
     if (input_owned(d)) return;
     if (a->phase==AP_READY) {
         a->phase=AP_IDLE;
+        if (shift_skip(d,a->active.drive<26 ? (char)('A'+a->active.drive) : '?')) return;
+        /* fx-autorun: a disc whose AUTORUN.INF names a program it can start
+         * offers that program first and selected, as AutoRun runs it on
+         * Windows 98 (and the XP SP2 AutoPlay dialog lists the open= action
+         * first, selected by default: Microsoft "Autorun.inf Entries", action). */
+        if (!a->content.cd_audio && desk_autoplay_enabled(d,AP_RUN)) a->selected=AP_RUN;
         if (a->saved>=0 && a->saved<AP_CHOICES && desk_autoplay_enabled(d,a->saved)) {
             a->selected=a->saved; execute_later(d); return;
         }
         if (desk_internal_open(d,DESK_INTERNAL_AUTOPLAY)<0) a->phase=AP_READY;
-        else a->open=1;
+        else {
+            a->open=1;
+            char line[128]; int n=a->content.cd_audio ?
+                snprintf(line,sizeof(line),"[desktop] autoplay prompt audio_cd=%u default=%d",(unsigned)a->content.cd_slot,a->selected) :
+                snprintf(line,sizeof(line),"[desktop] autoplay prompt drive=%c default=%d",'A'+(int)(a->active.drive<26 ? a->active.drive : 25),a->selected);
+            autoplay_record(line,n);
+        }
         return;
     }
     if (a->cd_waiting) for (unsigned i=0;i<4;i++) if (a->cd_waiting&(1u<<i)) {

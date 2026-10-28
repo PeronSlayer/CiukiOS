@@ -46,6 +46,18 @@ int wr_defaults(struct wr_server *s,unsigned width,unsigned height,unsigned bpp)
         char path[256];snprintf(path,sizeof(path),"%s%s\\Explorer\\%sShell Folders",root?".DEFAULT\\":"",cv,user?"User ":"");
         struct wr_key *k=ensure(s,root,path);for(unsigned i=0;i<sizeof(folders)/sizeof(*folders);i++)if(!string(s,k,folders[i][0],folders[i][1],0))return 0;
     }
+    /* sec-user-04: the remaining Windows XP all-users values of HKLM
+     * (CSIDL_COMMON_STARTMENU/STARTUP/APPDATA/DOCUMENTS, the same locations
+     * sdk/win32/shell/folders.c answers); per-user values live in each
+     * profile hive (storage.c profile_folders). Machine hive only. */
+    static const char *const common[][2]={{"Common Start Menu","C:\\WINDOWS\\Start Menu"},
+        {"Common Startup","C:\\WINDOWS\\Start Menu\\Programs\\StartUp"},
+        {"Common AppData","C:\\WINDOWS\\Application Data"},{"Common Documents","C:\\Documents"}};
+    for(unsigned user=0;user<2;user++){
+        char path[256];snprintf(path,sizeof(path),"%s\\Explorer\\%sShell Folders",cv,user?"User ":"");
+        struct wr_key *k=ensure(s,0,path);for(unsigned i=0;i<sizeof(common)/sizeof(*common);i++)if(!string(s,k,common[i][0],common[i][1],0))return 0;
+    }
+    /* --- end sec-user-04 --- */
     struct wr_key *dx=ensure(s,0,"Software\\Microsoft\\DirectX");
     if(!string(s,dx,"Version","4.07.00.0716",0))return 0;
     const uint8_t installed[]={0,0,0,0,7,0,0,0};

@@ -31,6 +31,9 @@ int desk_startup_command(const char *, struct desk_launch_record *);
 int ciuki_win32_startup_list(struct desk_startup_entry *, unsigned);
 int ciuki_win32_startup_consume(const struct desk_startup_entry *);
 int desk_startup_list_at(const char *folder, const char *registry, struct desk_startup_entry *, unsigned);
+/* sec-user-05: folder (All Users StartUp) then personal (the user's), NULL for none. */
+int desk_startup_list_folders_at(const char *folder, const char *personal, const char *registry,
+                                 struct desk_startup_entry *, unsigned);
 int desk_startup_enable_at(const char *registry, const struct desk_startup_entry *, int);
 int desk_startup_execute(struct desk_startup_entry *, unsigned, int skip,
                          int (*consume)(const struct desk_startup_entry *),

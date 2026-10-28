@@ -43,7 +43,7 @@ class Matrox3DTests(unittest.TestCase):
         binary = self.build('owner', ['tests/host/matrox3d_owner_test.c', *COMMON,
             VIDEO+'matrox/matrox3d_owner.c', VIDEO+'render3d_native.c',
             VIDEO+'attempt.c', 'src/kernel/lib/fmt.c'])
-        for variant in range(17):
+        for variant in range(18):
             subprocess.run([str(binary), str(variant)], check=True)
 
     def test_target(self):
@@ -70,7 +70,7 @@ class Matrox3DTests(unittest.TestCase):
         gl = importlib.util.module_from_spec(spec)
         spec.loader.exec_module(gl)
         gl.GLTests.build(sanitize=True, kernel_engine='matrox_kernel_engine.c',
-            backend=('matrox/matrox3d.c', 'matrox/engine.c'))
+            backend=('matrox/matrox3d.c', 'matrox/engine.c'), family='MATROX')
         result = subprocess.run([str(gl.GLTests.binary), '--hardware-quake3'],
                                 text=True, capture_output=True, timeout=900)
         print(result.stdout, end='')

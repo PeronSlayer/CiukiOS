@@ -4,7 +4,21 @@
 #include <stdlib.h>
 #include <string.h>
 #include <ciuki/abi.h>
+_Static_assert(sizeof(((struct ciuki_security_launch *)0)->reserved)==8,"ciuki_security_launch reserved extent");
+_Static_assert(sizeof(((struct ciuki_security_console *)0)->reserved)==12,"ciuki_security_console reserved extent");
+_Static_assert(sizeof(((struct ciuki_security_link *)0)->reserved)==8,"ciuki_security_link reserved extent");
+
 #include <ciuki/bootstat.h>
+#include <ciuki/w32_core.h>
+#include <ciuki/w32_transport.h>
+/* sec-k06: additive token kind; transport reuses the existing object record. */
+_Static_assert(W32_OBJ_TOKEN == 15, "sec-k06 query-token object kind");
+_Static_assert(W32_MSG_INPUT_IDLE == 13u, "fx-q3hang input-idle query action");
+_Static_assert(W32_S_LAUNCH_FEEDBACK == 14, "fx-launchfb desktop query");
+_Static_assert(W32_S_LAUNCH_IDLE == 15, "fx-launchfb GetMessage completion");
+_Static_assert(sizeof(((struct ciuki_credential *)0)->groups)/sizeof(uint32_t)==8,"security groups extent");
+_Static_assert(sizeof(((struct ciuki_security_profile *)0)->path)==64,"security profile extent");
+_Static_assert(sizeof(((struct ciuki_security_args *)0)->reserved)/sizeof(uint32_t)==2,"security reserved extent");
 #include "../../sdk/win32/include/w32/gl_extensions.h"
 _Static_assert(GL_TEXTURE_COMPRESSION_HINT_ARB == 0x84efu,
                "f7-08 GL_TEXTURE_COMPRESSION_HINT_ARB");
@@ -32,6 +46,7 @@ _Static_assert(WM_SIZECLIPBOARD==0x30bu,"G5b WM_SIZECLIPBOARD");
 _Static_assert(WM_ASKCBFORMATNAME==0x30cu,"G5b WM_ASKCBFORMATNAME");
 _Static_assert(WM_HSCROLLCLIPBOARD==0x30eu,"G5b WM_HSCROLLCLIPBOARD");
 #include "../../apps/desktop/protocol.h"
+_Static_assert(DESK_V3_LEASE_CARRIER == 2u, "fx-q3hang CDS carrier lease action");
 #include "../../apps/desktop/settings_catalog.h"
 _Static_assert(DESK_CLIP_DISPLAY==11 && DESK_CLIP_DISPLAY_REPLY==12 && DESK_CLIP_DISPLAY_EVENT==5,"G5b owner-display wire IDs");
 #include "../../apps/libdeskui/deskui.h"
@@ -199,7 +214,7 @@ _Static_assert(SETUP_ERASED_MAX==16u,"Setup preview capacity");
 #if defined(__i386__)
 _Static_assert(sizeof(struct setup_erased_partition)==32,"Setup erased record");
 _Static_assert(_Alignof(struct setup_erased_partition)==4,"Setup erased alignment");
-_Static_assert(sizeof(struct setup_plan)==1204,"Setup plan version 2");
+_Static_assert(sizeof(struct setup_plan)==1208,"Setup plan version 2 (sec-user-02 provisioning seed in the answers)");
 #define SETUP_OFFSET(field, expected) _Static_assert(__builtin_offsetof(struct setup_plan,field)==expected,"Setup plan " #field)
 SETUP_OFFSET(version,0);
 SETUP_OFFSET(disk,4);
@@ -215,8 +230,8 @@ SETUP_OFFSET(reserve_bytes,668);
 SETUP_OFFSET(free_after_bytes,676);
 SETUP_OFFSET(components,684);
 SETUP_OFFSET(answers,688);
-SETUP_OFFSET(source_image_sha,1072);
-SETUP_OFFSET(source_iso_sha,1137);
+SETUP_OFFSET(source_image_sha,1076);
+SETUP_OFFSET(source_iso_sha,1141);
 _Static_assert(__builtin_offsetof(struct setup_erased_partition,type)==0,"erased type");
 _Static_assert(__builtin_offsetof(struct setup_erased_partition,start)==4,"erased start");
 _Static_assert(__builtin_offsetof(struct setup_erased_partition,count)==12,"erased count");
@@ -301,7 +316,30 @@ static const struct expectation expectations[] = {
     {"constant.CIUKI_R3D_RESOURCE_TEXTURE", CIUKI_R3D_RESOURCE_TEXTURE, 3u},
     {"constant.CIUKI_R3D_RESOURCE_LINEAR_COLOR", CIUKI_R3D_RESOURCE_LINEAR_COLOR, 4u},
     {"constant.W32_RENDER3D", W32_RENDER3D, 514u},
-    {"constant.CIUKI_R3D_VERSION", CIUKI_R3D_VERSION, 2u},
+    {"constant.CIUKI_R3D_VERSION", CIUKI_R3D_VERSION, 3u},
+    {"constant.CIUKI_R3D_D24S8", CIUKI_R3D_D24S8, 2u},
+    {"constant.CIUKI_R3D_RESOURCE_COLOR565", CIUKI_R3D_RESOURCE_COLOR565, 6u},
+    {"constant.CIUKI_R3D_RESOURCE_LINEAR565", CIUKI_R3D_RESOURCE_LINEAR565, 7u},
+    {"constant.CIUKI_R3D_RESOURCE_D24S8", CIUKI_R3D_RESOURCE_D24S8, 5u},
+    {"constant.CIUKI_R3D_STENCIL_TEST", CIUKI_R3D_STENCIL_TEST, 128u},
+    {"constant.CIUKI_R3D_CLEAR_STENCIL", CIUKI_R3D_CLEAR_STENCIL, 256u},
+    {"constant.CIUKI_R3D_STENCIL_KEEP", CIUKI_R3D_STENCIL_KEEP, 0u},
+    {"constant.CIUKI_R3D_STENCIL_ZERO", CIUKI_R3D_STENCIL_ZERO, 1u},
+    {"constant.CIUKI_R3D_STENCIL_REPLACE", CIUKI_R3D_STENCIL_REPLACE, 2u},
+    {"constant.CIUKI_R3D_STENCIL_INCR", CIUKI_R3D_STENCIL_INCR, 3u},
+    {"constant.CIUKI_R3D_STENCIL_DECR", CIUKI_R3D_STENCIL_DECR, 4u},
+    {"constant.CIUKI_R3D_STENCIL_INVERT", CIUKI_R3D_STENCIL_INVERT, 5u},
+    {"sizeof.ciuki_r3d_stencil", sizeof(struct ciuki_r3d_stencil), 32u},
+    {"alignof.ciuki_r3d_stencil", _Alignof(struct ciuki_r3d_stencil), 4u},
+    {"offsetof.ciuki_r3d_stencil.function", __builtin_offsetof(struct ciuki_r3d_stencil,function), 0u},
+    {"offsetof.ciuki_r3d_stencil.reference", __builtin_offsetof(struct ciuki_r3d_stencil,reference), 4u},
+    {"offsetof.ciuki_r3d_stencil.read_mask", __builtin_offsetof(struct ciuki_r3d_stencil,read_mask), 8u},
+    {"offsetof.ciuki_r3d_stencil.write_mask", __builtin_offsetof(struct ciuki_r3d_stencil,write_mask), 12u},
+    {"offsetof.ciuki_r3d_stencil.fail", __builtin_offsetof(struct ciuki_r3d_stencil,fail), 16u},
+    {"offsetof.ciuki_r3d_stencil.zfail", __builtin_offsetof(struct ciuki_r3d_stencil,zfail), 20u},
+    {"offsetof.ciuki_r3d_stencil.zpass", __builtin_offsetof(struct ciuki_r3d_stencil,zpass), 24u},
+    {"offsetof.ciuki_r3d_stencil.clear", __builtin_offsetof(struct ciuki_r3d_stencil,clear), 28u},
+    {"offsetof.ciuki_r3d_draw.stencil", __builtin_offsetof(struct ciuki_r3d_draw,stencil), 28772u},
     {"constant.CIUKI_R3D_QUERY", CIUKI_R3D_QUERY, 1u},
     {"constant.CIUKI_R3D_OPEN", CIUKI_R3D_OPEN, 2u},
     {"constant.CIUKI_R3D_CLOSE", CIUKI_R3D_CLOSE, 3u},
@@ -344,7 +382,7 @@ static const struct expectation expectations[] = {
     {"offsetof.ciuki_r3d_vertex.color", (uint32_t)__builtin_offsetof(struct ciuki_r3d_vertex, color), 16u},
     {"offsetof.ciuki_r3d_vertex.u", (uint32_t)__builtin_offsetof(struct ciuki_r3d_vertex, u), 20u},
     {"offsetof.ciuki_r3d_vertex.v", (uint32_t)__builtin_offsetof(struct ciuki_r3d_vertex, v), 24u},
-    {"sizeof.ciuki_r3d_draw", (uint32_t)sizeof(struct ciuki_r3d_draw), 28772u},
+    {"sizeof.ciuki_r3d_draw", (uint32_t)sizeof(struct ciuki_r3d_draw), 28804u},
     {"alignof.ciuki_r3d_draw", (uint32_t)_Alignof(struct ciuki_r3d_draw), 4u},
     {"offsetof.ciuki_r3d_draw.flags", (uint32_t)__builtin_offsetof(struct ciuki_r3d_draw, flags), 0u},
     {"offsetof.ciuki_r3d_draw.target", (uint32_t)__builtin_offsetof(struct ciuki_r3d_draw, target), 4u},
@@ -751,6 +789,107 @@ static const struct expectation expectations[] = {
     {"offsetof.ciuki_scandisk.elapsed_ms", __builtin_offsetof(struct ciuki_scandisk, elapsed_ms), 116u},
     {"offsetof.ciuki_scandisk.found", __builtin_offsetof(struct ciuki_scandisk, found), 120u},
     {"offsetof.ciuki_scandisk.first_problem", __builtin_offsetof(struct ciuki_scandisk, first_problem), 136u},
+    /* sec-sysvc: SYSTEM services of call 99 (boot configuration, logs, driver packs). */
+    {"constant.CIUKI_RECOVERY_BOOT_CONFIG", CIUKI_RECOVERY_BOOT_CONFIG, 5u},
+    {"constant.CIUKI_RECOVERY_LOG", CIUKI_RECOVERY_LOG, 6u},
+    {"constant.CIUKI_RECOVERY_DRIVER_PACK", CIUKI_RECOVERY_DRIVER_PACK, 7u},
+    {"constant.CIUKI_RECOVERY_SFC_RESTORE", CIUKI_RECOVERY_SFC_RESTORE, 8u},
+    {"constant.CIUKI_SFC_RESTORE_VERSION", CIUKI_SFC_RESTORE_VERSION, 1u},
+    {"constant.CIUKI_BOOT_CONFIG_VERSION", CIUKI_BOOT_CONFIG_VERSION, 1u},
+    {"constant.CIUKI_BOOT_CONFIG_SET", CIUKI_BOOT_CONFIG_SET, 1u},
+    {"constant.CIUKI_BOOT_CONFIG_MAX", CIUKI_BOOT_CONFIG_MAX, 127u},
+    {"constant.CIUKI_SYSTEM_LOG_VERSION", CIUKI_SYSTEM_LOG_VERSION, 1u},
+    {"constant.CIUKI_SYSTEM_LOG_LIST", CIUKI_SYSTEM_LOG_LIST, 1u},
+    {"constant.CIUKI_SYSTEM_LOG_READ", CIUKI_SYSTEM_LOG_READ, 2u},
+    {"constant.CIUKI_SYSTEM_LOG_APPEND", CIUKI_SYSTEM_LOG_APPEND, 3u},
+    {"constant.CIUKI_SYSTEM_LOG_REPLACE", CIUKI_SYSTEM_LOG_REPLACE, 4u},
+    {"constant.CIUKI_SYSTEM_LOG_MACHINE", CIUKI_SYSTEM_LOG_MACHINE, 1u},
+    {"constant.CIUKI_SYSTEM_LOG_USER", CIUKI_SYSTEM_LOG_USER, 2u},
+    {"constant.CIUKI_SYSTEM_LOG_NAME_MAX", CIUKI_SYSTEM_LOG_NAME_MAX, 48u},
+    {"constant.CIUKI_SYSTEM_LOG_DATA_MAX", CIUKI_SYSTEM_LOG_DATA_MAX, 65536u},
+    {"constant.CIUKI_SYSTEM_LOG_LIMIT", CIUKI_SYSTEM_LOG_LIMIT, 65536u},
+    {"constant.CIUKI_SYSTEM_LOG_LIMIT_MAX", CIUKI_SYSTEM_LOG_LIMIT_MAX, 1048576u},
+    {"constant.CIUKI_DRIVER_PACK_JOB_VERSION", CIUKI_DRIVER_PACK_JOB_VERSION, 1u},
+    {"constant.CIUKI_DRIVER_PACK_INSTALL", CIUKI_DRIVER_PACK_INSTALL, 1u},
+    {"constant.CIUKI_DRIVER_PACK_REMOVE", CIUKI_DRIVER_PACK_REMOVE, 2u},
+    {"constant.CIUKI_DRIVER_PACK_MANIFEST_BYTES", CIUKI_DRIVER_PACK_MANIFEST_BYTES, 48088u},
+    {"constant.CIUKI_DRIVER_PACK_SOURCE_BYTES", CIUKI_DRIVER_PACK_SOURCE_BYTES, 192u},
+    {"constant.CIUKI_DRIVER_PACK_FILES", CIUKI_DRIVER_PACK_FILES, 32u},
+    {"sizeof.ciuki_boot_config", sizeof(struct ciuki_boot_config), 144u},
+    {"alignof.ciuki_boot_config", _Alignof(struct ciuki_boot_config), 4u},
+    {"offsetof.ciuki_boot_config.version", __builtin_offsetof(struct ciuki_boot_config, version), 0u},
+    {"offsetof.ciuki_boot_config.size", __builtin_offsetof(struct ciuki_boot_config, size), 4u},
+    {"offsetof.ciuki_boot_config.action", __builtin_offsetof(struct ciuki_boot_config, action), 8u},
+    {"offsetof.ciuki_boot_config.length", __builtin_offsetof(struct ciuki_boot_config, length), 12u},
+    {"offsetof.ciuki_boot_config.text", __builtin_offsetof(struct ciuki_boot_config, text), 16u},
+    {"sizeof.ciuki_system_log", sizeof(struct ciuki_system_log), 96u},
+    {"alignof.ciuki_system_log", _Alignof(struct ciuki_system_log), 4u},
+    {"offsetof.ciuki_system_log.version", __builtin_offsetof(struct ciuki_system_log, version), 0u},
+    {"offsetof.ciuki_system_log.size", __builtin_offsetof(struct ciuki_system_log, size), 4u},
+    {"offsetof.ciuki_system_log.action", __builtin_offsetof(struct ciuki_system_log, action), 8u},
+    {"offsetof.ciuki_system_log.scope", __builtin_offsetof(struct ciuki_system_log, scope), 12u},
+    {"offsetof.ciuki_system_log.index", __builtin_offsetof(struct ciuki_system_log, index), 16u},
+    {"offsetof.ciuki_system_log.offset", __builtin_offsetof(struct ciuki_system_log, offset), 20u},
+    {"offsetof.ciuki_system_log.buffer", __builtin_offsetof(struct ciuki_system_log, buffer), 24u},
+    {"offsetof.ciuki_system_log.bytes", __builtin_offsetof(struct ciuki_system_log, bytes), 28u},
+    {"offsetof.ciuki_system_log.total", __builtin_offsetof(struct ciuki_system_log, total), 32u},
+    {"offsetof.ciuki_system_log.limit", __builtin_offsetof(struct ciuki_system_log, limit), 36u},
+    {"offsetof.ciuki_system_log.reserved", __builtin_offsetof(struct ciuki_system_log, reserved), 40u},
+    {"offsetof.ciuki_system_log.name", __builtin_offsetof(struct ciuki_system_log, name), 48u},
+    {"sizeof.ciuki_driver_pack_job", sizeof(struct ciuki_driver_pack_job), 480u},
+    {"alignof.ciuki_driver_pack_job", _Alignof(struct ciuki_driver_pack_job), 4u},
+    {"offsetof.ciuki_driver_pack_job.version", __builtin_offsetof(struct ciuki_driver_pack_job, version), 0u},
+    {"offsetof.ciuki_driver_pack_job.size", __builtin_offsetof(struct ciuki_driver_pack_job, size), 4u},
+    {"offsetof.ciuki_driver_pack_job.action", __builtin_offsetof(struct ciuki_driver_pack_job, action), 8u},
+    {"offsetof.ciuki_driver_pack_job.manifest", __builtin_offsetof(struct ciuki_driver_pack_job, manifest), 12u},
+    {"offsetof.ciuki_driver_pack_job.manifest_bytes", __builtin_offsetof(struct ciuki_driver_pack_job, manifest_bytes), 16u},
+    {"offsetof.ciuki_driver_pack_job.sources", __builtin_offsetof(struct ciuki_driver_pack_job, sources), 20u},
+    {"offsetof.ciuki_driver_pack_job.source_bytes", __builtin_offsetof(struct ciuki_driver_pack_job, source_bytes), 24u},
+    {"offsetof.ciuki_driver_pack_job.reserved", __builtin_offsetof(struct ciuki_driver_pack_job, reserved), 28u},
+    {"offsetof.ciuki_driver_pack_job.bus", __builtin_offsetof(struct ciuki_driver_pack_job, bus), 32u},
+    {"offsetof.ciuki_driver_pack_job.slot", __builtin_offsetof(struct ciuki_driver_pack_job, slot), 36u},
+    {"offsetof.ciuki_driver_pack_job.function", __builtin_offsetof(struct ciuki_driver_pack_job, function), 40u},
+    {"offsetof.ciuki_driver_pack_job.vendor", __builtin_offsetof(struct ciuki_driver_pack_job, vendor), 44u},
+    {"offsetof.ciuki_driver_pack_job.device", __builtin_offsetof(struct ciuki_driver_pack_job, device), 48u},
+    {"offsetof.ciuki_driver_pack_job.sub_vendor", __builtin_offsetof(struct ciuki_driver_pack_job, sub_vendor), 52u},
+    {"offsetof.ciuki_driver_pack_job.sub_device", __builtin_offsetof(struct ciuki_driver_pack_job, sub_device), 56u},
+    {"offsetof.ciuki_driver_pack_job.revision", __builtin_offsetof(struct ciuki_driver_pack_job, revision), 60u},
+    {"offsetof.ciuki_driver_pack_job.root", __builtin_offsetof(struct ciuki_driver_pack_job, root), 64u},
+    {"offsetof.ciuki_driver_pack_job.reason", __builtin_offsetof(struct ciuki_driver_pack_job, reason), 320u},
+    {"sizeof.ciuki_sfc_restore", sizeof(struct ciuki_sfc_restore), 432u},
+    {"alignof.ciuki_sfc_restore", _Alignof(struct ciuki_sfc_restore), 4u},
+    {"offsetof.ciuki_sfc_restore.version", __builtin_offsetof(struct ciuki_sfc_restore, version), 0u},
+    {"offsetof.ciuki_sfc_restore.size", __builtin_offsetof(struct ciuki_sfc_restore, size), 4u},
+    {"offsetof.ciuki_sfc_restore.reserved", __builtin_offsetof(struct ciuki_sfc_restore, reserved), 8u},
+    {"offsetof.ciuki_sfc_restore.path", __builtin_offsetof(struct ciuki_sfc_restore, path), 16u},
+    {"offsetof.ciuki_sfc_restore.source", __builtin_offsetof(struct ciuki_sfc_restore, source), 176u},
+    /* sec-sysvc2: SYSTEM jobs and sealed boot settings of call 99. */
+    {"constant.CIUKI_RECOVERY_JOB", CIUKI_RECOVERY_JOB, 9u},
+    {"constant.CIUKI_RECOVERY_SETTING", CIUKI_RECOVERY_SETTING, 10u},
+    {"constant.CIUKI_SYSTEM_JOB_VERSION", CIUKI_SYSTEM_JOB_VERSION, 1u},
+    {"constant.CIUKI_SYSTEM_JOB_STARTUP_REPORT", CIUKI_SYSTEM_JOB_STARTUP_REPORT, 1u},
+    {"constant.CIUKI_SYSTEM_SETTING_VERSION", CIUKI_SYSTEM_SETTING_VERSION, 1u},
+    {"constant.CIUKI_SYSTEM_SETTING_SET", CIUKI_SYSTEM_SETTING_SET, 1u},
+    {"constant.CIUKI_SYSTEM_SETTING_HWPROFILES", CIUKI_SYSTEM_SETTING_HWPROFILES, 1u},
+    {"constant.CIUKI_SYSTEM_SETTING_PERFORMANCE", CIUKI_SYSTEM_SETTING_PERFORMANCE, 2u},
+    {"constant.CIUKI_SYSTEM_SETTING_ACCEL_RETRY", CIUKI_SYSTEM_SETTING_ACCEL_RETRY, 3u},
+    {"constant.CIUKI_SYSTEM_SETTING_MAX", CIUKI_SYSTEM_SETTING_MAX, 24575u},
+    {"sizeof.ciuki_system_job", sizeof(struct ciuki_system_job), 32u},
+    {"alignof.ciuki_system_job", _Alignof(struct ciuki_system_job), 4u},
+    {"offsetof.ciuki_system_job.version", __builtin_offsetof(struct ciuki_system_job, version), 0u},
+    {"offsetof.ciuki_system_job.size", __builtin_offsetof(struct ciuki_system_job, size), 4u},
+    {"offsetof.ciuki_system_job.job", __builtin_offsetof(struct ciuki_system_job, job), 8u},
+    {"offsetof.ciuki_system_job.done", __builtin_offsetof(struct ciuki_system_job, done), 12u},
+    {"offsetof.ciuki_system_job.reserved", __builtin_offsetof(struct ciuki_system_job, reserved), 16u},
+    {"sizeof.ciuki_system_setting", sizeof(struct ciuki_system_setting), 32u},
+    {"alignof.ciuki_system_setting", _Alignof(struct ciuki_system_setting), 4u},
+    {"offsetof.ciuki_system_setting.version", __builtin_offsetof(struct ciuki_system_setting, version), 0u},
+    {"offsetof.ciuki_system_setting.size", __builtin_offsetof(struct ciuki_system_setting, size), 4u},
+    {"offsetof.ciuki_system_setting.action", __builtin_offsetof(struct ciuki_system_setting, action), 8u},
+    {"offsetof.ciuki_system_setting.setting", __builtin_offsetof(struct ciuki_system_setting, setting), 12u},
+    {"offsetof.ciuki_system_setting.buffer", __builtin_offsetof(struct ciuki_system_setting, buffer), 16u},
+    {"offsetof.ciuki_system_setting.length", __builtin_offsetof(struct ciuki_system_setting, length), 20u},
+    {"offsetof.ciuki_system_setting.reserved", __builtin_offsetof(struct ciuki_system_setting, reserved), 24u},
     {"sizeof.ciuki_file_info", sizeof(struct ciuki_file_info), 88u},
     {"alignof.ciuki_file_info", _Alignof(struct ciuki_file_info), 4u},
     {"offsetof.ciuki_file_info.version", __builtin_offsetof(struct ciuki_file_info, version), 0u},
@@ -1082,6 +1221,7 @@ static const struct expectation expectations[] = {
 
     {"constant.CIUKI_ACCEL_BATCH", CIUKI_ACCEL_BATCH, 10u},
     {"constant.CIUKI_ACCEL_FENCE", CIUKI_ACCEL_FENCE, 11u},
+    {"constant.CIUKI_ACCEL_CACHE_EPOCH", CIUKI_ACCEL_CACHE_EPOCH, 14u},
     {"constant.CIUKI_ACCEL_QUERY_COMMANDS", CIUKI_ACCEL_QUERY_COMMANDS, 12u},
     {"constant.CIUKI_BATCH_VERSION", CIUKI_BATCH_VERSION, 1u},
     {"constant.CIUKI_BATCH_MAGIC", CIUKI_BATCH_MAGIC, 826426435u},
@@ -1371,6 +1511,177 @@ static const struct expectation expectations[] = {
     {"constant.SOCK_DGRAM", SOCK_DGRAM, 2u},
     {"constant.SOCK_RAW", SOCK_RAW, 3u},
     {"constant.CIUKI_SYS_NET_INFO", CIUKI_SYS_NET_INFO, 100u},
+    {"constant.CIUKI_SYS_SECURITY", CIUKI_SYS_SECURITY, 101u},
+    {"constant.CIUKI_SECURITY_VERSION", CIUKI_SECURITY_VERSION, 1u},
+    {"constant.CIUKI_UID_SYSTEM", CIUKI_UID_SYSTEM, 0u},
+    {"constant.CIUKI_UID_ADMINISTRATOR", CIUKI_UID_ADMINISTRATOR, 500u},
+    {"constant.CIUKI_UID_GUEST", CIUKI_UID_GUEST, 501u},
+    {"constant.CIUKI_UID_FIRST_USER", CIUKI_UID_FIRST_USER, 1000u},
+    {"constant.CIUKI_UID_LAST_USER", CIUKI_UID_LAST_USER, 0xfffffffeu},
+    {"constant.CIUKI_UID_INVALID", CIUKI_UID_INVALID, 0xffffffffu},
+    {"constant.CIUKI_GID_SYSTEM", CIUKI_GID_SYSTEM, 0u},
+    {"constant.CIUKI_GID_ADMINISTRATORS", CIUKI_GID_ADMINISTRATORS, 544u},
+    {"constant.CIUKI_GID_USERS", CIUKI_GID_USERS, 545u},
+    {"constant.CIUKI_GID_GUESTS", CIUKI_GID_GUESTS, 546u},
+    {"constant.CIUKI_GID_INVALID", CIUKI_GID_INVALID, 0xffffffffu},
+    {"constant.CIUKI_SECURITY_GROUP_MAX", CIUKI_SECURITY_GROUP_MAX, 8u},
+    {"constant.CIUKI_SECURITY_PROFILE_PATH_MAX", CIUKI_SECURITY_PROFILE_PATH_MAX, 64u},
+    {"constant.CIUKI_SECURITY_SESSION_MAX", CIUKI_SECURITY_SESSION_MAX, 4u},
+    {"constant.CIUKI_CRED_INTERACTIVE", CIUKI_CRED_INTERACTIVE, 0x00000001u},
+    {"constant.CIUKI_CRED_SAFE_RECOVERY", CIUKI_CRED_SAFE_RECOVERY, 0x00000002u},
+    {"constant.CIUKI_SECURITY_QUERY_SELF", CIUKI_SECURITY_QUERY_SELF, 1u},
+    {"constant.CIUKI_SECURITY_QUERY_PROCESS", CIUKI_SECURITY_QUERY_PROCESS, 2u},
+    {"constant.CIUKI_SECURITY_QUERY_PEER", CIUKI_SECURITY_QUERY_PEER, 3u},
+    {"constant.CIUKI_SECURITY_SESSION_CREATE", CIUKI_SECURITY_SESSION_CREATE, 4u},
+    {"constant.CIUKI_SECURITY_SPAWN_CREDENTIAL", CIUKI_SECURITY_SPAWN_CREDENTIAL, 5u},
+    {"constant.CIUKI_SECURITY_SESSION_END", CIUKI_SECURITY_SESSION_END, 6u},
+    {"constant.CIUKI_SECURITY_SESSION_QUERY", CIUKI_SECURITY_SESSION_QUERY, 7u},
+    {"constant.CIUKI_SECURITY_END_BEGIN", CIUKI_SECURITY_END_BEGIN, 0x00000001u},
+    {"constant.CIUKI_SECURITY_END_COLLECT", CIUKI_SECURITY_END_COLLECT, 0x00000002u},
+    {"constant.CIUKI_SECURITY_SESSION_ACTIVE", CIUKI_SECURITY_SESSION_ACTIVE, 1u},
+    {"constant.CIUKI_SECURITY_SESSION_CLOSING", CIUKI_SECURITY_SESSION_CLOSING, 2u},
+    {"constant.CIUKI_SECURITY_SESSION_DEAD", CIUKI_SECURITY_SESSION_DEAD, 3u},
+    {"constant.CIUKI_SECURITY_SESSION_LAUNCH", CIUKI_SECURITY_SESSION_LAUNCH, 8u},
+    {"constant.CIUKI_SECURITY_LAUNCH_POLL", CIUKI_SECURITY_LAUNCH_POLL, 9u},
+    {"constant.CIUKI_SECURITY_SECURE_ENTER", CIUKI_SECURITY_SECURE_ENTER, 10u},
+    {"constant.CIUKI_SECURITY_SECURE_LEAVE", CIUKI_SECURITY_SECURE_LEAVE, 11u},
+    {"constant.CIUKI_SECURITY_SERVICE_CONNECT", CIUKI_SECURITY_SERVICE_CONNECT, 12u},
+    {"constant.CIUKI_SECURITY_SERVICE_ACCEPT", CIUKI_SECURITY_SERVICE_ACCEPT, 13u},
+    {"constant.CIUKI_SECURITY_SERVICE_CANCEL", CIUKI_SECURITY_SERVICE_CANCEL, 14u},
+    {"constant.CIUKI_SECURITY_LAUNCH_DESKTOP", CIUKI_SECURITY_LAUNCH_DESKTOP, 1u},
+    {"constant.CIUKI_SECURITY_LAUNCH_W32SRV", CIUKI_SECURITY_LAUNCH_W32SRV, 2u},
+    {"constant.CIUKI_SECURITY_LAUNCH_PREPARING", CIUKI_SECURITY_LAUNCH_PREPARING, 1u},
+    {"constant.CIUKI_SECURITY_LAUNCH_READY", CIUKI_SECURITY_LAUNCH_READY, 2u},
+    {"constant.CIUKI_SECURITY_LAUNCH_RUNNING", CIUKI_SECURITY_LAUNCH_RUNNING, 3u},
+    {"constant.CIUKI_SECURITY_LAUNCH_FAILED", CIUKI_SECURITY_LAUNCH_FAILED, 4u},
+    {"constant.CIUKI_SECURITY_SECURE_LOCK", CIUKI_SECURITY_SECURE_LOCK, 1u},
+    {"constant.CIUKI_SECURITY_SECURE_SAVER", CIUKI_SECURITY_SECURE_SAVER, 2u},
+    {"constant.CIUKI_SECURITY_SECURE_RESUME", CIUKI_SECURITY_SECURE_RESUME, 3u},
+    {"constant.CIUKI_SECURITY_SECURE_ATTENTION", CIUKI_SECURITY_SECURE_ATTENTION, 4u},
+    {"constant.CIUKI_SECURITY_CONSOLE_TRUSTED", CIUKI_SECURITY_CONSOLE_TRUSTED, 1u},
+    {"constant.CIUKI_SECURITY_CONSOLE_USER", CIUKI_SECURITY_CONSOLE_USER, 2u},
+    {"constant.CIUKI_SECURITY_ROLE_NONE", CIUKI_SECURITY_ROLE_NONE, 0u},
+    {"constant.CIUKI_SECURITY_ROLE_LOGON", CIUKI_SECURITY_ROLE_LOGON, 1u},
+    {"constant.CIUKI_SECURITY_ROLE_LOGON_UI", CIUKI_SECURITY_ROLE_LOGON_UI, 2u},
+    {"constant.CIUKI_SECURITY_ROLE_ACCOUNT", CIUKI_SECURITY_ROLE_ACCOUNT, 3u},
+    {"constant.CIUKI_SECURITY_ROLE_OWNER", CIUKI_SECURITY_ROLE_OWNER, 4u},
+    {"constant.CIUKI_SECURITY_ROLE_REGISTRY", CIUKI_SECURITY_ROLE_REGISTRY, 5u},
+    {"constant.CIUKI_SECURITY_ROLE_DESKTOP", CIUKI_SECURITY_ROLE_DESKTOP, 6u},
+    {"constant.CIUKI_SECURITY_ROLE_W32SRV", CIUKI_SECURITY_ROLE_W32SRV, 7u},
+    {"constant.CIUKI_SECURITY_ROLE_SETUP", CIUKI_SECURITY_ROLE_SETUP, 8u},
+    {"constant.CIUKI_SECURITY_SERVICE_AUTH", CIUKI_SECURITY_SERVICE_AUTH, 1u},
+    {"constant.CIUKI_SECURITY_SERVICE_ACCOUNTS", CIUKI_SECURITY_SERVICE_ACCOUNTS, 2u},
+    {"constant.CIUKI_SECURITY_SERVICE_OWNER", CIUKI_SECURITY_SERVICE_OWNER, 3u},
+    {"constant.CIUKI_SECURITY_SERVICE_REGISTRY", CIUKI_SECURITY_SERVICE_REGISTRY, 4u},
+    {"constant.CIUKI_SECURITY_SERVICE_LOGON", CIUKI_SECURITY_SERVICE_LOGON, 5u},
+    {"constant.CIUKI_SECURITY_SERVICE_W32SRV", CIUKI_SECURITY_SERVICE_W32SRV, 6u},
+    {"constant.CIUKI_SECURITY_SERVICE_BODY_MAX", CIUKI_SECURITY_SERVICE_BODY_MAX, 8192u},
+    {"constant.CIUKI_SECURITY_SERVICE_PENDING_MAX", CIUKI_SECURITY_SERVICE_PENDING_MAX, 8u},
+    {"constant.CIUKI_SECURITY_SERVICE_FRAGMENT_MAX", CIUKI_SECURITY_SERVICE_FRAGMENT_MAX, 192u},
+    {"constant.CIUKI_SECURITY_LAUNCH_TIMEOUT_MS", CIUKI_SECURITY_LAUNCH_TIMEOUT_MS, 5000u},
+    {"constant.CIUKI_SECURITY_SERVICE_TIMEOUT_MS", CIUKI_SECURITY_SERVICE_TIMEOUT_MS, 5000u},
+    {"sizeof.ciuki_security_launch", sizeof(struct ciuki_security_launch), 96u},
+    {"alignof.ciuki_security_launch", _Alignof(struct ciuki_security_launch), 4u},
+    {"offsetof.ciuki_security_launch.version", __builtin_offsetof(struct ciuki_security_launch, version), 0u},
+    {"offsetof.ciuki_security_launch.size", __builtin_offsetof(struct ciuki_security_launch, size), 4u},
+    {"offsetof.ciuki_security_launch.purpose", __builtin_offsetof(struct ciuki_security_launch, purpose), 8u},
+    {"offsetof.ciuki_security_launch.flags", __builtin_offsetof(struct ciuki_security_launch, flags), 12u},
+    {"offsetof.ciuki_security_launch.session_id", __builtin_offsetof(struct ciuki_security_launch, session_id), 16u},
+    {"offsetof.ciuki_security_launch.session_generation", __builtin_offsetof(struct ciuki_security_launch, session_generation), 20u},
+    {"offsetof.ciuki_security_launch.launch_id", __builtin_offsetof(struct ciuki_security_launch, launch_id), 24u},
+    {"offsetof.ciuki_security_launch.launch_generation", __builtin_offsetof(struct ciuki_security_launch, launch_generation), 28u},
+    {"offsetof.ciuki_security_launch.pid", __builtin_offsetof(struct ciuki_security_launch, pid), 32u},
+    {"offsetof.ciuki_security_launch.process_generation", __builtin_offsetof(struct ciuki_security_launch, process_generation), 36u},
+    {"offsetof.ciuki_security_launch.control_fd", __builtin_offsetof(struct ciuki_security_launch, control_fd), 40u},
+    {"offsetof.ciuki_security_launch.child_ready_fd", __builtin_offsetof(struct ciuki_security_launch, child_ready_fd), 44u},
+    {"offsetof.ciuki_security_launch.child_console_fd", __builtin_offsetof(struct ciuki_security_launch, child_console_fd), 48u},
+    {"offsetof.ciuki_security_launch.child_display_fd", __builtin_offsetof(struct ciuki_security_launch, child_display_fd), 52u},
+    {"offsetof.ciuki_security_launch.child_input_fd", __builtin_offsetof(struct ciuki_security_launch, child_input_fd), 56u},
+    {"offsetof.ciuki_security_launch.child_service_fd", __builtin_offsetof(struct ciuki_security_launch, child_service_fd), 60u},
+    {"offsetof.ciuki_security_launch.service_generation", __builtin_offsetof(struct ciuki_security_launch, service_generation), 64u},
+    {"offsetof.ciuki_security_launch.grant_generation", __builtin_offsetof(struct ciuki_security_launch, grant_generation), 68u},
+    {"offsetof.ciuki_security_launch.state", __builtin_offsetof(struct ciuki_security_launch, state), 72u},
+    {"offsetof.ciuki_security_launch.error", __builtin_offsetof(struct ciuki_security_launch, error), 76u},
+    {"offsetof.ciuki_security_launch.activation_console_epoch", __builtin_offsetof(struct ciuki_security_launch, activation_console_epoch), 80u},
+    {"offsetof.ciuki_security_launch.activation_authentication_epoch", __builtin_offsetof(struct ciuki_security_launch, activation_authentication_epoch), 84u},
+    {"offsetof.ciuki_security_launch.reserved", __builtin_offsetof(struct ciuki_security_launch, reserved), 88u},
+    {"sizeof.ciuki_security_console", sizeof(struct ciuki_security_console), 64u},
+    {"alignof.ciuki_security_console", _Alignof(struct ciuki_security_console), 4u},
+    {"offsetof.ciuki_security_console.version", __builtin_offsetof(struct ciuki_security_console, version), 0u},
+    {"offsetof.ciuki_security_console.size", __builtin_offsetof(struct ciuki_security_console, size), 4u},
+    {"offsetof.ciuki_security_console.session_id", __builtin_offsetof(struct ciuki_security_console, session_id), 8u},
+    {"offsetof.ciuki_security_console.session_generation", __builtin_offsetof(struct ciuki_security_console, session_generation), 12u},
+    {"offsetof.ciuki_security_console.console_generation", __builtin_offsetof(struct ciuki_security_console, console_generation), 16u},
+    {"offsetof.ciuki_security_console.reason", __builtin_offsetof(struct ciuki_security_console, reason), 20u},
+    {"offsetof.ciuki_security_console.grant_generation", __builtin_offsetof(struct ciuki_security_console, grant_generation), 24u},
+    {"offsetof.ciuki_security_console.restore_cookie_lo", __builtin_offsetof(struct ciuki_security_console, restore_cookie_lo), 28u},
+    {"offsetof.ciuki_security_console.restore_cookie_hi", __builtin_offsetof(struct ciuki_security_console, restore_cookie_hi), 32u},
+    {"offsetof.ciuki_security_console.state", __builtin_offsetof(struct ciuki_security_console, state), 36u},
+    {"offsetof.ciuki_security_console.authentication_required", __builtin_offsetof(struct ciuki_security_console, authentication_required), 40u},
+    {"offsetof.ciuki_security_console.console_epoch", __builtin_offsetof(struct ciuki_security_console, console_epoch), 44u},
+    {"offsetof.ciuki_security_console.authentication_epoch", __builtin_offsetof(struct ciuki_security_console, authentication_epoch), 48u},
+    {"offsetof.ciuki_security_console.reserved", __builtin_offsetof(struct ciuki_security_console, reserved), 52u},
+    {"sizeof.ciuki_security_link", sizeof(struct ciuki_security_link), 64u},
+    {"alignof.ciuki_security_link", _Alignof(struct ciuki_security_link), 4u},
+    {"offsetof.ciuki_security_link.version", __builtin_offsetof(struct ciuki_security_link, version), 0u},
+    {"offsetof.ciuki_security_link.size", __builtin_offsetof(struct ciuki_security_link, size), 4u},
+    {"offsetof.ciuki_security_link.service", __builtin_offsetof(struct ciuki_security_link, service), 8u},
+    {"offsetof.ciuki_security_link.flags", __builtin_offsetof(struct ciuki_security_link, flags), 12u},
+    {"offsetof.ciuki_security_link.endpoint_fd", __builtin_offsetof(struct ciuki_security_link, endpoint_fd), 16u},
+    {"offsetof.ciuki_security_link.endpoint_generation", __builtin_offsetof(struct ciuki_security_link, endpoint_generation), 20u},
+    {"offsetof.ciuki_security_link.server_role", __builtin_offsetof(struct ciuki_security_link, server_role), 24u},
+    {"offsetof.ciuki_security_link.peer_pid", __builtin_offsetof(struct ciuki_security_link, peer_pid), 28u},
+    {"offsetof.ciuki_security_link.peer_process_generation", __builtin_offsetof(struct ciuki_security_link, peer_process_generation), 32u},
+    {"offsetof.ciuki_security_link.peer_role", __builtin_offsetof(struct ciuki_security_link, peer_role), 36u},
+    {"offsetof.ciuki_security_link.session_id", __builtin_offsetof(struct ciuki_security_link, session_id), 40u},
+    {"offsetof.ciuki_security_link.service_generation", __builtin_offsetof(struct ciuki_security_link, service_generation), 44u},
+    {"offsetof.ciuki_security_link.request_id_lo", __builtin_offsetof(struct ciuki_security_link, request_id_lo), 48u},
+    {"offsetof.ciuki_security_link.request_id_hi", __builtin_offsetof(struct ciuki_security_link, request_id_hi), 52u},
+    {"offsetof.ciuki_security_link.reserved", __builtin_offsetof(struct ciuki_security_link, reserved), 56u},
+    {"sizeof.ciuki_credential", sizeof(struct ciuki_credential), 64u},
+    {"alignof.ciuki_credential", _Alignof(struct ciuki_credential), 4u},
+    {"offsetof.ciuki_credential.version", __builtin_offsetof(struct ciuki_credential, version), 0u},
+    {"offsetof.ciuki_credential.size", __builtin_offsetof(struct ciuki_credential, size), 4u},
+    {"offsetof.ciuki_credential.uid", __builtin_offsetof(struct ciuki_credential, uid), 8u},
+    {"offsetof.ciuki_credential.primary_gid", __builtin_offsetof(struct ciuki_credential, primary_gid), 12u},
+    {"offsetof.ciuki_credential.group_count", __builtin_offsetof(struct ciuki_credential, group_count), 16u},
+    {"offsetof.ciuki_credential.groups", __builtin_offsetof(struct ciuki_credential, groups), 20u},
+    {"offsetof.ciuki_credential.session_id", __builtin_offsetof(struct ciuki_credential, session_id), 52u},
+    {"offsetof.ciuki_credential.flags", __builtin_offsetof(struct ciuki_credential, flags), 56u},
+    {"offsetof.ciuki_credential.reserved", __builtin_offsetof(struct ciuki_credential, reserved), 60u},
+    {"sizeof.ciuki_security_profile", sizeof(struct ciuki_security_profile), 112u},
+    {"alignof.ciuki_security_profile", _Alignof(struct ciuki_security_profile), 4u},
+    {"offsetof.ciuki_security_profile.version", __builtin_offsetof(struct ciuki_security_profile, version), 0u},
+    {"offsetof.ciuki_security_profile.size", __builtin_offsetof(struct ciuki_security_profile, size), 4u},
+    {"offsetof.ciuki_security_profile.uid", __builtin_offsetof(struct ciuki_security_profile, uid), 8u},
+    {"offsetof.ciuki_security_profile.flags", __builtin_offsetof(struct ciuki_security_profile, flags), 12u},
+    {"offsetof.ciuki_security_profile.volume_id_lo", __builtin_offsetof(struct ciuki_security_profile, volume_id_lo), 16u},
+    {"offsetof.ciuki_security_profile.volume_id_hi", __builtin_offsetof(struct ciuki_security_profile, volume_id_hi), 20u},
+    {"offsetof.ciuki_security_profile.owner_generation_lo", __builtin_offsetof(struct ciuki_security_profile, owner_generation_lo), 24u},
+    {"offsetof.ciuki_security_profile.owner_generation_hi", __builtin_offsetof(struct ciuki_security_profile, owner_generation_hi), 28u},
+    {"offsetof.ciuki_security_profile.owner_key_lo", __builtin_offsetof(struct ciuki_security_profile, owner_key_lo), 32u},
+    {"offsetof.ciuki_security_profile.owner_key_hi", __builtin_offsetof(struct ciuki_security_profile, owner_key_hi), 36u},
+    {"offsetof.ciuki_security_profile.path_bytes", __builtin_offsetof(struct ciuki_security_profile, path_bytes), 40u},
+    {"offsetof.ciuki_security_profile.reserved", __builtin_offsetof(struct ciuki_security_profile, reserved), 44u},
+    {"offsetof.ciuki_security_profile.path", __builtin_offsetof(struct ciuki_security_profile, path), 48u},
+    {"sizeof.ciuki_security_args", sizeof(struct ciuki_security_args), 64u},
+    {"alignof.ciuki_security_args", _Alignof(struct ciuki_security_args), 4u},
+    {"offsetof.ciuki_security_args.version", __builtin_offsetof(struct ciuki_security_args, version), 0u},
+    {"offsetof.ciuki_security_args.size", __builtin_offsetof(struct ciuki_security_args, size), 4u},
+    {"offsetof.ciuki_security_args.operation", __builtin_offsetof(struct ciuki_security_args, operation), 8u},
+    {"offsetof.ciuki_security_args.flags", __builtin_offsetof(struct ciuki_security_args, flags), 12u},
+    {"offsetof.ciuki_security_args.credential_address", __builtin_offsetof(struct ciuki_security_args, credential_address), 16u},
+    {"offsetof.ciuki_security_args.spawn_address", __builtin_offsetof(struct ciuki_security_args, spawn_address), 20u},
+    {"offsetof.ciuki_security_args.session_id", __builtin_offsetof(struct ciuki_security_args, session_id), 24u},
+    {"offsetof.ciuki_security_args.target_pid", __builtin_offsetof(struct ciuki_security_args, target_pid), 28u},
+    {"offsetof.ciuki_security_args.endpoint_fd", __builtin_offsetof(struct ciuki_security_args, endpoint_fd), 32u},
+    {"offsetof.ciuki_security_args.profile_address", __builtin_offsetof(struct ciuki_security_args, profile_address), 36u},
+    {"offsetof.ciuki_security_args.output_address", __builtin_offsetof(struct ciuki_security_args, output_address), 40u},
+    {"offsetof.ciuki_security_args.output_bytes", __builtin_offsetof(struct ciuki_security_args, output_bytes), 44u},
+    {"offsetof.ciuki_security_args.result", __builtin_offsetof(struct ciuki_security_args, result), 48u},
+    {"offsetof.ciuki_security_args.state", __builtin_offsetof(struct ciuki_security_args, state), 52u},
+    {"offsetof.ciuki_security_args.reserved", __builtin_offsetof(struct ciuki_security_args, reserved), 56u},
+
     {"constant.CIUKI_NET_INFO_CONFIG", CIUKI_NET_INFO_CONFIG, 0u},
     {"constant.CIUKI_NET_INFO_SOCKETS", CIUKI_NET_INFO_SOCKETS, 1u},
     {"constant.CIUKI_NET_SOCKET_CLOSED", CIUKI_NET_SOCKET_CLOSED, 0u},
@@ -2014,6 +2325,17 @@ static const struct expectation expectations[] = {
     {"offsetof.ciuki_disk_volume.partition", __builtin_offsetof(struct ciuki_disk_volume, partition), 4u},
     {"sizeof.ciuki_disk_volume", sizeof(struct ciuki_disk_volume), 28u},
     {"constant.MEDIA_GET_STATE", MEDIA_GET_STATE, 19713u},
+    {"constant.MEDIA_GET_NTFS_STATUS", MEDIA_GET_NTFS_STATUS, 19746u},
+    {"constant.CIUKI_MEDIA_NTFS_SLOTS", CIUKI_MEDIA_NTFS_SLOTS, 8u},
+    {"sizeof.ciuki_ntfs_status", sizeof(struct ciuki_ntfs_status), 152u},
+    {"alignof.ciuki_ntfs_status", _Alignof(struct ciuki_ntfs_status), 4u},
+    {"offsetof.ciuki_ntfs_status.version", __builtin_offsetof(struct ciuki_ntfs_status, version), 0u},
+    {"offsetof.ciuki_ntfs_status.size", __builtin_offsetof(struct ciuki_ntfs_status, size), 4u},
+    {"offsetof.ciuki_ntfs_status.slot", __builtin_offsetof(struct ciuki_ntfs_status, slot), 8u},
+    {"offsetof.ciuki_ntfs_status.disk", __builtin_offsetof(struct ciuki_ntfs_status, disk), 12u},
+    {"offsetof.ciuki_ntfs_status.partition", __builtin_offsetof(struct ciuki_ntfs_status, partition), 16u},
+    {"offsetof.ciuki_ntfs_status.error", __builtin_offsetof(struct ciuki_ntfs_status, error), 20u},
+    {"offsetof.ciuki_ntfs_status.reason", __builtin_offsetof(struct ciuki_ntfs_status, reason), 24u},
     {"constant.MEDIA_SAFE_REMOVE", MEDIA_SAFE_REMOVE, 19714u},
     {"sizeof.ciuki_media_state_v1", sizeof(struct ciuki_media_state_v1), 120u},
     {"alignof.ciuki_media_state_v1", _Alignof(struct ciuki_media_state_v1), 4u},
@@ -2318,7 +2640,7 @@ static const struct expectation expectations[] = {
     {"constant.CIUKI_DOSVM_CIUKIDOS", CIUKI_DOSVM_CIUKIDOS, 0u},
     {"constant.CIUKI_DOSVM_FREEDOS13", CIUKI_DOSVM_FREEDOS13, 1u},
     {"constant.CIUKI_DOSVM_UNIFIED", CIUKI_DOSVM_UNIFIED, 2u},
-    {"constant.CIUKI_DOSVM_GAME_COUNT", CIUKI_DOSVM_GAME_COUNT, 4u},
+    {"constant.CIUKI_DOSVM_GAME_COUNT", CIUKI_DOSVM_GAME_COUNT, 5u},
     {"constant.CIUKI_DOSVM_MEMORY_PAGED", CIUKI_DOSVM_MEMORY_PAGED, 0u},
     {"constant.CIUKI_DOSVM_MEMORY_LOCKED", CIUKI_DOSVM_MEMORY_LOCKED, 1u},
     {"constant.CIUKI_DOSVM_WIDTH", (uint32_t)(CIUKI_DOSVM_WIDTH), 640u},
@@ -2349,6 +2671,8 @@ static const struct expectation expectations[] = {
     {"constant.CIUKI_DOSVM_POLICY", CIUKI_DOSVM_POLICY, 23u},
     {"constant.CIUKI_DOSVM_TEXT_BYTES", CIUKI_DOSVM_TEXT_BYTES, 48u},
     {"constant.CIUKI_DOSVM_PROGRAM_RETURNED", CIUKI_DOSVM_PROGRAM_RETURNED, 128u},
+    {"constant.CIUKI_DOSVM_GRAPHICS", CIUKI_DOSVM_GRAPHICS, 256u},
+    {"constant.CIUKI_DOSVM_FULLSCREEN_HOTKEY", CIUKI_DOSVM_FULLSCREEN_HOTKEY, 512u},
     {"sizeof.ciuki_dosvm_text_chunk", sizeof(struct ciuki_dosvm_text_chunk), 64u},
     {"alignof.ciuki_dosvm_text_chunk", _Alignof(struct ciuki_dosvm_text_chunk), 4u},
     {"offsetof.ciuki_dosvm_text_chunk.row", __builtin_offsetof(struct ciuki_dosvm_text_chunk,row), 0u},
@@ -2892,6 +3216,8 @@ static const struct expectation expectations[] = {
     {"constant.CIUKI_INPUT_MOTION", (uint32_t)(CIUKI_INPUT_MOTION), 3u},
     {"constant.CIUKI_INPUT_BUTTON", (uint32_t)(CIUKI_INPUT_BUTTON), 4u},
     {"constant.CIUKI_INPUT_WHEEL", (uint32_t)(CIUKI_INPUT_WHEEL), 6u},
+    /* sec-k07 */
+    {"constant.CIUKI_INPUT_ATTENTION", (uint32_t)(CIUKI_INPUT_ATTENTION), 13u},
     {"constant.CIUKI_BUS_USB", (uint32_t)(CIUKI_BUS_USB), 3u},
     {"constant.CIUKI_INPUT_RESYNC", (uint32_t)(CIUKI_INPUT_RESYNC), 5u},
     {"constant.CIUKI_KEY_VALUE_UP", (uint32_t)(CIUKI_KEY_VALUE_UP), 0u},
@@ -3482,6 +3808,8 @@ _Static_assert(PRINTER_ENUM_LOCAL==2u,"G31 PRINTER_ENUM_LOCAL");
 _Static_assert(PRINTER_ENUM_CONNECTIONS==4u,"G31 PRINTER_ENUM_CONNECTIONS");
 _Static_assert(PRINTER_ATTRIBUTE_DEFAULT==4u,"G31 PRINTER_ATTRIBUTE_DEFAULT");
 _Static_assert(PRINTER_ATTRIBUTE_LOCAL==0x40u,"G31 PRINTER_ATTRIBUTE_LOCAL");
+_Static_assert(PORT_TYPE_WRITE==1u,"fx-is5boot PORT_TYPE_WRITE");
+_Static_assert(PORT_TYPE_READ==2u,"fx-is5boot PORT_TYPE_READ");
 _Static_assert(PRINTER_CONTROL_PAUSE==1u,"G31 PRINTER_CONTROL_PAUSE");
 _Static_assert(PRINTER_CONTROL_RESUME==2u,"G31 PRINTER_CONTROL_RESUME");
 _Static_assert(PRINTER_CONTROL_PURGE==3u,"G31 PRINTER_CONTROL_PURGE");
@@ -3564,6 +3892,26 @@ _Static_assert(__builtin_offsetof(PRINTER_INFO_5W,pPortName)==4,"G31 PRINTER_INF
 _Static_assert(__builtin_offsetof(PRINTER_INFO_5W,Attributes)==8,"G31 PRINTER_INFO_5W.Attributes");
 _Static_assert(__builtin_offsetof(PRINTER_INFO_5W,DeviceNotSelectedTimeout)==12,"G31 PRINTER_INFO_5W.DeviceNotSelectedTimeout");
 _Static_assert(__builtin_offsetof(PRINTER_INFO_5W,TransmissionRetryTimeout)==16,"G31 PRINTER_INFO_5W.TransmissionRetryTimeout");
+_Static_assert(sizeof(PORT_INFO_1A)==4,"fx-is5boot PORT_INFO_1A size");
+_Static_assert(_Alignof(PORT_INFO_1A)==4,"fx-is5boot PORT_INFO_1A alignment");
+_Static_assert(__builtin_offsetof(PORT_INFO_1A,pName)==0,"fx-is5boot PORT_INFO_1A.pName");
+_Static_assert(sizeof(PORT_INFO_1W)==4,"fx-is5boot PORT_INFO_1W size");
+_Static_assert(_Alignof(PORT_INFO_1W)==4,"fx-is5boot PORT_INFO_1W alignment");
+_Static_assert(__builtin_offsetof(PORT_INFO_1W,pName)==0,"fx-is5boot PORT_INFO_1W.pName");
+_Static_assert(sizeof(PORT_INFO_2A)==20,"fx-is5boot PORT_INFO_2A size");
+_Static_assert(_Alignof(PORT_INFO_2A)==4,"fx-is5boot PORT_INFO_2A alignment");
+_Static_assert(__builtin_offsetof(PORT_INFO_2A,pPortName)==0,"fx-is5boot PORT_INFO_2A.pPortName");
+_Static_assert(__builtin_offsetof(PORT_INFO_2A,pMonitorName)==4,"fx-is5boot PORT_INFO_2A.pMonitorName");
+_Static_assert(__builtin_offsetof(PORT_INFO_2A,pDescription)==8,"fx-is5boot PORT_INFO_2A.pDescription");
+_Static_assert(__builtin_offsetof(PORT_INFO_2A,fPortType)==12,"fx-is5boot PORT_INFO_2A.fPortType");
+_Static_assert(__builtin_offsetof(PORT_INFO_2A,Reserved)==16,"fx-is5boot PORT_INFO_2A.Reserved");
+_Static_assert(sizeof(PORT_INFO_2W)==20,"fx-is5boot PORT_INFO_2W size");
+_Static_assert(_Alignof(PORT_INFO_2W)==4,"fx-is5boot PORT_INFO_2W alignment");
+_Static_assert(__builtin_offsetof(PORT_INFO_2W,pPortName)==0,"fx-is5boot PORT_INFO_2W.pPortName");
+_Static_assert(__builtin_offsetof(PORT_INFO_2W,pMonitorName)==4,"fx-is5boot PORT_INFO_2W.pMonitorName");
+_Static_assert(__builtin_offsetof(PORT_INFO_2W,pDescription)==8,"fx-is5boot PORT_INFO_2W.pDescription");
+_Static_assert(__builtin_offsetof(PORT_INFO_2W,fPortType)==12,"fx-is5boot PORT_INFO_2W.fPortType");
+_Static_assert(__builtin_offsetof(PORT_INFO_2W,Reserved)==16,"fx-is5boot PORT_INFO_2W.Reserved");
 _Static_assert(sizeof(PRINTER_INFO_2A)==84,"G31 PRINTER_INFO_2A size");
 _Static_assert(_Alignof(PRINTER_INFO_2A)==4,"G31 PRINTER_INFO_2A alignment");
 _Static_assert(__builtin_offsetof(PRINTER_INFO_2A,pServerName)==0,"G31 PRINTER_INFO_2A.pServerName");

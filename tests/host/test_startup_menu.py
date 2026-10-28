@@ -209,7 +209,7 @@ class StartupMenuTests(unittest.TestCase):
                          model.CBI_F_SAFE_MODE | model.CBI_F_SAFE_STORAGE)
 
     def test_every_digit_then_enter_matches_the_model(self):
-        for number in range(1, 9):
+        for number in range(1, 10):
             if number == 4:
                 continue  # Step-by-step has its own prompts (below)
             with self.subTest(choice=number):
@@ -230,14 +230,14 @@ class StartupMenuTests(unittest.TestCase):
 
     def test_arrows_move_and_clamp_and_keys_restart_the_countdown(self):
         script = [(1, 0, model.SCAN_UP), (2, 0, model.SCAN_DOWN), (3, 0, model.SCAN_DOWN),
-                  (400, ord('9'), 0)]
+                  (400, ord('0'), 0)]
         m = self.menu(script)
         expected = self.replay(script)
         self.assertEqual(expected.choice, 3)
         self.assertEqual(m.flags(), expected.flags())
-        # The last key (an ignored '9' at tick 400) restarted the full 30 s.
+        # The last key (an ignored '0' at tick 400) restarted the full 30 s.
         self.assertEqual(m.tick, 400 + 30 * 18)
-        for script in ([(1, 0, model.SCAN_DOWN)] * 9, [(1, 0, model.SCAN_UP)]):
+        for script in ([(1, 0, model.SCAN_DOWN)] * 10, [(1, 0, model.SCAN_UP)]):
             m = self.menu(script)
             self.assertEqual(m.flags(), self.replay(script).flags())
 
@@ -409,6 +409,29 @@ class StartupMenuTests(unittest.TestCase):
         # No key: COM1 LSR is checked once per tick; an empty UART never blocks.
         m = self.boot_menu(serial=[(1000, ord('N'))])
         self.assertEqual(m.port_reads, [(tick, 0x3fd) for tick in range(55)])
+
+    def test_t_key_selects_one_self_test_boot(self):
+        # fx-selftest: T (either case, keyboard or COM1) adds only the self-test
+        # flag, cancels a BOOT.CFG request and keeps a positive safe source.
+        for serial in (False, True):
+            for key in ('T', 't'):
+                with self.subTest(serial=serial, key=key):
+                    options = ({'serial': [(1, ord(key))]} if serial else {'keys': [(1, ord(key), 0)]})
+                    m = self.boot_menu(**options)
+                    self.assertEqual(m.flags(), model.CBI_F_SELF_TEST)
+                    self.assertEqual((m.tick, m.wakes), (1, 1))
+                    self.assertTrue(m.joined().endswith('L:SELFTEST=1\r\nL:SELECT_SOURCE=menu\r\n'))
+        m = self.m
+        m.setup(flags=model.CBI_F_TEST_REQUEST | model.CBI_F_SAFE_MODE, keys=[(1, ord('T'), 0)])
+        m.var('selector_source', 2, 8)
+        self.assertTrue(m.run('boot_menu'))
+        self.assertEqual(m.flags(), model.CBI_F_SAFE_MODE | model.CBI_F_SELF_TEST)
+        self.assertTrue(m.joined().endswith('L:SELECT_SOURCE=menu\r\n'))
+        # Startup menu choice 9 is the same boot (plus the menu-shown bit).
+        m = self.boot_menu(keys=[(1, 0, model.SCAN_F8), (5, ord('9'), 0), (9, 13, 0x1c)])
+        self.assertEqual(m.flags(), model.CBI_F_MENU_SHOWN | model.CBI_F_SELF_TEST)
+        self.assertIn('  9. Self-test (unattended, about 5 minutes)\r\n', m.joined())
+        self.assertIn('L:STARTUP=9', m.joined())
 
     def test_fw_cfg_bypasses_idle_and_cfg_timeout_and_positive_safe_survive(self):
         m = self.m

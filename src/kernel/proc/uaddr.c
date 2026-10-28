@@ -75,14 +75,17 @@ struct ua_slot {
     uint32_t swap; /* SLOT_SWAPPED backing slot handle */
 };
 #define OBJECT_BUCKETS 32u
-#define OBJECT_SLOTS 64u
+/* Native host pointers can enlarge slots. Keep each private block within
+ * the same small-heap class on every target; i686 retains 64 slots. */
+#define OBJECT_SLOT_CAPACITY ((KHEAP_MAX_REQUEST - 2*sizeof(void *))/sizeof(struct ua_slot))
+#define OBJECT_SLOTS (OBJECT_SLOT_CAPACITY < 64u ? OBJECT_SLOT_CAPACITY : 64u)
 struct ua_slot_block {
     struct ua_slot_block *next;
     uint32_t first;
     struct ua_slot slots[OBJECT_SLOTS];
 };
 /* The kernel is i686: the block fits the 2 KiB small-heap class there. */
-_Static_assert(sizeof(void *)!=4 || sizeof(struct ua_slot_block)<=2040,"resident metadata fits small heap");
+_Static_assert(sizeof(struct ua_slot_block)<=KHEAP_MAX_REQUEST,"resident metadata fits small heap");
 struct memory_object {
     uint32_t refs, count, resident, first;
     uint64_t generation;

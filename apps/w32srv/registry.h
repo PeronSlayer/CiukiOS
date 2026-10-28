@@ -43,6 +43,12 @@ struct wr_server {
     struct wr_io io;
     char user_path[128], user_name[32];
     uint32_t next_id, reserved_id, profile_owner;
+    /* sec-k06: installed only by the SYSTEM broker from a retained peer.
+     * Ordinary RPC bytes cannot enable or replace this authorization view. */
+    struct { uint32_t uid, session, groups[8], group_count; } subject;
+    char user_branch[96];
+    int secured, session_only;
+    uint32_t (*compat_rpc)(const void *,size_t,void *,size_t,size_t *);
     uint32_t compat_writer_pid; /* authenticated desktop owner; zero denies writes */
     uint64_t now;
     void *directory;
@@ -71,6 +77,9 @@ struct wr_server {
     struct wr_power *power;   /* G11: the WM_POWERBROADCAST in progress */
 };
 int wr_init(struct wr_server *, const struct wr_io *, uint64_t now);
+int wr_user_start(struct wr_server *,struct wr_io *,char directory[160],uint64_t now);
+int wr_init_secure(struct wr_server *, const struct wr_io *, uint64_t now);
+uint32_t wr_key_policy(struct wr_server *, struct wr_key *, uint32_t access);
 #define WR_CLIENT_MARKER "CiukiOS Win32 Client (f5-07B)"
 uint32_t wr_client_join(struct wr_server *, uint32_t pid);
 uint32_t wr_clients_reset(struct wr_server *); /* fresh desktop: prior-boot PIDs are not clients */

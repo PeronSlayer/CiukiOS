@@ -8,6 +8,29 @@
 #include <ciuki/media_events.h>
 
 #define OPTICAL_POLL_MS 1000u
+/* fx-emptydrive: the drive owns one letter from its first service pass, with
+ * or without a disc: storage_init runs that pass after the hard-disk volumes
+ * took theirs and before USB media can, so the CD-ROM follows the last hard-
+ * disk letter (D: on a one-partition machine), as Windows 98 and MSCDEX
+ * assign it. A disc mounted before the pass (Setup's boot CD) keeps its
+ * letter. Namespace lock held. */
+static unsigned optical_letter_locked(struct storage *s, unsigned slot)
+{
+    struct optical_binding *b = &s->optical_bindings[slot];
+    if (b->drive) return b->drive;
+    unsigned d = 3;
+    while (d < 26 && s->vfs.ro_volumes[d] != &s->optical[slot]) d++;
+    if (d >= 26) {
+        d = s->next_drive < 3 ? 3 : s->next_drive;
+        while (d < 26 && vfs_letter_taken(&s->vfs, d)) d++;
+        if (d >= 26) return 0;
+        s->next_drive = d + 1;
+    }
+    b->drive = d;
+    storage_reserve_slot_locked(s, d, VFS_SLOT_OPTICAL);
+    klog("[optical] bind slot=%u stage=letter drive=%c result=0", slot, 'A' + d);
+    return d;
+}
 int optical_bind(struct storage *s, unsigned slot, struct ata_device *d)
 {
     if (!s || !s->ready || s->stopped || slot >= STORAGE_DISKS || !d) return -FS_EINVAL;
@@ -32,9 +55,10 @@ void optical_service(struct storage *s, uint64_t now)
         b->next_poll = now + OPTICAL_POLL_MS;
         vfs_lock(&s->vfs,0);
         if (s->stopped) { vfs_unlock(&s->vfs); return; }
-        uint32_t mask=0;
+        unsigned letter=optical_letter_locked(s,slot);
+        uint32_t mask=letter ? vfs_drive_mask(letter) : 0;
         for (unsigned drive=3;drive<26;drive++) if (s->vfs.ro_volumes[drive]==&s->optical[slot]) mask|=1u<<drive;
-        if (!mask) { unsigned drive=s->next_drive; while (drive<26 && vfs_drive_present(&s->vfs,drive)) drive++; mask=vfs_drive_mask(drive); }
+        if (!mask) { unsigned drive=s->next_drive; while (drive<26 && vfs_letter_taken(&s->vfs,drive)) drive++; mask=vfs_drive_mask(drive); }
         vfs_reserve_locked(&s->vfs,mask);
         int e = VFS_IO(&s->vfs,atapi_ready(d));
         for (unsigned drive = 3; drive < 26; drive++)
@@ -70,8 +94,9 @@ void optical_service(struct storage *s, uint64_t now)
                 if (s->vfs.ro_volumes[drive] == &s->optical[slot]) { e = (int)drive; break; }
         } else if (!e) e = b->result; /* retain a refusal for this generation */
         if (b->observed_generation != d->block.media_generation || b->result != e) {
+            /* fx-emptydrive: an empty drive reports the letter it keeps. */
             klog("[storage] optical slot=%u drive=%c mode=ro generation=%u result=%d reason=%s",
-                 slot, e >= 3 ? 'A' + e : '-', d->block.media_generation, e,
+                 slot, e >= 3 ? 'A' + e : b->drive ? 'A' + b->drive : '-', d->block.media_generation, e,
                  e >= 3 ? "mounted" : d->media == ATAPI_NO_MEDIUM ? "no_medium" :
                  !e && d->toc.valid && d->toc.first_audio ? "audio_cd" :
                  d->ready_error ? d->ready_stage : s->optical[slot].diagnostic ? s->optical[slot].diagnostic : "unavailable");

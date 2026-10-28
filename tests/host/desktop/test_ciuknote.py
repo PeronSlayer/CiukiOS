@@ -73,7 +73,7 @@ INCLUDES = ["-I", str(ROOT / "apps/libdeskui"), "-I", str(ROOT / "apps/ciuknote"
             "-I", str(ROOT / "src/kernel/include")]
 TOOLKIT = ["apps/libdeskui/draw.c", "apps/libdeskui/widgets.c", "apps/libdeskui/list.c", "apps/libdeskui/menu.c",
            "apps/libdeskui/dialog.c", "apps/libdeskui/controls.c", "apps/libdeskui/commdlg.c", "apps/libdeskui/textarea.c", "apps/desktop/compositor.c", "apps/desktop/theme.c",
-           "apps/libdeskui/icons.c", "apps/libdeskui/icon_map.c"]
+           "apps/libdeskui/icons.c", "apps/libdeskui/icon_map.c", "apps/libdeskui/iconx.c", "apps/libdeskui/fileicon.c"]
 APP = [*TOOLKIT, "apps/ciuknote/app.c", "apps/ciuknote/doc.c", "tests/host/desktop/ciuknote_test.c"]
 
 # ui-look (2026-10-12): the new theme engine, fonts and controls changed every

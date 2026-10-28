@@ -261,6 +261,8 @@ void drivers_init(void)
     if (smi_attribution_init) smi_attribution_init();
     splash_report(SPLASH_PHASE_DEVICES);
     if (native_files) klog("[files] initialization failed: %d", native_files);
-    if (fbdev_accel_schedule && !(g_boot.flags & CBI_F_HW_CHECK))
+    /* fx-selftest: a T boot schedules the 2D activation itself, after its
+     * pre-desktop mode checks (probes/selftest.c), like the H page avoids it. */
+    if (fbdev_accel_schedule && !(g_boot.flags & CBI_F_HW_CHECK) && !(g_boot.flags & CBI_F_SELF_TEST))
         fbdev_accel_schedule(&storage_get()->vfs);
 }

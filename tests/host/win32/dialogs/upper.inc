@@ -842,7 +842,8 @@ static void upper_windows(void) {
         GetPixel((GH)(uintptr_t)dc, 2, 2) == (~before & 0xffffff));
   ReleaseDC(top, dc);
   /* Process idle and help. */
-  CHECK(!WaitForInputIdle((HANDLE)(uintptr_t)0x44, 10));
+  CHECK(WaitForInputIdle((HANDLE)(uintptr_t)0x44, 10) == W32_WAIT_FAILED &&
+        GetLastError() == 6);
   CHECK(WinHelpW(top, L("x.hlp"), 2, 0) && !WinHelpW(top, L("x.hlp"), 1, 0) &&
         GetLastError() == 2);
   DestroyWindow(child);
@@ -967,6 +968,39 @@ static void upper_resources(void) {
   DestroyIcon(small_icons[0]);
   icon_module_image = 0;
   free(image);
+  /* fx-exeicons: a 16-bit icon library (NE), a cursor, an animated cursor
+   * and a DOS program, written by test_dialogs.py (icon_fixtures.py) into the
+   * output folder and copied to C:. The library's group 7 is all red. */
+  static const char *const fixtures[] = {"NEICONS.ICL", "POINT.CUR", "BUSY.ANI", "DOSGAME.EXE"};
+  for (UINT k = 0; k < 4; k++) {
+    char from[1100], to[1100];
+    snprintf(from, sizeof(from), "%s/%s", out_dir, fixtures[k]);
+    snprintf(to, sizeof(to), "%s/%s", drive_dir, fixtures[k]);
+    FILE *in = fopen(from, "rb"), *dst = fopen(to, "wb");
+    CHECK(in && dst);
+    uint8_t chunk[4096];
+    size_t got;
+    while ((got = fread(chunk, 1, sizeof(chunk), in)))
+      CHECK(fwrite(chunk, 1, got, dst) == got);
+    fclose(in);
+    fclose(dst);
+  }
+  CHECK(PrivateExtractIconsW(L("C:\\NEICONS.ICL"), 0, 32, 32, 0, 0, 0, 0) == 2);
+  CHECK(PrivateExtractIconsW(L("C:\\NEICONS.ICL"), -7, 32, 32, icons, ids, 1, 0) == 1 && ids[0] == 7);
+  ICONINFO ne_info;
+  uint8_t ne_bits[4096];
+  CHECK(GetIconInfo(icons[0], &ne_info) &&
+        GetBitmapBits((GH)(uintptr_t)ne_info.hbmColor, sizeof(ne_bits), ne_bits) == 4096 &&
+        w32_u32(ne_bits) == 0xffff0000u && w32_u32(ne_bits + 4092) == 0xffff0000u);
+  DeleteObject((GH)(uintptr_t)ne_info.hbmColor);
+  DeleteObject((GH)(uintptr_t)ne_info.hbmMask);
+  CHECK(DestroyIcon(icons[0]));
+  CHECK(PrivateExtractIconsW(L("C:\\NEICONS.ICL"), 1, 32, 32, icons, ids, 2, 0) == 1 && DestroyIcon(icons[0]));
+  CHECK(PrivateExtractIconsW(L("C:\\POINT.CUR"), 0, 32, 32, icons, ids, 1, 0) == 1 && DestroyIcon(icons[0]));
+  CHECK(PrivateExtractIconsW(L("C:\\BUSY.ANI"), 0, 32, 32, 0, 0, 0, 0) == 1);
+  CHECK(PrivateExtractIconsW(L("C:\\BUSY.ANI"), 0, 32, 32, icons, ids, 1, 0) == 1 && DestroyIcon(icons[0]));
+  CHECK(PrivateExtractIconsW(L("C:\\DOSGAME.EXE"), 0, 32, 32, 0, 0, 0, 0) == 0);
+  CHECK(PrivateExtractIconsW(L("C:\\DOSGAME.EXE"), 0, 32, 32, icons, ids, 1, 0) == 0);
   /* DlgDirList over LB_DIR/CB_DIR. */
   snprintf(path, sizeof(path), "%s/DIRTEST", drive_dir);
   CHECK(!mkdir(path, 0755));

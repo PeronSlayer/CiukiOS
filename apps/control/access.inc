@@ -78,7 +78,7 @@ static void ac_save(struct cp_app *a) { changed(a); }
 static void ac_refresh_from_file(struct cp_app *a)
 {
     static struct ciuki_settings now;
-    load(a, &now);
+    if (load(a,&now)) return;
     if (!memcmp(&now.access, &a->access_loaded, sizeof(now.access))) return;
     a->cfg.access = now.access; a->access_loaded = now.access;
 }

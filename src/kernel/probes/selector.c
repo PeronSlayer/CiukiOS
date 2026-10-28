@@ -106,6 +106,7 @@ bool probes_parse_selector(const char *s, unsigned len, uint32_t boot_flags, str
                                             "dos4gw", "doom", "doom-sound", "wolf3d", "vm-starve", "quake", "vm-fullscreen", "dos-conformance", "title", "vm-game" };
     static const char *const f4_names[] = { "optical", "audio-native", "ntfs-ro", "vm-audio", "media-remove", "vm-audio-jitter" };
     static const char *const f5_names[] = { "f5-core", "w32-exceptions", "w32-memory", "w32-objects", "w32-dialogs", "w32-upper-dlls", "w32-media", "w32-fixtures", "w32-kernel32", "w32-fullscreen", "w32-registry", "w32-audio", "w32-gdi32", "w32-crash", "w32-user32", "w32-codecs", "w32-ddraw", "w32-input", "w32-restart", "w32-installer-nsis", "w32-gl",
+        "q3-lease-eio",
         /* f5-15C installers tier (title aliases of tests/win32/workloads.json) */
         "win32-diablo-shareware", "win32-sc", "win32-aoe-trial", "win32-half-life-uplink", "win32-ut-demo-348", "win32-wa", "win32-heroes3-demo", "win32-rct-demo", "win32-jazz2-shareware", "win32-ta-demo" };
     static const char *const f6_names[] = { "net-arp", "browser" };

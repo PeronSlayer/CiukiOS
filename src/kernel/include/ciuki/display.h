@@ -18,6 +18,7 @@ void display_present_poll(void);
 void display_present_process_exit(struct process *);
 void display_present_returned(void);
 uint32_t display_change_counter(void);
+void display_console_changed(void); /* sec-k07 */
 /* Successful desktop upload. Mode changes require a full frame; verified
  * full-screen restoration accepts the first upload in the new generation. */
 void display_frame_complete(uint32_t generation, bool full_frame);
@@ -34,6 +35,8 @@ bool display_fullscreen_supported(uint16_t mode);
 int display_fullscreen_write(uint32_t offset, const void *, uint32_t bytes);
 struct display_lfb;
 int display_fullscreen_lfb(struct display_lfb *);
+/* Active indexed packed scanout's DAC precision; zero without a lease. */
+unsigned display_fullscreen_dac_bits(void);
 bool display_fullscreen_active(void);
 /* IRQ safe, records the hotkey/fault time without doing any I/O. */
 void display_fullscreen_return_request(void);

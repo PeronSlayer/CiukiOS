@@ -588,8 +588,9 @@ static int mount_impl(void *workspace, size_t bytes, ntfs_ro_read_blocks read, v
     const uint8_t *info=a+u16(a+20);
     if (info[8]!=3 || info[9]>1) { if (reason) *reason=NTFS_RO_UNSUPPORTED; return UNSUP; }
     uint16_t flags=u16(info+10);
-    if (flags&1) { if (reason) *reason=NTFS_RO_DIRTY; return IO; }
-    if (flags&~8u) { if (reason) *reason=NTFS_RO_RECOVERY_REQUIRED; return IO; }
+    /* Dirtiness alone does not require replay. Expose read-only access only
+     * after the journal and hibernation checks below prove it safe. */
+    if (flags&~9u) { if (reason) *reason=NTFS_RO_RECOVERY_REQUIRED; return IO; }
     err=log_clean(v);
     if (err) {
         if (reason) *reason=err==LOG_RECOVERY ? NTFS_RO_RECOVERY_REQUIRED :
@@ -617,7 +618,7 @@ static int mount_impl(void *workspace, size_t bytes, ntfs_ro_read_blocks read, v
         err=stream_read(v,&v->data,0,v->index,4096); if (err) return err;
         for (uint32_t i=0;i<4096;i++) if (v->index[i]) { if (reason) *reason=NTFS_RO_HIBERNATED; return IO; }
     }
-    v->mounted=true; *out=v; if (reason) *reason=NTFS_RO_OK; return 0;
+    v->mounted=true; *out=v; if (reason) *reason=(flags&1) ? NTFS_RO_DIRTY : NTFS_RO_OK; return 0;
 }
 int ntfs_ro_mount(void *workspace, size_t bytes, ntfs_ro_read_blocks read, void *opaque,
                   uint32_t sector, uint64_t sectors, struct ntfs_ro **out,

@@ -2,6 +2,8 @@
  * SPDX-License-Identifier: LGPL-2.1-or-later */
 #include "internal.h"
 #include <w32/pixelformat.h>
+#include "../opengl32/backend.h"
+extern const struct gl_hw_driver *W32API w32_gdi_render3d(unsigned);
 #ifndef W32_HOST_MODEL
 extern void *W32API GetModuleHandleA(const char *);
 extern void *W32API GetProcAddress(void *, const char *);
@@ -20,13 +22,29 @@ static const struct {
                {32, 16, 8, 1}, {16, 16, 8, 1},
                {32, 24, 8, 1}, {16, 24, 8, 1}};
 #define FORMAT_COUNT ((int)(sizeof(formats) / sizeof(formats[0])))
-static PIXELFORMATDESCRIPTOR describe(int n) {
+/* Read-only qualification, current extent and generation. No context or GPU
+ * allocation, and no dependency on loading opengl32 before a game enumerates. */
+static unsigned accelerated_formats(HDC h,struct dc *d) {
+  struct w32_dib *b=d ? gdi_target(d) : 0;
+  const struct gl_hw_driver *driver=w32_gdi_render3d(GL_HW_VERSION);
+  if (!b || !driver || driver->version!=GL_HW_VERSION || driver->bytes!=sizeof(*driver) || !driver->query) return 0;
+  unsigned mask=0;
+  for (int n=0;n<FORMAT_COUNT;n++) {
+    struct gl_hw_format f={(unsigned)b->width,(unsigned)b->height,formats[n].depth,
+      formats[n].stencil,formats[n].color==16};
+    struct gl_hw_caps caps={0};
+    if (driver->query(h,&f,&caps)) mask|=1u<<n;
+  }
+  return mask;
+}
+static PIXELFORMATDESCRIPTOR describe(int n,unsigned accelerated) {
   PIXELFORMATDESCRIPTOR p = {0};
   p.nSize = 40;
   p.nVersion = 1;
   p.dwFlags = PFD_DRAW_TO_WINDOW | PFD_DRAW_TO_BITMAP | PFD_SUPPORT_OPENGL;
   if (formats[n - 1].doublebuffer)
     p.dwFlags |= PFD_DOUBLEBUFFER | PFD_SWAP_COPY;
+  if (accelerated && !(accelerated&(1u<<(n-1)))) p.dwFlags|=PFD_GENERIC_FORMAT;
   p.cColorBits = formats[n - 1].color;
   p.cDepthBits = formats[n - 1].depth;
   p.cStencilBits = formats[n - 1].stencil;
@@ -44,7 +62,7 @@ int W32API DescribePixelFormat(HDC h, int n, unsigned size,
   if (out) {
     if (size < 40)
       return 0;
-    *out = describe(n);
+    *out = describe(n,accelerated_formats(h,gdi_dc(h)));
   }
   return FORMAT_COUNT;
 }
@@ -62,10 +80,12 @@ int W32API ChoosePixelFormat(HDC h, const PIXELFORMATDESCRIPTOR *p) {
     return 0;
   unsigned required = p->dwFlags & (PFD_DRAW_TO_WINDOW | PFD_DRAW_TO_BITMAP |
                                      PFD_SUPPORT_OPENGL | PFD_SUPPORT_GDI);
+  unsigned accelerated=accelerated_formats(h,gdi_dc(h));
+  unsigned best_class=~0u;
   unsigned best_cost = ~0u;
   int best = 0;
   for (int n = 1; n <= FORMAT_COUNT; n++) {
-    PIXELFORMATDESCRIPTOR candidate = describe(n);
+    PIXELFORMATDESCRIPTOR candidate = describe(n,accelerated);
     if ((candidate.dwFlags & required) != required ||
         (!(p->dwFlags & 0x40000000u) &&
          !!(p->dwFlags & PFD_DOUBLEBUFFER) !=
@@ -79,7 +99,9 @@ int W32API ChoosePixelFormat(HDC h, const PIXELFORMATDESCRIPTOR *p) {
                                           p->cDepthBits ? p->cDepthBits : 16);
     unsigned stencil = precision_cost(candidate.cStencilBits, p->cStencilBits);
     unsigned cost = (color * 512 + depth) * 512 + stencil;
-    if (cost < best_cost) {
+    unsigned implementation=accelerated && !(accelerated&(1u<<(n-1))) ? 1u : 0u;
+    if (implementation<best_class || (implementation==best_class && cost < best_cost)) {
+      best_class=implementation;
       best_cost = cost;
       best = n;
     }

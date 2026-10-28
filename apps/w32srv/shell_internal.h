@@ -10,6 +10,11 @@ struct ws_shell {
     struct wr_server *registry;
     struct { uint32_t pid, id; uint64_t used; } sessions[WS_SESSIONS];
     char active_group[64]; /* Program Manager's shared focused group (SDK chapter 17) */
+    /* sec-user-05: programs is the session user's Start Menu\Programs,
+     * common the All Users one (C:\WINDOWS\Start Menu\Programs); the
+     * focused group lives in common when active_common is set. */
+    char common[WS_PATH];
+    int administrator, active_common;
     /* Restart state (restart.c). line counts the [rename] lines already
      * applied and journalled; handed counts RunOnce entries given out. */
     unsigned phase, line, handed;

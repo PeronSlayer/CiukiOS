@@ -1,6 +1,7 @@
 /* T0: production framebuffer renderer/probe with heap-backed LFB.
  * Build: scripts/test/host_kernel_tests.sh (ASan/UBSan).
  * SPDX-License-Identifier: GPL-2.0-only */
+#include <ciuki/kheap_limits.h>
 #define _DEFAULT_SOURCE
 #include <stdio.h>
 #include <stdlib.h>
@@ -129,7 +130,7 @@ void *vmm_map_framebuffer(uint32_t phys, uint32_t size)
     map_calls++;
     return fail_map ? 0 : fake_lfb;
 }
-void *kmalloc(size_t n) { return fail_alloc ? 0 : malloc(n); }
+void *(kmalloc)(size_t n) { if (n > KHEAP_MAX_REQUEST) return 0; return fail_alloc ? 0 : malloc(n); }
 void kfree(void *p) { free(p); }
 uint32_t fnv1a32(const void *data, size_t size, uint32_t seed)
 {

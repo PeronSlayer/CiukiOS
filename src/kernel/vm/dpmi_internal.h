@@ -67,6 +67,9 @@ enum dpmi_op { DPMI_OP_ENTRY = 1, DPMI_OP_DOS_ALLOC, DPMI_OP_DOS_FREE, DPMI_OP_D
 #define DPMI_RF_IRET 1u                 /* REFLECT: emulate IRET from the PM stack on return */
 #define DPMI_RF_HWINT 2u                /* restore the interrupted frame completely */
 #define DPMI_RF_RESULTS 4u              /* PMINT from V86: copy registers back (INT 23h/24h) */
+/* Existing F3-44 ISR obligation bound; also used for V86 IRQ completion.
+ * VPICD's configurable IRET timeout model, with our existing 50 ms policy. */
+#define DPMI_ISR_WAIT_MS 50u
 
 struct dpmi_vec { uint32_t off; uint16_t sel; };
 struct dpmi_record {
@@ -177,7 +180,7 @@ struct dpmi {
      * for DPMI_SEED_IDLE_MS, no seed is acquired until a CLI misses. */
     struct dpmi_cli_site cli_site[DPMI_CLI_SITES];
     uint32_t cli_clock;
-    uint64_t cli_miss_tick;
+    uint64_t cli_miss_tick;         /* fx-doomwin: last CLI left without a cached site */
     bool cli_settled;               /* a site was proven since the last reset */
     struct dpmi_cli_stats cli;
     uint16_t shadow_cs;             /* STI shadow: CS:EIP of the shadowed instruction */

@@ -65,6 +65,9 @@ int shell_mkdirs(const char *path) {
   }
   return 1;
 }
+/* Machine locations: the common (all-users) folders and, for a process
+ * with no profile (SYSTEM tools, the pre-logon bootstrap), the Windows 98
+ * single-user layout. */
 static const struct {unsigned id;const char *path;} folders[]={
  {0,"C:\\WINDOWS\\Desktop"},{2,"C:\\WINDOWS\\Start Menu\\Programs"},
  {6,"C:\\WINDOWS\\Favorites"},{21,"C:\\WINDOWS\\Templates"},
@@ -77,24 +80,55 @@ static const struct {unsigned id;const char *path;} folders[]={
  {28,"C:\\WINDOWS\\Application Data"},
  {35,"C:\\WINDOWS\\Application Data"},{36,"C:\\WINDOWS"},
  {37,"C:\\WINDOWS\\SYSTEM"},{38,"C:\\Program Files"},
+ {40,0},
  {43,"C:\\Program Files\\Common Files"},{46,"C:\\Documents"}
 };
 extern LONG W32API RegOpenKeyExA(DWORD,const char *,DWORD,DWORD,DWORD *);
 extern LONG W32API RegQueryValueExA(DWORD,const char *,void *,DWORD *,void *,DWORD *);
 extern LONG W32API RegCloseKey(DWORD);
+extern DWORD W32API GetEnvironmentVariableA(const char *,char *,DWORD);
+/* sec-user-05 (user-security-contract.md 8.2): the personal folders of a
+ * profile session. The current user's HKCU Shell Folders value wins (the
+ * broker provisions it from the same committed profile root); otherwise the
+ * folder is derived from USERPROFILE, which the kernel generated from the
+ * committed root and Win32 startup DOS-spelled. A registry string or an
+ * environment value is a location, never an authority: the kernel checks
+ * every access under the user's own rights. */
+static const struct {unsigned id;const char *name,*suffix;} personal[]={
+  {0,"Desktop","Documents\\Desktop"},{16,"Desktop","Documents\\Desktop"},
+  {2,"Programs","Start Menu\\Programs"},{5,"Personal","Documents"},
+  {6,"Favorites","Favorites"},{7,"Startup","Start Menu\\Programs\\StartUp"},
+  {8,"Recent","Recent"},{9,"SendTo","SendTo"},{11,"Start Menu","Start Menu"},
+  {21,"Templates","Templates"},{26,"AppData","Application Data"},
+  {28,"Local AppData","Local Settings\\Application Data"},{40,0,""}};
+/* USERPROFILE as an absolute drive path without "." or ".." components. */
+static int profile_root(char out[200])
+{
+  DWORD n=GetEnvironmentVariableA("USERPROFILE",out,200);
+  if(!n || n>=200 || n<4 || out[1]!=':' || (out[2]!='\\' && out[2]!='/'))return 0;
+  for(DWORD i=2;i<n;i++){
+    if(out[i]=='/')out[i]='\\';
+    if(out[i]=='\\' && out[i+1]=='.' && (!out[i+2] || out[i+2]=='\\' || out[i+2]=='/' ||
+       (out[i+2]=='.' && (!out[i+3] || out[i+3]=='\\' || out[i+3]=='/'))))return 0;
+  }
+  while(n>3 && out[n-1]=='\\')out[--n]=0;
+  return 1;
+}
 static int personal_folder(unsigned id,char out[260]) {
-  static const struct {unsigned id;const char *name;} names[]={
-    {0,"Desktop"},{16,"Desktop"},{2,"Programs"},{5,"Personal"},{6,"Favorites"},
-    {7,"Startup"},{8,"Recent"},{9,"SendTo"},{11,"Start Menu"},{21,"Templates"},{26,"AppData"},{28,"AppData"}};
-  for(unsigned i=0;i<sizeof(names)/sizeof(*names);i++)if(names[i].id==id){
-    DWORD h,type=0,n=260;
-    LONG e=RegOpenKeyExA(0x80000001u,"Software\\Microsoft\\Windows\\CurrentVersion\\Explorer\\Shell Folders",0,1,&h);
-    if(e){SetLastError((DWORD)e);return -1;}
-    e=RegQueryValueExA(h,names[i].name,0,&type,out,&n);RegCloseKey(h);
-    if(e || type!=1 || n<4 || n>260 || out[n-1] || out[1]!=':' || out[2]!='\\'){
-      SetLastError(e ? (DWORD)e : 13);return -1;
+  for(unsigned i=0;i<sizeof(personal)/sizeof(*personal);i++)if(personal[i].id==id){
+    if(personal[i].name){
+      DWORD h,type=0,n=260;
+      LONG e=RegOpenKeyExA(0x80000001u,"Software\\Microsoft\\Windows\\CurrentVersion\\Explorer\\Shell Folders",0,1,&h);
+      if(!e){
+        e=RegQueryValueExA(h,personal[i].name,0,&type,out,&n);RegCloseKey(h);
+        if(!e && type==1 && n>=4 && n<=260 && !out[n-1] && out[1]==':' && out[2]=='\\')return 1;
+        if(!e){SetLastError(13);return -1;} /* a corrupt value is not replaced silently */
+      }else if(e!=2){SetLastError((DWORD)e);return -1;}
     }
-    return 1;
+    char root[200];
+    if(!profile_root(root))return 0;
+    if(!*personal[i].suffix)return shell_copy(out,260,root)?1:-1;
+    return shell_join(out,root,personal[i].suffix)?1:-1;
   }
   return 0;
 }
@@ -104,12 +138,22 @@ BOOL W32API SHGetSpecialFolderPathA(HANDLE w,char *out,int id,BOOL create) {
     char path[260];
     int personal=personal_folder((unsigned)id&255,path);
     if(personal<0)return 0;
-    if(!personal && !shell_copy(path,260,folders[i].path))return 0;
+    if(!personal && (!folders[i].path || !shell_copy(path,260,folders[i].path))){SetLastError(87);return 0;}
     if((create || (id&0x8000)) && !shell_mkdirs(path))return 0;
     return shell_copy(out,260,path);
   }
   SetLastError(87);return 0;
 }
+/* --- sec-user-05: IsUserAnAdmin is a membership query of the caller's own
+ * kernel credential (Administrators, S-1-5-32-544); it grants nothing. --- */
+extern BOOL W32API CheckTokenMembership(HANDLE,const void *,BOOL *);
+BOOL W32API IsUserAnAdmin(void)
+{
+  static const uint8_t administrators[16]={1,2,0,0,0,0,0,5,32,0,0,0,0x20,2,0,0};
+  BOOL member=0;
+  return CheckTokenMembership(0,administrators,&member) && member;
+}
+/* --- end sec-user-05 --- */
 HRESULT W32API SHGetFolderPathA(HANDLE w,int id,HANDLE token,DWORD flags,char *out) {
   if(token || flags>1)return (HRESULT)0x80070057u;
   return SHGetSpecialFolderPathA(w,out,id,0)?0:(HRESULT)(0x80070000u|GetLastError());

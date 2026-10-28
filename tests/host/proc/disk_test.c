@@ -112,7 +112,7 @@ int main(int argc, char **argv)
     CHECK(call(CIUKI_SYS_FSYNC, fd, 0, 0, 0, 0) == -EPERM);
     struct ciuki_disk_info info = { .version=CIUKI_DISK_VERSION, .size=sizeof(info) };
     CHECK(control_fd(fd, DISK_LEASE_ACQUIRE, &info, sizeof(info)) == -EPERM);
-    owner->setup_capability = true;
+    owner->setup_capability = true; owner->subject->role=CIUKI_SECURITY_ROLE_SETUP; storage->setup_mode=true;
     CHECK(call(CIUKI_SYS_PWRITE, fd, USER, 512, 4096, 0) == -EACCES);
     /* Readable RX records must fail before a lease is acquired. */
     CHECK(!ua_write(owner->memory, CIUKI_IMAGE_BASE + 128, &info, sizeof(info)));
@@ -158,7 +158,7 @@ int main(int argc, char **argv)
     CHECK(call(CIUKI_SYS_PWRITE, 9, USER, 512, 0, 0) == -EROFS);
     CHECK(call(CIUKI_SYS_FTRUNCATE, 9, 0, 0, 0, 0) == -EROFS);
     CHECK(file_open(peer, "/mnt/d/New.bin", O_CREAT | O_RDWR, 0666) == -EROFS);
-    peer->setup_capability = true; /* capability alone is still not the lease */
+    peer->setup_capability = true; peer->subject->role=CIUKI_SECURITY_ROLE_SETUP; /* still not the lease */
     CHECK(call(CIUKI_SYS_PWRITE, 8, USER, 512, 4096, 0) == -EACCES);
     CHECK(call(CIUKI_SYS_PWRITE, 9, USER, 512, 0, 0) == -EROFS);
     peer->setup_capability = false;

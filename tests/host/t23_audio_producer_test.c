@@ -30,6 +30,7 @@
  * filled); literal=1 boosts only below one period of lead (the literal
  * reading of "reservoir below one period", a control).
  * SPDX-License-Identifier: GPL-2.0-only */
+#include <ciuki/kheap_limits.h>
 #define HOST_SYNC_TIMERS
 #define main latency_fixture_main
 #include "kernel_latency_test.c"
@@ -56,7 +57,7 @@ uint32_t pmm_alloc(void)
     return 0;
 }
 void pmm_free(uint32_t phys) { CHECK(phys && page_used[phys/4096u-1u]); page_used[phys/4096u-1u]=false; }
-void *kzalloc(size_t n) { return calloc(1,n); }
+void *(kzalloc)(size_t n) { if (n > KHEAP_MAX_REQUEST) return 0; return calloc(1,n); }
 void kfree(void *p) { free(p); }
 void audio_wake(void) { }
 void audio_fail(int error) { (void)error; CHECK(false); }

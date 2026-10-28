@@ -10,7 +10,7 @@ import subprocess
 import sys
 ROOT = Path(__file__).resolve().parents[2]
 OUT = ROOT/'build/apps/w32srv'
-SOURCES = ('registry.c','storage.c','directory.c','defaults.c','protocol.c','posix_io.c','progman.c','restart.c','shell_fs.c','../desktop/protocol.c','main.c')
+SOURCES = ('registry.c','storage.c','directory.c','defaults.c','protocol.c','posix_io.c','security_io.c','progman.c','restart.c','shell_fs.c','../desktop/protocol.c','main.c')
 GUEST_SOURCES = ('fonts.c',)
 
 def module(name,path):
@@ -56,7 +56,7 @@ def build():
     # the SDK libfont/FreeType); the host seed build stays registry-only.
     subprocess.run([str(sdk/'bin/ciuki-cc'),'-O2','-Wall','-Wextra','-Werror','-DW32SRV_GUEST',
                     '-I'+str(ROOT/'sdk/win32/include'),*(str(ROOT/'apps/w32srv'/s) for s in (*SOURCES,*GUEST_SOURCES)),
-                    '-lfont','-o',str(OUT/'w32srv')],check=True)
+                    '-lfont','-lreg','-o',str(OUT/'w32srv')],check=True)
     checker=module('w32srv_elf',ROOT/'sdk/tests/check_sdk.py')
     evidence=checker.inspect(OUT/'w32srv')
     host=OUT/'seed-hives'
@@ -78,10 +78,11 @@ def image_payloads():
     record=validate_payloads()
     sources={'/System/Win32/w32srv':OUT/'w32srv','/System/Win32/runonce.exe':OUT/'runonce.exe'}
     for name in record['files']:
-        if name.startswith('defaults/'):sources['/WINDOWS/'+Path(name).name]=OUT/name
+        if name.startswith('defaults/'):
+            sources['/System/Security/Registry/Machine/'+Path(name).name]=OUT/name
         elif name.startswith('builtin/'):sources['/System/Win32/builtin/'+Path(name).name]=OUT/name
     sources['/System/Win32/LICENSE.LIB']=ROOT/'sdk/win32/lz32/mspack/COPYING.LIB'
     sources['/System/Win32/MSPACK.TXT']=ROOT/'sdk/win32/lz32/NOTICE.md'
-    return sources,{'/WINDOWS','/WINDOWS/Start Menu','/WINDOWS/Start Menu/Programs','/System/Win32','/System/Win32/builtin'},record
+    return sources,{'/System/Security','/System/Security/Registry','/System/Security/Registry/Machine','/WINDOWS','/WINDOWS/Start Menu','/WINDOWS/Start Menu/Programs','/System/Win32','/System/Win32/builtin'},record
 
 if __name__=='__main__':build()

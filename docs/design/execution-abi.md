@@ -723,6 +723,21 @@ remain with the lead.
   threads and their priority.
 - `f0-acceptance.md`: probe names and `probe_report` record format.
 
+## User-security precedence (sec-contract)
+
+The reconciled [kernel security contract](user-security-kernel.md) reserves
+SYS_SECURITY=101 after NET_INFO=100, leaving F6's 92–95 gap untouched. Its
+credentials/authorization supersede the old per-binary security grants when
+implemented; existing native record prefixes and Win32 call 96 stay frozen.
+The [account contract](user-security-contract.md) specifies provisioning and
+session lifecycle. [Lead amendments 1–2 interface delta](user-security-contract.md#delta-for-sec-k01-and-sec-user-01)
+extends the family to fourteen operations with explicit role-bound session launch,
+secure-console handoff and service connections. Round 2 names formerly reserved
+launch/console epoch fields without changing sizes; the credential/profile/args/link
+layouts stay fixed. Cancellation is best effort before server admission; durable
+mutation status and authorized profile information use account-service codecs.
+This is a design reservation, not a header/runtime change.
+
 ## F2 extension: native ABI version 1
 
 Author: Codex. Directive: f2-00. Revised after cross-review 2026-10-10;
@@ -2038,6 +2053,19 @@ provider. B=`CIUKI_POWER_STATUS` (4), C=record, D=756 copies the cached
 `ciuki_power_status` record without firmware calls; `provider` names ACPI (1),
 APM (2) or none (0). Details: [`acpi-events-power.md`](acpi-events-power.md).
 
+**Amendment (fx-acpioff, 2026-10-26).** A third soft-off path exists behind
+the same call: the ACPI S5 register fallback (`core/power_acpi_s5.c`,
+[`acpi-events-power.md`](acpi-events-power.md) "ACPI S5 register
+fallback"). OFF and FORCE_OFF consult it only when no active provider is
+qualified for Off, or after the active provider's Off returned; it writes
+SLP_TYPx|SLP_EN from a bounded read-only parse of the FADT and the `\_S5`
+package (DSDT, SSDTs, or the inventory's evaluated value) after the same
+latch, with the SCI_EN handshake when needed and no AML. `CIUKI_POWER_CAN_OFF`
+is set when either the provider or the fallback is qualified. `ENOTSUP`
+from OFF after STOPPED now means "no soft-off method on this computer" and
+the desktop shows the safe-to-turn-off screen without an error code;
+`EIO` (a method left the machine on) still names its error.
+
 **Amendment (f9 Setup authority, staging merge 2026-10-23).** In Setup mode
 (`setup=1`, `core/setup_mode.c`) the process holding the supervisor's
 non-inherited Setup capability may also call 73, besides the live desktop;
@@ -2162,6 +2190,19 @@ resynchronizes desktop input; Alt+Tab additionally supplies a balanced desktop
 switch chord. Re-focusing or requesting full screen resumes a paused session.
 The dated F3-20 amendment in `device-firmware-ownership.md` defines the precise
 VGA/firmware authority and the hardware state readback limits.
+### fx-dosfull amendment — graphics and Alt+Enter in STATUS (2026-10-27)
+
+STATUS.changed gains two output bits; the 136-byte command is unchanged.
+`CIUKI_DOSVM_GRAPHICS` (256): the guest display is in a graphics mode (an
+active VBE mode, a BIOS graphics mode in BDA 0049h other than 0-3 and 7, or a
+windowed VGA model in a graphics layout); computed in the STATUS call only.
+`CIUKI_DOSVM_FULLSCREEN_HOTKEY` (512): the last full-screen entry or return was
+the user's Alt+Enter through the kernel input filter; an entry by operation 9,
+a mode-change, Alt+Tab, watchdog or stop return clears it, and a refused entry
+leaves it unchanged. The DOS Box uses them to enter full screen at a program's
+first graphics mode and to remember the user's choice per program
+(`docs/design/dos-program-properties.md`, fx-dosfull).
+
 ## f5-03a — Win32 kernel transport freeze (2026-10-14)
 
 The additive Win32 family is global call **96**, `CIUKI_SYS_W32`; native
@@ -2312,7 +2353,7 @@ The `w32-objects-qemu-t23` case is registered and deliberately unrun.
 
 ## F5-08 delegated presentation amendment (2026-10-19)
 
-Call 101 adds copied operation `W32_DISPLAY=0x201`, the 80-byte record in
+Call 96 carries copied operation `W32_DISPLAY=0x201`, the 80-byte record in
 `ciuki/present_abi.h`. The desktop's accepted F5-04 endpoint authenticates its
 Win32 client. Only the authorized desktop can grant/revoke an exact
 PID/token/framebuffer-generation lease; the holder can present a pinned RAM

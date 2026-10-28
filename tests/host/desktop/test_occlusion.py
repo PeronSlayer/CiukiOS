@@ -12,7 +12,7 @@ class OcclusionTests(unittest.TestCase):
         sources = [ROOT / "apps/desktop" / name for name in
                    ("protocol.c", "client.c", "input.c", "compositor.c", "theme.c", "shell.c", "autoplay.c",
                     "autoplay_content.c", "settings.c", "power_policy.c", "wallpaper.c", "keymap.c", "folder.c", "../files/model.c", "../files/transfer.c")]
-        sources += [*(ROOT / "apps/libdeskui" / n for n in ("draw.c", "widgets.c", "list.c", "menu.c", "dialog.c", "controls.c", "commdlg.c", "textarea.c", "icons.c", "icon_map.c")),
+        sources += [*(ROOT / "apps/libdeskui" / n for n in ("draw.c", "widgets.c", "list.c", "menu.c", "dialog.c", "controls.c", "commdlg.c", "textarea.c", "icons.c", "icon_map.c", "iconx.c", "fileicon.c")),
                     ROOT / "tests/host/desktop/fake.c", ROOT / "src/kernel/drivers/video/swdib.c", ROOT / "src/kernel/drivers/video/batch.c",
                     ROOT / "tests/host/desktop/occlusion_test.c"]
         parent = ROOT / "build/host"

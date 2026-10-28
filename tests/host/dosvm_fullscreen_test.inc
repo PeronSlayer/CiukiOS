@@ -79,6 +79,101 @@ static void test_fullscreen_transport(void)
     }
     puts("PASS full-screen VGA transport: text 01/03, planar 12, chain-4 13; all registers, DAC and 256 KiB planes; load latches/partial DAC; non-destructive capture");
 }
+
+static struct dosvm *refused_dpmi_vm;
+static bool refused_dpmi_irq;
+static void refuse_parked_dpmi(void)
+{
+    struct dosvm *v=refused_dpmi_vm;
+    CHECK(v->fullscreen_parked && v->fullscreen_hold && !v->frame_pm);
+    struct task *guest=g_current;
+    /* Replay the trial's display pause, well beyond the 50 ms ISR guard.
+     * The clock service can run while the guest's continuation sleeps. */
+    g_ticks+=1578;
+    v->irq.owed|=1u<<3;
+    if (refused_dpmi_irq) v->irq.owed|=1u<<5;
+    uint16_t owed=v->irq.owed;
+    dosvm_irq_release(v);
+    CHECK(v->irq.owed==owed && dosvm_irq_held(v,3));
+    if (refused_dpmi_irq) CHECK(dosvm_irq_held(v,5));
+    g_current=&caller;
+    CHECK(dosvm_fullscreen_enter(dosvm_key(v))==DISPLAY_FULLSCREEN_WINDOWED);
+    CHECK(!v->fullscreen_hold && !v->fullscreen && !v->fullscreen_error);
+    g_current=guest;
+    sleep_hook=0;
+}
+static void test_fullscreen_dpmi_refusal(void)
+{
+    /* A 32-bit DOS/4GW-style client: default PM INT10 reflection, explicit
+     * 0300h translation, and an RM interrupt nested in a reflected IRQ. */
+    for (unsigned route=0;route<3;route++) {
+        window_fixtures();
+        struct dosvm *v=dpmi_vm(true);
+        v->owner_pid=10; v->window_input=true;
+        CHECK(dosvm_input_focus(dosvm_key(v),true));
+        v86_start(); enter(v,true); CHECK(in_pm());
+        uint16_t data=(uint16_t)cur.tf.ds;
+        struct v86_frame before;
+        if (route==2) {
+            uint16_t ivt[2]={0,IRET_SEG};
+            CHECK(!dosvm_write(v,0x0D*4,ivt,4));
+            v->monitor.pic[0].imr&=(uint8_t)~(1u<<5);
+            CHECK(dosvm_irq_raise(dosvm_key(v),5));
+            const uint8_t in21[]={0xE4,0x21};
+            exec(v,in21,sizeof(in21),13,0); /* trapped PM instruction */
+            CHECK(!in_pm() && v->dpmi.depth==1 && dosvm_irq_held(v,5));
+            before=v->dpmi.rec[0].saved;
+            cur.tf.eax=0x13; v86_int(v,0x10);
+        } else if (route==1) {
+            rmcs_set(v,0x13,0,0x0202,0,0,0,0,0);
+            cur.tf.ebx=0x10; cur.tf.ecx=0; cur.tf.es=data; cur.tf.edi=0x200;
+            before=cur; int31(v,0x0300);
+        } else {
+            cur.tf.eax=0x13; before=cur; pm_int(v,0x10);
+        }
+        CHECK(!in_pm() && cur.tf.cs==0xF000 && cur.tf.eip==0x100);
+        step(v,13,0); /* synthetic BIOS INT FE, including mode 13h */
+        CHECK(!in_pm() && cur.tf.eip==0x102 && !v->monitor.vif);
+        uint8_t mode; CHECK(!dosvm_read(v,0x449,&mode,1) && mode==0x13);
+        struct v86_frame bios_result=cur;
+        struct dpmi_record record=v->dpmi.rec[0];
+        uint8_t stack[32]; uint32_t at=(cur.tf.user_ss<<4)+(uint16_t)cur.tf.user_esp;
+        CHECK(!dosvm_read(v,at,stack,sizeof(stack)));
+        v->irq.rm[3].active=true; v->irq.rm[3].tick=g_ticks-10;
+        refused_dpmi_vm=v; refused_dpmi_irq=route==2;
+        fs_refuse=true; v->fullscreen_hold=true; sleep_hook=refuse_parked_dpmi;
+        g_current=v->task;
+        dosvm_fullscreen_checkpoint(v); /* production park and wake */
+        g_current=&caller;
+        CHECK(!v->fullscreen_parked && !v->fullscreen_hold && !v->monitor.vif);
+        CHECK(!memcmp(&cur,&bios_result,sizeof(cur)) && v->dpmi.depth==1);
+        uint8_t after[32]; CHECK(!dosvm_read(v,at,after,sizeof(after)) && !memcmp(stack,after,sizeof(stack)));
+        CHECK(!memcmp(&v->dpmi.rec[0].saved,&record.saved,sizeof(record.saved)));
+        CHECK(dosvm_irq_held(v,3) && (!refused_dpmi_irq || dosvm_irq_held(v,5)));
+        CHECK(!v->dpmi.rec[0].isr_expired);
+        v->irq.rm[3].active=false; v->irq.owed=0;
+        /* The guest completes the exact BIOS IRET, then its own IRQ IRET
+         * if applicable, then the real host trampoline to PM. */
+        step(v,13,0);
+        if (route==2) {
+            CHECK(!in_pm() && cur.tf.cs==IRET_SEG && cur.tf.eip==2);
+            uint32_t value=0x20; CHECK(!v86_io(&v->monitor,0x20,1,true,&value));
+            op1(v,0xCF);
+        }
+        CHECK(!in_pm() && cur.tf.cs==0xF000 && cur.tf.eip==DPMI_RM_RETURN);
+        step(v,13,0);
+        CHECK(in_pm() && v->frame_pm && !v->dpmi.depth && v->monitor.vif);
+        CHECK(cur.tf.cs==before.tf.cs && cur.tf.user_ss==before.tf.user_ss &&
+            cur.tf.user_esp==before.tf.user_esp && cur.tf.eip==before.tf.eip+(route==2 ? 0 : 2));
+        CHECK(!(cur.tf.eflags&V86_VM) && (cur.tf.eflags&V86_IF));
+        if (route==1) CHECK(!cf() && (rmcs32(v,0x1C)&0xFF)==0x13);
+        unsigned pm_exits=v->perf.exits[5]; op1(v,0xFA); op1(v,0xFB);
+        CHECK(v->perf.exits[5]>pm_exits && in_pm());
+        fs_refuse=false;
+        destroy(v,true); empty();
+    }
+    puts("PASS fx-biosvm2 refusal: 32-bit PM INT10/0300h mode 13h, held RM/DPMI IRQs across 1578-ms park, byte-identical BIOS stack/frame, IRET/trampoline resumes PM");
+}
 static void test_fullscreen_service(void)
 {
     window_fixtures();
@@ -312,6 +407,82 @@ static void test_fullscreen_more_modes(void)
     CHECK(!finish_test_vm(&close,sizeof(close)));empty();
     puts("PASS f3-37 VGA: 16 chain-4/unchained 320/360 x200/240/400/480 variants and planar 0d/0e/10/11/12 plus 640x400, enter/nonblack frame/dirty-store proof/capture/return");
 }
+/* fx-dosfull: STATUS reports a graphics mode (the DOS Box enters full screen
+ * at a program's first one, Windows 98 Resource Kit ch. 25 "Running Games")
+ * and whether the last full-screen entry or return was the user's Alt+Enter,
+ * the only transition the DOS Box remembers per program. The DOS Box's own
+ * request, a mode change or a refused entry is no choice. */
+static uint32_t dosfull_status(struct dosvm_key key)
+{
+    struct ciuki_dosvm_command s=command_for(key.id,key.generation);
+    CHECK(!dosvm_call(CIUKI_DOSVM_STATUS,&s,sizeof(s)));
+    return s.changed&(CIUKI_DOSVM_GRAPHICS|CIUKI_DOSVM_FULLSCREEN_HOTKEY|CIUKI_DOSVM_FULL_SCREEN|CIUKI_DOSVM_FULLSCREEN_REFUSED);
+}
+static void dosfull_hotkey(struct dosvm *v)
+{
+    struct ciuki_input_event out;
+    CHECK(!dosvm_fullscreen_input(INPUT_KEY,0x38,1));
+    CHECK(dosvm_fullscreen_input(INPUT_KEY,0x1C,1));
+    v->fullscreen_parked=true; dosvm_fullscreen_poll();
+    CHECK(dosvm_fullscreen_input(INPUT_KEY,0x1C,0));
+    dosvm_fullscreen_input(INPUT_KEY,0x38,0);
+    while (dosvm_fullscreen_desktop_event(&out)) {}
+    if (v->fullscreen) hardware=card_bus;
+}
+static void test_fullscreen_dosfull(void)
+{
+    window_fixtures();
+    struct ciuki_dosvm_command w; CHECK(!create_window(0,"Usage",&w));
+    struct dosvm_key key={w.id,w.generation}; struct dosvm *v=dosvm_lookup(key);
+    CHECK(v && w.video_mode==3 && !dosfull_status(key));
+    CHECK(dosvm_input_focus(key,true));
+    struct ciuki_dosvm_command f=command_for(key.id,key.generation); f.focused=1;
+    CHECK(!dosvm_call(CIUKI_DOSVM_FOCUS,&f,sizeof(f)));
+    v->fullscreen_parked=true;
+    /* INT 10h mode 13h: a BIOS graphics mode in the BDA. */
+    int10(v,0x0013,0,0,0); dosvm_vga_sync(v,true);
+    struct ciuki_dosvm_command s=command_for(key.id,key.generation);
+    CHECK(!dosvm_call(CIUKI_DOSVM_STATUS,&s,sizeof(s)) && s.video_mode==0x13);
+    CHECK(dosfull_status(key)==CIUKI_DOSVM_GRAPHICS);
+    /* The DOS Box's automatic request enters: not the user's choice. */
+    f=command_for(key.id,key.generation); f.focused=1;
+    CHECK(!dosvm_call(CIUKI_DOSVM_FULLSCREEN,&f,sizeof(f)) && v->fullscreen); hardware=card_bus;
+    CHECK(dosfull_status(key)==(CIUKI_DOSVM_GRAPHICS|CIUKI_DOSVM_FULL_SCREEN));
+    /* Alt+Enter returns to the window: the user's choice. */
+    dosfull_hotkey(v); CHECK(!v->fullscreen && !fs_display);
+    CHECK(dosfull_status(key)==(CIUKI_DOSVM_GRAPHICS|CIUKI_DOSVM_FULLSCREEN_HOTKEY));
+    /* Alt+Enter in the window enters: the user's choice again. */
+    dosfull_hotkey(v); CHECK(v->fullscreen && fs_display);
+    CHECK(dosfull_status(key)==(CIUKI_DOSVM_GRAPHICS|CIUKI_DOSVM_FULL_SCREEN|CIUKI_DOSVM_FULLSCREEN_HOTKEY));
+    /* An ordered return the user did not ask for (a VBE mode change, the
+     * DOS Box leaving for a notice) clears it. */
+    v->fullscreen_parked=true; CHECK(!dosvm_fullscreen_leave(key,false) && !v->fullscreen);
+    CHECK(dosfull_status(key)==CIUKI_DOSVM_GRAPHICS);
+    /* A refused Alt+Enter (the QEMU readback, f3-29) changes nothing: the
+     * game continues in its window, one refusal record. */
+    dosfull_hotkey(v); dosfull_hotkey(v);
+    CHECK(!v->fullscreen && dosfull_status(key)==(CIUKI_DOSVM_GRAPHICS|CIUKI_DOSVM_FULLSCREEN_HOTKEY));
+    uint32_t refusals=v->fullscreen_refusals; fs_refuse=true;
+    dosfull_hotkey(v);
+    CHECK(!v->fullscreen && v->fullscreen_refusals==refusals+1 && strstr(last_dosvm_log,"continuation=windowed"));
+    CHECK(dosfull_status(key)==(CIUKI_DOSVM_GRAPHICS|CIUKI_DOSVM_FULLSCREEN_HOTKEY));
+    f=command_for(key.id,key.generation); f.focused=1;
+    CHECK(!dosvm_call(CIUKI_DOSVM_FULLSCREEN,&f,sizeof(f)) && !v->fullscreen && v->fullscreen_refusals==refusals+2);
+    CHECK(dosfull_status(key)==(CIUKI_DOSVM_GRAPHICS|CIUKI_DOSVM_FULLSCREEN_HOTKEY));
+    fs_refuse=false;
+    /* Text modes are not graphics; registers alone (a tweaked Mode X with
+     * the BDA still at 3) and a VBE mode are. */
+    int10(v,0x0003,0,0,0); dosvm_vga_sync(v,true);
+    CHECK(!(dosfull_status(key)&CIUKI_DOSVM_GRAPHICS));
+    uint8_t mono=7; CHECK(!dosvm_write(v,0x449,&mono,1)); CHECK(!(dosfull_status(key)&CIUKI_DOSVM_GRAPHICS));
+    uint8_t text=3; CHECK(!dosvm_write(v,0x449,&text,1));
+    tweak_mode(&v->vga,320,240,false); CHECK(dosfull_status(key)&CIUKI_DOSVM_GRAPHICS);
+    int10(v,0x0003,0,0,0); dosvm_vga_sync(v,true); CHECK(!(dosfull_status(key)&CIUKI_DOSVM_GRAPHICS));
+    v->vbe_mode=0x101; CHECK(dosfull_status(key)&CIUKI_DOSVM_GRAPHICS); v->vbe_mode=0;
+    struct ciuki_dosvm_command close=command_for(key.id,key.generation);
+    CHECK(!finish_test_vm(&close,sizeof(close))); empty();
+    puts("PASS fx-dosfull STATUS: graphics in BIOS 13h, register-only Mode X and VBE (not text 3/7); Alt+Enter entry/return marked as the user's choice, own request, ordered return and refusals not");
+}
 static int vbe_changing_row(void *arg,unsigned y,const void *pixels,unsigned bytes)
 {
     struct dosvm *v=arg;
@@ -421,7 +592,37 @@ static void test_fullscreen_vbe(void)
         CHECK(*(uint32_t *)frame_buffer!=0 && damage.width==640 && damage.height==480);
         unsigned pages=v->vbe_buffer.pages;uint32_t saved[256];CHECK(pages==256);
         for (unsigned p=0;p<pages;p++) as_lookup(&v->as,v->vbe_buffer.base+p*PAGE_SIZE,&saved[p]);
-        fs_linear_writes=0;CHECK(!dosvm_fullscreen_enter(key) && fs_linear_writes && !memcmp(fs_linear,pattern,4));
+        /* Warcraft II's 101h BIOS transport uses the VBE six-bit default;
+         * native indexed transport uses its verified eight-bit CLUT.
+         * Exercise real guest palette calls, entry and running updates,
+         * observing raw DAC writes before the VGA model truncates them. */
+        fs_dac_bits=i ? 8 : 6;
+        uint8_t palette[4]={16,32,63,0};
+        if (m->bpp==8) {
+            CHECK(!dosvm_write(v,0x20000,palette,sizeof(palette)));
+            f=vf(0x4F09,0,1,0);f.es=0x2000;
+            CHECK(!dosvm_vga_bios(v,&f) && (uint16_t)f.tf.eax==0x004F);
+        }
+        fs_linear_writes=fs_palette_writes=0;
+        CHECK(!dosvm_fullscreen_enter(key) && fs_linear_writes && !memcmp(fs_linear,pattern,4));
+        if (m->bpp==8) {
+            CHECK(fs_palette_writes==sizeof(fs_palette_bytes));
+            for (unsigned k=0;k<3;k++) {
+                unsigned c=palette[2-k];
+                CHECK(fs_palette_bytes[k]==(fs_dac_bits==8 ? (c<<2)|(c>>4) : c));
+            }
+            CHECK(!linear_palette(v,false) && fs_palette_writes==sizeof(fs_palette_bytes));
+            palette[0]=63;palette[1]=1;palette[2]=32;
+            CHECK(!dosvm_write(v,0x20000,palette,sizeof(palette)));
+            f=vf(0x4F09,0,1,0);f.es=0x2000;
+            CHECK(!dosvm_vga_bios(v,&f) && (uint16_t)f.tf.eax==0x004F);
+            dosvm_fullscreen_poll();
+            CHECK(fs_palette_writes==2*sizeof(fs_palette_bytes));
+            for (unsigned k=0;k<3;k++) {
+                unsigned c=palette[2-k];
+                CHECK(fs_palette_bytes[k]==(fs_dac_bits==8 ? (c<<2)|(c>>4) : c));
+            }
+        } else CHECK(!fs_palette_writes);
         dosvm_fullscreen_switch(v->task);CHECK(!fs_ports); /* VBE is always trapped */
         uint8_t physical=*(uint8_t *)P2V(0xB8000),virtual_byte=physical^0x80;
         CHECK(!dosvm_write(v,0xB8000,&virtual_byte,1) && *(uint8_t *)P2V(0xB8000)==physical);

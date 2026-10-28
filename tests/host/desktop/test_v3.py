@@ -22,7 +22,7 @@ class DesktopV3Tests(unittest.TestCase):
         binary = work / 'v3-test'
         sources = [ROOT / 'apps/desktop' / n for n in ('protocol.c', 'client.c', 'input.c', 'compositor.c', 'theme.c')]
         sources += SHELL_SOURCES
-        sources += [ROOT / 'apps/libdeskui' / n for n in ('icons.c', 'icon_map.c', 'v3.c')]
+        sources += [ROOT / 'apps/libdeskui' / n for n in ('icons.c', 'icon_map.c', 'iconx.c', 'fileicon.c', 'v3.c')]
         sources += [ROOT / 'tests/host/desktop' / n for n in ('fake.c', 'v3_test.c')]
         subprocess.run(['cc', '-std=c17', '-D_POSIX_C_SOURCE=200809L', '-include',
                         str(ROOT / 'tests/host/desktop/replay_base.h'), '-O1', '-g', '-Wall', '-Wextra', '-Werror',
@@ -59,7 +59,7 @@ class DesktopV3Tests(unittest.TestCase):
                         str(ROOT/'tests/host/display_present_test.c'),'-o',str(obj)],check=True,env=env)
         sources=[ROOT/'apps/desktop'/n for n in ('protocol.c','client.c','input.c','compositor.c','theme.c','win32_presenter.c')]
         sources+=SHELL_SOURCES
-        sources+=[ROOT/'apps/libdeskui'/n for n in ('icons.c','icon_map.c','v3.c')]
+        sources+=[ROOT/'apps/libdeskui'/n for n in ('icons.c','icon_map.c','iconx.c','fileicon.c','v3.c')]
         sources+=[ROOT/'tests/host/desktop'/n for n in ('fake.c','v3_test.c')]
         sources+=[ROOT/'src/kernel/vm'/n for n in ('vga_presenter.c','virtual_vga.c')]
         binary=work/'presenter-adapter-test'
@@ -88,7 +88,7 @@ class DesktopV3Tests(unittest.TestCase):
         subprocess.run([*common,'-I'+str(ROOT/'sdk/win32/include'),'-c',str(ROOT/'apps/w32srv/posix_io.c'),'-o',str(io)],check=True,env=env)
         sources=[ROOT/'apps/desktop'/n for n in ('protocol.c','client.c','input.c','compositor.c','theme.c','win32_presenter.c','v3_fixture.c','win32_registry.c')]
         sources+=SHELL_SOURCES
-        sources+=[ROOT/'apps/libdeskui'/n for n in ('icons.c','icon_map.c','v3.c')]
+        sources+=[ROOT/'apps/libdeskui'/n for n in ('icons.c','icon_map.c','iconx.c','fileicon.c','v3.c')]
         sources+=[ROOT/'tests/host/desktop'/n for n in ('fake.c','v3_test.c')]
         sources+=[ROOT/'src/kernel/vm'/n for n in ('vga_presenter.c','virtual_vga.c')]
         sources+=[ROOT/'apps/w32srv'/f'{n}.c' for n in ('registry','storage','directory','defaults')]
@@ -145,7 +145,7 @@ class DesktopV3Tests(unittest.TestCase):
         sources = ['tests/host/desktop/v3_control_test.c', 'apps/control/app.c', 'apps/desktop/power_policy.c', 'apps/systools/devctl.c', 'apps/systools/profiles.c', 'apps/control/driver_pack_ui.c', 'apps/control/display.c',
                    'apps/control/fonts.c', 'sdk/libfont/font.c', 'apps/libdeskui/text_ttf.c', 'apps/desktop/protocol.c',
                    *(f'apps/desktop/{n}.c' for n in ('settings', 'sounds', 'wallpaper', 'image', 'compositor', 'theme')),
-                   *(f'apps/libdeskui/{n}.c' for n in ('draw', 'widgets', 'list', 'menu', 'dialog', 'controls', 'commdlg', 'textarea', 'icons', 'icon_map'))]
+                   *(f'apps/libdeskui/{n}.c' for n in ('draw', 'widgets', 'list', 'menu', 'dialog', 'controls', 'commdlg', 'textarea', 'icons', 'icon_map', 'iconx', 'fileicon'))]
         binary = work / 'v3-control-test'
         subprocess.run(['clang', '-std=c17', '-O1', '-g', '-Wall', '-Wextra', '-Werror', '-D_POSIX_C_SOURCE=200809L',
                         '-fsanitize=address,undefined', '-fno-sanitize-recover=undefined', *icons.defines(),

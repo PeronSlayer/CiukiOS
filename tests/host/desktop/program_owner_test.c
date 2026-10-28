@@ -47,11 +47,13 @@ static int partitioned(void)
     assert(!fs_host_contig_live && !owner.busy);
     printf("fx-4 partitioned unified inventory: WOLF3D=%u DOOM=%u QUAKE=%u bytes, 72 queries\n",sizes[1],sizes[2],sizes[3]);
     /* No FAT partition (83h): the whole-image view mounts the MBR, the
-     * exact trial failure, now named: step=mount, FAT diagnostic. */
+     * exact trial failure, now named: step=mount, FAT diagnostic. Since
+     * fx-classaudit a missing boot jump is only a mount notice, so the MBR
+     * (no 512 at offset 11) is refused for its signature/sector size. */
     assert(!fat_enable_write(outer));
     patch_type(&table,0x83);
     assert(dosvm_game_program_checked(2,false,&size,&step,&detail)==-FS_EINVAL);
-    assert(!strcmp(step,"mount") && !strcmp(detail,"BPB signature/sector size/jump") && !size);
+    assert(!strcmp(step,"mount") && !strcmp(detail,"BPB signature/sector size") && !size);
     printf("fx-4 refusal without a FAT partition: error=%d step=%s detail=%s\n",-FS_EINVAL,step,detail);
     /* Microsoft FAT16 IDs 04h/06h address the same volume; 0Eh restored. */
     static const uint8_t types[]={0x06,0x04,0x0e};

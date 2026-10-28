@@ -1,6 +1,7 @@
 /* Production personality mechanisms on the native process RAM fixture.
  * Only hardware/scheduling/VFS endpoints are mocked.
  * SPDX-License-Identifier: GPL-2.0-only */
+#include <ciuki/kheap_limits.h>
 #define kmalloc fixture_kmalloc
 #define kzalloc fixture_kzalloc
 #define kfree fixture_kfree
@@ -12,12 +13,12 @@
 #undef kzalloc
 #undef kfree
 static void (*w32_allocation_hook)(void);
-void *kmalloc(size_t n){
-    void *p=n>2040?0:fixture_kmalloc(n);
+void *(kmalloc)(size_t n) { if (n > KHEAP_MAX_REQUEST) return 0;
+    void *p=fixture_kmalloc(n);
     if(p&&w32_allocation_hook){void (*hook)(void)=w32_allocation_hook;w32_allocation_hook=0;hook();}
     return p;
 }
-void *kzalloc(size_t n){void *p=kmalloc(n);if(p)memset(p,0,n);return p;}
+void *(kzalloc)(size_t n) { if (n > KHEAP_MAX_REQUEST) return 0;void *p=kmalloc(n);if(p)memset(p,0,n);return p;}
 void kfree(void *p){fixture_kfree(p);}
 uint32_t pmm_alloc_contig(uint32_t n){if(fail_alloc()||!n)return 0;for(unsigned first=1;first+n<=HOST_PAGES;first++){unsigned i=0;while(i<n&&!allocated[first+i])i++;if(i!=n){first+=i;continue;}for(i=0;i<n;i++){allocated[first+i]=true;pages_used++;memset(P2V((first+i)*PAGE_SIZE),0xa5,PAGE_SIZE);}return first*PAGE_SIZE;}return 0;}
 #undef fpu_task_release
@@ -240,6 +241,13 @@ static void test_records(void)
     display.surface.width=0;display.count=1;CHECK(w32_record_validate(&display,sizeof(display),true)==-EINVAL);
     display.action=W32_DISPLAY_PALETTE;CHECK(!w32_record_validate(&display,sizeof(display),true));
     display.error=1;CHECK(w32_record_validate(&display,sizeof(display),true)==-EINVAL);
+    struct ciuki_w32_system_args feedback={.header={1,sizeof(feedback),W32_SYSTEM,0},.action=W32_S_LAUNCH_FEEDBACK};
+    CHECK(!w32_record_validate(&feedback,sizeof(feedback),false));
+    CHECK(!w32_record_validate(&feedback,sizeof(feedback),true));
+    feedback.high=1;CHECK(w32_record_validate(&feedback,sizeof(feedback),false)==-EINVAL);feedback.high=0;
+    feedback.action=W32_S_TIME;CHECK(w32_record_validate(&feedback,sizeof(feedback),false)==-EPERM);
+    feedback.action=W32_S_LAUNCH_IDLE;CHECK(!w32_record_validate(&feedback,sizeof(feedback),true));
+    CHECK(w32_record_validate(&feedback,sizeof(feedback),false)==-EINVAL);
     puts("w32 records: all sizes, versions, reserved fields, personality, protections, errors, identity, FS encoding, PIT rollover, display transport PASS");
 }
 static void test_fpu(void)
@@ -304,12 +312,71 @@ static void make_pe(uint8_t *b,bool dll){memset(b,0,0x2400);put16(b,0x5a4d);put3
     }
 }
 static bool loader_missing;
+static bool is5_siblings, is5_helper_missing, is5_cleanup_record;
+static uint8_t is5_ini[0x2400]="[file0]\r\nmain=C:\\TEMP\\_INS1234._MP\r\nexeostype=1\r\nalt0=C:\\TEMP\\ZDataI51.dll\r\nalt1=C:\\TEMP\\_WUTL951.DLL\r\n";
 static int loader_open(void *cwd,const char *path,struct ciuki_file *out){
     (void)cwd;
+    if(!strcmp(path,"/WINDOWS/_delis43.ini")) {
+        if(!is5_cleanup_record)return -ENOENT;
+        *out=(struct ciuki_file){is5_ini,(uint32_t)strlen((char *)is5_ini),pe_read,0};return 0;
+    }
+    if(!strcmp(path,"/SETUP.INS") || !strcmp(path,"/_INST32I.EX_")) {
+        if(!is5_siblings)return -ENOENT;
+        *out=(struct ciuki_file){pe_data,sizeof(pe_data),pe_read,0};return 0;
+    }
+    if(!strncmp(path,"/_INST32",8))return -ENOENT;
+    if(!strcmp(path,"/System/Win32/is5boot.exe")) {
+        if(is5_helper_missing)return -ENOENT;
+        *out=(struct ciuki_file){pe_data,sizeof(pe_data),pe_read,0};return 0;
+    }
     if(!strcmp(path,"/fixture.exe")){*out=(struct ciuki_file){pe_data,sizeof(pe_data),pe_read,0};return 0;}
     if(!strcmp(path,"/fixture.dll")){*out=(struct ciuki_file){dll_data,sizeof(dll_data),pe_read,0};return 0;}
     CHECK(!strcmp(path,"/System/Win32/ntdll.dll"));if(loader_missing)return -ENOENT;
     *out=(struct ciuki_file){loader_data,sizeof(loader_data),pe_read,0};return 0;
+}
+static void test_is5_spawn(void) {
+    unsigned baseline=pages_used;uint8_t ne[0x2400]={0};
+    put16(ne,0x5a4d);put32(ne+60,128);put16(ne+128,0x454e);ne[128+54]=2;
+    struct ciuki_file f={ne,sizeof(ne),pe_read,0};
+    struct proc_strings *s=proc_strings_new();CHECK(s);
+    CHECK(!proc_strings_add(s,"/setup.exe",11,false));
+    const char command[]="\"/setup.exe\" -s -f1\"C:\\a b.iss\" -SMS";
+    CHECK(!proc_strings_add(s,command,sizeof(command),false));
+    CHECK(!proc_strings_add(s,"A=B",4,true));
+    struct process *p=0;
+    /* fx-autorun: a Windows NE without the IS5 evidence is refused as a
+     * 16-bit Windows program (not as an invalid Win32 image). */
+    w32_fault_count=0;
+    CHECK(proc_spawn_file(proc_supervisor(),&f,s,0,0,0,0,&p)==-ENOEXEC);
+    CHECK(w32_fault_count==1&&w32_fault_queue[w32_fault_head].kind==W32_REPORT_REFUSE&&
+          w32_fault_queue[w32_fault_head].code==W32_REFUSE_WIN16&&w32_fault_queue[w32_fault_head].offset==193);
+    w32_fault_count=0;
+    is5_siblings=true;is5_helper_missing=true;
+    CHECK(proc_spawn_file(proc_supervisor(),&f,s,0,0,0,0,&p)==-ENOENT);
+    is5_helper_missing=false;
+    CHECK(proc_spawn_file(proc_supervisor(),&f,s,0,0,0,0,&p)>0);
+    uint32_t at=0;struct ciuki_w32_parameters params;char text[128];
+    CHECK(!ua_read(p->memory,&at,p->w32_peb+16,4));CHECK(!ua_read(p->memory,&params,at,sizeof(params)));
+    CHECK(!ua_read(p->memory,text,params.image_path,28));CHECK(!strcmp(text,"C:\\System\\Win32\\is5boot.exe"));
+    CHECK(!ua_read(p->memory,text,params.command_line,sizeof(command)));CHECK(!strcmp(text,command));
+    CHECK(!ua_read(p->memory,text,params.environment,5));CHECK(!memcmp(text,"A=B\0\0",5));
+    proc_stop(p,0,0);proc_collect();
+    w32_fault_count=0;
+    ne[128+54]=1;CHECK(proc_spawn_file(proc_supervisor(),&f,s,0,0,0,0,&p)==-ENOEXEC);
+    CHECK(w32_fault_count==1&&w32_fault_queue[w32_fault_head].code==W32_REFUSE_IMAGE); /* OS/2 NE: not Windows */
+    w32_fault_count=0;
+    ne[128+54]=2;put16(ne+128+12,0x8000);CHECK(proc_spawn_file(proc_supervisor(),&f,s,0,0,0,0,&p)==-ENOEXEC);
+    CHECK(w32_fault_count==1&&w32_fault_queue[w32_fault_head].code==W32_REFUSE_WIN16); /* a Windows NE library */
+    w32_fault_count=0;
+    is5_siblings=false;proc_strings_free(s);
+    put16(ne+128+12,0);s=proc_strings_new();CHECK(s);
+    CHECK(!proc_strings_add(s,"/_ISDEL.EXE",12,false));
+    CHECK(proc_spawn_file(proc_supervisor(),&f,s,0,0,0,0,&p)==-ENOEXEC);
+    is5_cleanup_record=true;
+    CHECK(proc_spawn_file(proc_supervisor(),&f,s,0,0,0,0,&p)>0);
+    proc_stop(p,0,0);proc_collect();is5_cleanup_record=false;
+    proc_strings_free(s);CHECK(pages_used==baseline);
+    puts("w32 IS5 admission: NE+sibling evidence, generic/OS2/DLL refusal (Win16 named, fx-autorun), helper rollback, argv/environment and teardown PASS");
 }
 static void test_advpack_process_flags(struct proc_thread *parent)
 {
@@ -325,6 +392,8 @@ static void test_advpack_process_flags(struct proc_thread *parent)
             .environment=scratch.address+512,.environment_bytes=sizeof(env),.flags=flags[i]};
         CHECK(!w32_process_call(parent,&a) && !a.error && a.pid && a.process_handle && a.thread_handle);
         struct process *child=proc_find(a.pid);CHECK(child && child->published);
+        CHECK(security_same(parent->process,child));
+        CHECK(child->subject!=parent->process->subject);
         CHECK(child->pgid==((flags[i]&0x200) && !(flags[i]&0x10)?child->pid:parent->process->pgid));
         uint32_t parameters;struct ciuki_w32_parameters p;char copied[sizeof(command)];
         CHECK(!ua_read(child->memory,&parameters,child->w32_peb+16,4));
@@ -333,6 +402,47 @@ static void test_advpack_process_flags(struct proc_thread *parent)
         CHECK(!w32_handle_close(parent->process,a.process_handle) && !w32_handle_close(parent->process,a.thread_handle));
         proc_discard(child);
     }
+    /* fx-launchfb: real CreateProcess publication, independent pending children,
+     * FORCEOFF/ON, delegated desktop query, presentation, idle, exit and timeout. */
+    struct process *children[4];
+    const uint32_t feedback_flags[]={0,0x40,0x80,0xc0};
+    struct ciuki_w32_system_args denied={.action=W32_S_LAUNCH_FEEDBACK};
+    CHECK(!w32_system_call(parent,&denied) && denied.error==5);
+    for(unsigned i=0;i<4;i++){
+        struct ciuki_w32_startup startup={.flags=feedback_flags[i]};
+        CHECK(!ua_write(parent->process->memory,scratch.address+768,&startup,sizeof(startup)));
+        struct ciuki_w32_spawn_args spawn={.image=scratch.address,.command=scratch.address+256,
+            .environment=scratch.address+512,.environment_bytes=sizeof(env),.startup=scratch.address+768};
+        CHECK(!w32_process_call(parent,&spawn) && !spawn.error);
+        children[i]=proc_find(spawn.pid);CHECK(children[i]);
+        CHECK(!!children[i]->w32->launch_feedback_until==(i<2));
+        CHECK(!w32_handle_close(parent->process,spawn.process_handle));
+        CHECK(!w32_handle_close(parent->process,spawn.thread_handle));
+    }
+    uint32_t saved_desktop=fake_desktop_pid;
+    struct w32_process desktop_w32={.service=W32_SERVICE_DESKTOP};
+    struct process desktop={.pid=0x123456,.state=PROC_LIVE,.personality=PROC_NATIVE,.w32=&desktop_w32,.subject=parent->process->subject};
+    struct proc_thread desktop_thread={.process=&desktop};fake_desktop_pid=desktop.pid;
+    parent->process->w32->launch_feedback_until=0;
+    struct ciuki_w32_system_args query={.action=W32_S_LAUNCH_FEEDBACK};
+    CHECK(!w32_system_call(&desktop_thread,&query) && !query.error && query.result==2);
+    query.value=children[0]->pid;
+    CHECK(!w32_system_call(&desktop_thread,&query) && !query.error && query.result==1);
+    struct proc_thread child_thread={.process=children[1]};
+    struct ciuki_w32_system_args idle={.action=W32_S_LAUNCH_IDLE};
+    CHECK(!w32_system_call(&child_thread,&idle) && !idle.error);
+    query.value=0;CHECK(!w32_system_call(&desktop_thread,&query) && query.result==0);
+    children[0]->w32->launch_feedback_until=w32_now()+5000;
+    children[1]->w32->launch_feedback_until=w32_now()+5000;
+    children[1]->state=PROC_ZOMBIE;
+    CHECK(!w32_system_call(&desktop_thread,&query) && query.result==1);
+    uint64_t saved_ticks=g_ticks;g_ticks+=5000;
+    CHECK(!w32_system_call(&desktop_thread,&query) && !query.result && !query.low && !query.high);
+    g_ticks=saved_ticks;
+    children[1]->state=PROC_LIVE;
+    for(unsigned i=0;i<4;i++)proc_discard(children[i]);
+    fake_desktop_pid=saved_desktop;
+    puts("PASS fx-launchfb kernel: CreateProcess default/ON/OFF/both, overlap, authority, present, idle, exit, timeout");
     struct ciuki_w32_spawn_args bad={.flags=0x04000202};
     CHECK(!w32_process_call(parent,&bad) && bad.error==87 && !bad.pid && !bad.process_handle && !bad.thread_handle);
     struct ciuki_w32_vm release={.address=scratch.address,.flags=W32_MEM_RELEASE};
@@ -344,9 +454,21 @@ static void test_spawn_exceptions(void)
     proc_init();make_pe(pe_data,false);make_pe(loader_data,true);
     struct ciuki_file f={pe_data,sizeof(pe_data),pe_read,0};struct w32_image *im=malloc(sizeof(*im));CHECK(im);
     CHECK(w32_is_pe(&f)&&!w32_pe_validate(&f,im));
+    memmove(pe_data+0x81,pe_data+0x80,24+224+40);put32(pe_data+60,0x81);
+    CHECK(!w32_pe_validate(&f,im) && im->entry==0x1000 && im->section[0].offset==512);make_pe(pe_data,false);
     put32(pe_data+60,UINT32_MAX);CHECK(w32_is_pe(&f)&&w32_pe_validate(&f,im)==-ENOEXEC);make_pe(pe_data,false);
     put32(pe_data+0x98+96+4*8,0x2300);put32(pe_data+0x98+100+4*8,8);CHECK(!w32_pe_validate(&f,im));make_pe(pe_data,false);
     const struct ciuki_file_ops ops={.open=loader_open};proc_set_file_ops(&ops);
+    test_is5_spawn();
+    { /* fx-autorun: a DLL started as a program is refused in words too. */
+        static uint8_t library[0x2400];make_pe(library,true);
+        struct ciuki_file dll={library,sizeof(library),pe_read,0};
+        struct proc_strings *ds=proc_strings_new();CHECK(ds);CHECK(!proc_strings_add(ds,"/fixture.dll",13,false));
+        struct process *dp=0;w32_fault_count=0;
+        CHECK(proc_spawn_file(proc_supervisor(),&dll,ds,0,0,0,0,&dp)==-ENOEXEC);
+        CHECK(w32_fault_count==1&&w32_fault_queue[w32_fault_head].code==W32_REFUSE_IMAGE);
+        w32_fault_count=0;proc_strings_free(ds);
+    }
     struct proc_strings *s=proc_strings_new();CHECK(s);CHECK(!proc_strings_add(s,"/fixture.exe",13,false));CHECK(!proc_strings_add(s,"\"quoted  argument\"",19,false));
     struct process *p;loader_missing=true;unsigned baseline=pages_used;
     CHECK(proc_spawn_file(proc_supervisor(),&f,s,0,0,0,0,&p)==-ENOENT&&pages_used==baseline);
@@ -570,6 +692,10 @@ static void test_shared_tick(void)
 #ifdef W32_KERNEL_BRIDGE
 #define main kernel_mechanism_main
 #endif
+#include "../security/win32_isolation_test.inc"
+#ifdef CIUKI_H11_IDENTITY /* sec-user-05: H11 identity facade over these kernel tokens */
+#include "../security/identity_kernel_test.inc"
+#endif
 int main(int argc, char **argv)
 {
     if (argc == 3 && !strcmp(argv[1], "--pe")) {
@@ -584,6 +710,16 @@ int main(int argc, char **argv)
         free(parsed);free(b.data);return 0;
     }
     ram=calloc(HOST_PAGES,PAGE_SIZE);CHECK(ram);controller.state=T_RUNNING;g_current=&controller;
+    if(argc==2&&!strcmp(argv[1],"--security")){
+        setvbuf(stdout,NULL,_IONBF,0);test_security_isolation();
+        CHECK(!pages_used&&!g_user_mappings&&heap_blocks==1);free(ram);return 0;
+    }
+#ifdef CIUKI_H11_IDENTITY /* sec-user-05 */
+    if(argc==2&&!strcmp(argv[1],"--identity")){
+        setvbuf(stdout,NULL,_IONBF,0);test_identity_facades();
+        CHECK(!pages_used&&!g_user_mappings&&heap_blocks==1);free(ram);return 0;
+    }
+#endif
     test_memory();test_records();test_fpu();test_context();test_spawn_exceptions();test_objects_sections();test_loader_shared_alias();test_shared_tick();
     CHECK(!pages_used&&!g_user_mappings&&heap_blocks==1);printf("w32 core: checks=%u PASS\n",checks);free(ram);return 0;
 }

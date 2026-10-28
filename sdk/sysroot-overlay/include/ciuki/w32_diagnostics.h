@@ -26,8 +26,12 @@ struct ciuki_w32_compat_args {
  * processor fault. */
 enum w32_report_action { W32_REPORT_CRASH=1, W32_REPORT_REFUSE,
     W32_REPORT_NEXT, W32_REPORT_CLOSE, W32_REPORT_REASON, W32_REPORT_NATIVE_FAULT };
+/* W32_REFUSE_WIN16 (fx-autorun) is queued only by the kernel's spawn
+ * admission, for a 16-bit Windows (NE) program other than an InstallShield 5
+ * setup stub; user-mode W32_REPORT_REFUSE stays limited to codes 1..7. */
 enum w32_refusal { W32_REFUSE_MSI=1, W32_REFUSE_DRIVER, W32_REFUSE_RUNTIME,
-    W32_REFUSE_MISSING_DLL, W32_REFUSE_EXPORT, W32_REFUSE_IMAGE, W32_REFUSE_SERVER };
+    W32_REFUSE_MISSING_DLL, W32_REFUSE_EXPORT, W32_REFUSE_IMAGE, W32_REFUSE_SERVER,
+    W32_REFUSE_WIN16 };
 enum w32_exit_reason { W32_EXIT_NORMAL, W32_EXIT_CRASH, W32_EXIT_KILLED, W32_EXIT_RESTART };
 struct ciuki_w32_report_args {
     struct ciuki_w32_header header;

@@ -158,3 +158,125 @@ disagreeing numeric copies and impossible little-endian bounds. Host evidence
 does not establish what bytes are on the owner's disc: the lead must rerun the
 QEMU media/storage gates and collect a T23 log showing a successful optical
 bind and Files access, or the precise raw operands of the remaining failure.
+
+## fx-emptydrive: drives without media keep their letters
+
+Security integration correction (research checked 2026-10-28):
+
+- [FindFirstFileA](https://learn.microsoft.com/en-us/windows/win32/api/fileapi/nf-fileapi-findfirstfilea)
+  requires directory access and returns no search handle on failure.
+- [System error codes](https://learn.microsoft.com/en-us/windows/win32/debug/system-error-codes--0-499-)
+  distinguish ERROR_NOT_READY (21) from ERROR_FILE_NOT_FOUND (2).
+- The Resource Kit chapter and volume-information documentation cited below
+  distinguish a reserved removable-drive letter from its available medium.
+
+The sec-k03 `vfs_resolve_subject_locked` adapter returned ENOENT for every
+unmounted letter before its subject-aware directory walk. This changed
+Win32 FindFirstFile on an empty CD-ROM from error 21 to error 2. Preserve
+ENXIO for an owned empty slot at that adapter boundary, before file access
+checks; unknown letters remain ENOENT. Mounted volumes still use the same
+subject-aware resolver and policy checks. Exercise both administrator and
+Standard credentials through the production Win32/VFS path. This ordering
+implements the sec-integfix directive; the cited API pages document the
+error/handle contracts, not a general Windows access-check precedence rule.
+
+Research checked 2026-10-27 before implementation:
+
+- Microsoft Windows 98 Resource Kit (owner's media, `build/rskt/wrkc10_5.htm`),
+  ch. 10 "Assigning Drive Letters for Removable Media": the drive letters of
+  each removable-media drive (CD-ROM and Disk drives in Device Manager) are
+  reserved during system startup; "If no media are present at startup,
+  Windows 98 reserves one drive letter for each of the removable media", and
+  the reserved range is a per-device setting (Start/End Drive Letter).
+  Ch. 10 "CD-ROM File System": CDFS loads for every detected CD-ROM device.
+- [GetLogicalDrives](https://learn.microsoft.com/en-us/windows/win32/api/fileapi/nf-fileapi-getlogicaldrives):
+  bitmask of the drive letters currently assigned to a logical drive,
+  removable media included (no medium needed for the bit).
+- [GetDriveTypeA](https://learn.microsoft.com/en-us/windows/win32/api/fileapi/nf-fileapi-getdrivetypea):
+  DRIVE_CDROM (5) for a CD-ROM drive, DRIVE_REMOVABLE (2), DRIVE_NO_ROOT_DIR
+  (1) only for an invalid root; a Wine regression discussion
+  ([wine-devel](https://mail.winehq.org/mailman3/hyperkitty/list/wine-devel@winehq.org/thread/XWHNFRB4WTCFOPBUJGF2LRHRE6RDCQNM))
+  records that Windows answers DRIVE_CDROM with or without a disc while file
+  access fails with ERROR_NOT_READY.
+- [GetVolumeInformationA](https://learn.microsoft.com/windows/win32/api/fileapi/nf-fileapi-getvolumeinformationa),
+  Remarks: on a floppy drive without a diskette or a CD-ROM drive without a
+  disc the system asks the user to insert one (critical-error box, suppressed
+  by SetErrorMode SEM_FAILCRITICALERRORS); the call then fails. System error
+  21 is ERROR_NOT_READY ("The device is not ready").
+- [MS-DOS Encyclopedia, appendix C](https://www.pcjs.org/documents/books/mspl13/msdos/encyclopedia/appendix-c/):
+  extended error 15h "drive not ready" (class 0Bh media, action 07h retry
+  after user intervention, locus 02h block device), distinct from 0Fh
+  "invalid drive"; it is an INT 24h critical error.
+- MSCDEX `/L:` assigns the first CD-ROM the next letter after the block
+  devices unless forced ([Computer Hope](https://www.computerhope.com/mscdex.htm));
+  the CD-ROM therefore follows the last hard-disk partition (D: on a
+  one-partition machine such as the T23).
+
+Repository before this change: the ATAPI binding (`optical_bind`) had no
+letter; `optical_service` reported `drive=-` until an ISO mounted, and
+`storage_add_ro_locked` then took the first free letter from `next_drive`.
+`/dev/media` listed the drive only while mounted, so My Computer, the Files
+tree and the Open/Save Places were empty without a disc; a USB stick inserted
+first could take the letter the CD would get later; paths on the letter were
+ENOENT (Win32 2/3, DOS "invalid drive") and the Win32 disk service counted
+only mounted volumes, so GetDriveType answered DRIVE_NO_ROOT_DIR.
+
+Decision:
+
+1. `struct vfs.slot_type[26]` records the removable-media drive owning a
+   letter (`VFS_SLOT_OPTICAL`, `VFS_SLOT_FLOPPY`), set once under the
+   namespace lock and never cleared. Every letter allocator (USB media, NTFS
+   remount, the partition tool's publication, optical fallback) skips owned
+   letters (`vfs_letter_taken`).
+2. Each bound optical drive owns a letter from its first service pass, which
+   `storage_init` runs after the hard-disk and NTFS volumes and before USB
+   starts: the first free letter from `next_drive`, then `next_drive` moves
+   past it. A disc mounted before that pass (Setup's boot CD) keeps its
+   letter. `optical_bindings[slot].drive` holds it; a disc mounts there (if
+   another volume holds it, which no allocator does, the next free unowned
+   letter). `[optical] bind slot=N stage=letter drive=D result=0` records the
+   reservation; `[storage] optical slot=N drive=D ... reason=no_medium` (or
+   `audio_cd`) now names the kept letter instead of `-`.
+3. The floppy platform reserves A:/B: for each drive the controller found
+   (`storage_reserve_floppy`); a request made before `storage_setup` waits in
+   a pending mask that `storage_setup` applies to the system storage.
+4. A path on an owned letter without a mounted volume is "not ready":
+   `/mnt/<x>` lookups return ENXIO and VFS drive paths `-FS_ENXIO` (the code
+   Linux uses for "No such device or address"; `MEDIA_FLOPPY_LOAD` already
+   uses ENXIO for "no disk"). The Win32 file service maps ENXIO to
+   ERROR_NOT_READY (21); the DOS layer maps `-FS_ENXIO` to 15h with the INT 24h
+   critical-error path, as for a removed medium.
+5. `/dev/media` `MEDIA_GET_STATE` reports `type[d] = CIUKI_MEDIA_OPTICAL` for
+   an owned CD-ROM letter with or without a disc; `removable_mask` and
+   `generation[d]` keep meaning "a disc is mounted" (the floppy rule of fx-17b),
+   so the tray, AutoPlay and eject logic are unchanged. No ABI record changes.
+6. Win32 `W32_F_DISK`: the drive bitmask includes owned letters; an empty
+   drive copies its record (type 5 or 2) and fails with 21. kernel32's
+   GetLogicalDrives/GetDriveType accept that answer (last error preserved);
+   GetVolumeInformation and GetDiskFreeSpace(Ex) fail with ERROR_NOT_READY;
+   CreateFile, FindFirstFile, GetFileAttributes and CreateDirectory on the
+   drive fail with ERROR_NOT_READY. No critical-error box is shown (CiukiOS has
+   no Win32 critical-error UI; applications see the SEM_FAILCRITICALERRORS
+   result).
+7. Files and the shared Open/Save dialog list an empty CD-ROM drive as
+   `Compact Disc (D:)` with the Tango optical icon and type "CD-ROM Drive";
+   opening it shows "Please insert a disk into drive D:" (Files: Retry/Cancel,
+   as for fx-17b floppies; dialog: message). Ejecting keeps the row. A disc
+   label replaces the name once mounted (`LABEL (D:)`).
+8. DOS VMs: the managed drive model is unchanged (C: private, D: read-only
+   system view, E: the first present USB volume; sec-k05 owns
+   `unified_mount`). No DOS letter maps the CD-ROM drive, so "drive not ready"
+   on the CD itself needs a DOS drive-model decision; the error mapping above
+   is in place for it.
+
+Host evidence: `tests/host/atapi_test.inc` (letter at D: and after three
+hard-disk letters, record text, `FS_ENXIO`, kept after removal/eject, mount
+at the owned letter), `tests/host/fs/test_storage_namespace.c` (`/dev/media`
+type without the bit, ENXIO for open/create/chdir, FS_ENXIO for open/mkdir/
+find, no `/mnt` root, USB stick skips owned letters),
+`tests/host/win32/kernel32_files.c` and `kernel32_file_wrappers.c` (Win32
+answers), `tests/host/dos_file_api_test.c` (15h mapping),
+`tests/host/desktop/files_ui_test.c` and `dialog_places_test.c` (views,
+prompt, pinned frames). The acceptance item `empty-drive-is-d` of
+`tests/suites/acc-t23.json` is a normal pass condition, and the eject steps
+wait for the record with the kept letter.

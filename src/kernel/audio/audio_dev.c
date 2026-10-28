@@ -1,6 +1,7 @@
 /* Device control, cancellable copied writes, refill and durable settings.
  * SPDX-License-Identifier: GPL-2.0-only */
 #include <ciuki/kernel.h>
+#include <ciuki/security_device.h>
 #include <ciuki/cpu.h>
 #include <ciuki/audio.h>
 #include <ciuki/ac97.h>
@@ -75,7 +76,7 @@ static uint32_t saved_sequence;
 static unsigned saved_slot;
 /* fx-9b: a volume-key (EC) change applied to the master and not yet in
  * AUDIO.CFG; the next tray save or audio_settings_flush writes it. */
-static bool master_pending;
+static bool master_pending, master_session;
 static struct audio_frame quantum[AUDIO_QUANTUM];
 /* f4-05: an active DOS VM source keeps the transport running (weak: the
  * native-only host harness does not link audio/vm_source.c). */
@@ -105,7 +106,7 @@ static bool cfg_valid(const struct audio_cfg *r)
 void audio_settings_load(struct vfs *v)
 {
     settings_vfs = v;
-    saved_sequence = 0; saved_slot = 0; master_pending = false;
+    saved_sequence = 0; saved_slot = 0; master_pending = master_session = false;
     audio.master = (struct ciuki_mixer_master){ .version=1, .size=32,
         .left=CIUKI_MASTER_DEFAULT, .right=CIUKI_MASTER_DEFAULT };
     audio.settings_reason = "missing";
@@ -155,7 +156,7 @@ static int save_master(void)
     if (!err) { saved[slot] = record; saved_slot = slot; saved_sequence = record.sequence; }
     return px_error(err);
 }
-int audio_master_set(struct ciuki_mixer_master *m)
+static int audio_master_apply(struct ciuki_mixer_master *m, bool machine_default)
 {
     if (m->left > 100 || m->right > 100 || m->mute > 1 || m->save_state || m->save_error) return -EINVAL;
     kmutex_lock(&audio_lock.control);
@@ -166,8 +167,11 @@ int audio_master_set(struct ciuki_mixer_master *m)
     int err = audio.ready ? audio_backend_master(m) : 0;
     if (err) { audio_fail(-EIO); kmutex_unlock(&audio_lock.control); return -EIO; }
     audio.master = *m;
-    err = save_master();
-    if (!err) master_pending = false;
+    master_session = !machine_default;
+    /* A session mixer change is transient here. The session preference writer
+     * saves it under the profile; it must never reach SYSTEM/AUDIO.CFG. */
+    err = machine_default ? save_master() : -EOPNOTSUPP;
+    if (!err || !machine_default) master_pending = false;
     audio.master.save_state = err ? CIUKI_MIXER_UNSAVED : CIUKI_MIXER_SAVED;
     audio.master.save_error = err;
     *m = audio.master;
@@ -175,6 +179,8 @@ int audio_master_set(struct ciuki_mixer_master *m)
     master_changed();
     return 0;
 }
+/* Internal SYSTEM boot/default API; the user devctl selects session scope. */
+int audio_master_set(struct ciuki_mixer_master *m) { return audio_master_apply(m,true); }
 static void master_refresh(bool requested)
 {
     kmutex_lock(&audio_lock.control);
@@ -198,10 +204,12 @@ static void master_refresh(bool requested)
                  * applied-unsaved master in the authoritative registry
                  * preference (f4-18), so key changes were lost at the next
                  * boot. Now applied-unsaved: the desktop writes the registry
-                 * once the keys are quiet; AUDIO.CFG follows at the next tray
-                 * save or at shutdown (audio_settings_flush). */
+                 * once the keys are quiet. sec-k04 keeps interactive changes
+                 * out of AUDIO.CFG, including the later shutdown flush. */
                 m.save_state = CIUKI_MIXER_UNSAVED; m.save_error = 0;
-                master_pending = true;
+                struct process *desktop=proc_find(supervisor_desktop_pid());
+                if (security_device_desktop(desktop)) master_session=true;
+                master_pending = !master_session;
             }
             audio.master = m;
         }
@@ -215,7 +223,8 @@ static void master_refresh(bool requested)
  * master reaches AUDIO.CFG once. Never called on the device band. */
 int audio_settings_flush(void)
 {
-    if (!__atomic_load_n(&master_pending, __ATOMIC_ACQUIRE) ||
+    if (__atomic_load_n(&master_session, __ATOMIC_ACQUIRE) ||
+        !__atomic_load_n(&master_pending, __ATOMIC_ACQUIRE) ||
         !__atomic_load_n(&audio.initialized, __ATOMIC_ACQUIRE)) return 0;
     if (!kmutex_lock_until(&audio_lock.control, deadline_after_ms(2000))) return -EBUSY;
     int err = 0;
@@ -999,6 +1008,9 @@ int audio_devctl(struct process *p, int32_t fd, uint32_t op, uint32_t address, u
     if (!file_fd_object(p, fd)) return -EBADF;
     struct file_description *d = file_fd(p, fd);
     if (!d || (d->node->kind != PX_AUDIO && d->node->kind != PX_MIXER)) return -ENOTTY;
+    if (!security_process_live(p)) return -EACCES;
+    if ((op==MIXER_SET_MASTER || op==MIXER_REFRESH_MASTER || op==MIXER_SET_LINE) &&
+        !security_device_desktop(p) && !security_device_system(p)) return -EACCES;
     unsigned size = record_size(op);
     if (!size || (d->node->kind == PX_AUDIO ? op >= MIXER_GET_MASTER : op < MIXER_GET_MASTER)) return -ENOTTY;
     if (bytes != size) return -EINVAL;
@@ -1013,6 +1025,9 @@ int audio_devctl(struct process *p, int32_t fd, uint32_t op, uint32_t address, u
     for (unsigned i = reserved; !err && i < size / 4; i++) if (record[i]) err = -EINVAL;
     if (!err) { err = ua_pin(p->memory, &o->pin, address, size, true); o->pinned = !err; }
     struct audio_stream *s = d->audio;
+    if (!err && (!security_process_live(p) || file_fd(p,fd)!=d)) err=-EACCES;
+    if (!err && (op==MIXER_SET_MASTER || op==MIXER_REFRESH_MASTER || op==MIXER_SET_LINE) &&
+        !security_device_desktop(p) && !security_device_system(p)) err=-EACCES;
     if (!err && interrupted()) err = -EINTR;
     bool capture_op=(op>=AUDIO_CAPTURE_CAPS && op<=AUDIO_CAPTURE_STOP) ||
         op==AUDIO_CAPTURE_ACQUIRE || op==AUDIO_CAPTURE_RELEASE;
@@ -1170,7 +1185,7 @@ int audio_devctl(struct process *p, int32_t fd, uint32_t op, uint32_t address, u
         memcpy(record, &audio.master, size); master_observed(d, (struct ciuki_mixer_master *)record); break;
     case MIXER_GET_DIAGNOSTICS: audio_diagnostics((struct ciuki_audio_diagnostics *)record); break;
     case MIXER_SET_MASTER:
-        err = !d->mixer_control ? -EACCES : audio_master_set((struct ciuki_mixer_master *)record);
+        err = !d->mixer_control ? -EACCES : audio_master_apply((struct ciuki_mixer_master *)record,security_device_system(p));
         if (!err) master_observed(d, (struct ciuki_mixer_master *)record);
         break;
     }

@@ -225,18 +225,34 @@ BOOL W32API EndDeferWindowPos(HANDLE info) {
 }
 
 /* ---- processes and help ------------------------------------------------- */
-/* Limited: no input-idle event exists, so a valid process handle reports
- * idle at once (Windows does so for processes without a message queue). */
 DWORD W32API WaitForInputIdle(HANDLE process, DWORD ms) {
   U32_GUARD;
-  (void)ms;
-  DWORD(W32API * wait)(HANDLE, DWORD) =
-      (DWORD(W32API *)(HANDLE, DWORD))u32_kernel("WaitForSingleObject");
-  if (!process || !wait || wait(process, 0) == 0xffffffffu) {
-    u32_fail(6);
-    return 0xffffffffu;
+  DWORD start = u32_ticks();
+  for (;;) {
+    struct ciuki_w32_message_args a = {.action = W32_MSG_INPUT_IDLE,
+                                       .token = U32_PTR(process)};
+    if (!u32_message(&a))
+      return W32_WAIT_FAILED;
+    if (a.result != W32_WAIT_TIMEOUT)
+      return a.result;
+    DWORD elapsed = u32_ticks() - start;
+    if (ms != W32_INFINITE && elapsed >= ms)
+      return W32_WAIT_TIMEOUT;
+    /* Service synchronous sends (including a child's initialization send
+     * back to its parent) and desktop traffic. Never hold USER's lock while
+     * sleeping; never dispatch arbitrary posted application messages here. */
+    u32_pump();
+    for (UINT n = 0; n < 16 && u32_sent(); n++) {}
+    DWORD slice = 10;
+    elapsed = u32_ticks() - start;
+    if (ms != W32_INFINITE) {
+      if (elapsed >= ms) return W32_WAIT_TIMEOUT;
+      if (slice > ms - elapsed) slice = ms - elapsed;
+    }
+    UINT saved = u32_suspend();
+    u32_backend.pause(slice);
+    u32_resume(saved);
   }
-  return 0;
 }
 /* ---- monitors and DPI ---------------------------------------------------- */
 #define MONITOR ((HANDLE)(uintptr_t)0x00010001u)

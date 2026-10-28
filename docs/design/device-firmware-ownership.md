@@ -455,6 +455,15 @@ remain forbidden; timeouts retain quarantine and require reboot rather than
 an assumed restore. This does not authorize acceleration, option-ROM startup,
 PCI BIOS/configuration writes or ordinary DOS VM calls to host INT10.
 
+The `fx-biosvm` broker separates permanent input, APM and video execution-fault
+quarantines. APM failure cannot disable VBE; a video failure retains its VGA
+leases without quarantining input. Common mapping/initialization failures still
+fail closed. Byte accesses to exactly 80h and EDh are virtual delay sinks (read
+FFh), never physical port accesses; every other I/O policy stays unchanged.
+The generic V86 monitor's per-execution abort policy is unchanged. Research,
+the chipset decoding distinction and the host cases are recorded in
+[BIOS isolation and lease validation](../validation/fx-biosvm.md).
+
 ## F3-20 amendment — DOS full-screen VGA ownership (2026-10-14)
 
 The owner's 2026-10-14 decision permits a focused DOS session to own the real

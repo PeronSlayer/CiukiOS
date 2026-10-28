@@ -1,3 +1,4 @@
+#include <ciuki/kheap_limits.h>
 #ifdef APP_GATE_KHEAP_LEDGER_TEST
 #include <stdio.h>
 #include <stdlib.h>
@@ -27,14 +28,15 @@ int main(void)
     kheap_init(); check_heap(0,0,0);
     void *blocks[64];
     for (unsigned i=0; i<64; i++) {
-        blocks[i]=kmalloc(2040); if (!blocks[i]) abort();
+        blocks[i]=kmalloc(KHEAP_MAX_REQUEST); if (!blocks[i]) abort();
         check_heap((i+2)/2,(i+1)*2048,(i+1)*2048);
     }
-    if (kmalloc(2040) || kmalloc(2041)) abort();
+    if (kmalloc(KHEAP_MAX_REQUEST) || (kmalloc)(KHEAP_MAX_REQUEST+1) ||
+        (kmalloc)(SIZE_MAX) || (kzalloc)(SIZE_MAX)) abort();
     check_heap(32,131072,131072);
     for (unsigned i=0; i<64; i++) kfree(blocks[i]);
     kfree(0); check_heap(32,0,131072);
-    void *reused=kmalloc(2040); if (!reused) abort();
+    void *reused=kmalloc(KHEAP_MAX_REQUEST); if (!reused) abort();
     check_heap(32,2048,131072); kfree(reused);
     page_limit++;
     uint8_t *small=kzalloc(24); if (!small) abort();
@@ -53,7 +55,7 @@ int main(void)
 #include <ciuki/kernel.h>
 #include <ciuki/files.h>
 static unsigned allocations, freed_nodes;
-void *kzalloc(size_t bytes) { void *p = calloc(1,bytes); if (p) allocations++; return p; }
+void *(kzalloc)(size_t bytes) { if (bytes > KHEAP_MAX_REQUEST) return 0; void *p = calloc(1,bytes); if (p) allocations++; return p; }
 void kfree(void *p) { if (p) { if (!allocations) abort(); allocations--; freed_nodes++; free(p); } }
 void panic(const char *fmt, ...) { (void)fmt; abort(); }
 bool clock_fat_utc(uint16_t date, uint16_t time, int64_t *seconds)

@@ -2,9 +2,11 @@
 #include <ciuki/kernel.h>
 #include <ciuki/w32_core.h>
 #include <ciuki/w32_objects.h>
+#include <ciuki/security.h>
 #include <ciuki/systime.h>
 #pragma weak timezone_call
 #include <ciuki/power_source.h>
+#include <ciuki/supervisor.h>
 #pragma weak power_source_win32_status
 static void priority_apply(struct proc_thread *t) {
   if (!t->w32 || !t->task)
@@ -20,10 +22,33 @@ static void priority_apply(struct proc_thread *t) {
 }
 uint32_t w32_system_call(struct proc_thread *t,
                          struct ciuki_w32_system_args *a) {
-  if (a->action == W32_S_READ_MEMORY || a->action == W32_S_WRITE_MEMORY) {
+  if (a->action == W32_S_LAUNCH_IDLE) {
+    if (t->process->w32) t->process->w32->launch_feedback_until = 0;
+    a->result = 1;
+  } else if (a->action == W32_S_LAUNCH_FEEDBACK) {
+    struct process *desktop = t->process;
+    if (desktop->personality != PROC_NATIVE || desktop->state != PROC_LIVE ||
+        desktop->pid != supervisor_desktop_pid() || !desktop->w32 ||
+        desktop->w32->service != W32_SERVICE_DESKTOP) { a->error = 5; return 0; }
+    uint64_t now = w32_now(), expiry = 0;
+    a->result = 0;
+    for (unsigned i = 0; i < CIUKI_PROCESS_MAX; i++) {
+      struct process *p = proc_at_slot(i);
+      if (!p || !p->published || p->state != PROC_LIVE || !p->w32 ||
+          !security_same(desktop,p)) continue;
+      if (p->pid == a->value) p->w32->launch_feedback_until = 0;
+      uint64_t until = p->w32->launch_feedback_until;
+      if (until > now) {
+        a->result++;
+        if (!expiry || until < expiry) expiry = until;
+      }
+    }
+    a->low = (uint32_t)expiry; a->high = (uint32_t)(expiry >> 32);
+  } else if (a->action == W32_S_READ_MEMORY || a->action == W32_S_WRITE_MEMORY) {
     struct w32_object *o=w32_lookup(t,a->handle,W32_OBJ_PROCESS);
     if (!o || o->signalled) { a->error=6; return 0; }
-    if (o->id!=t->process->pid) { a->error=5; return 0; }
+    if (o->id!=t->process->pid||!w32_handle_access(t,a->handle,
+        a->action==W32_S_READ_MEMORY?0x10u:0x28u)) { a->error=5; return 0; }
     /* low = source, high = destination, extra = byte count, for both APIs.
      * Pin both complete spans before copying; failures publish no bytes. */
     struct ua_pin src,dst;
@@ -84,6 +109,8 @@ uint32_t w32_system_call(struct proc_thread *t,
     struct process *p = o ? proc_find(o->id) : 0;
     if (!p || o->signalled)
       a->error = 6;
+    else if(!w32_handle_access(t,a->handle,1)||!security_process_live(t->process)||
+        (!security_same(t->process,p)&&(!security_admin(t->process)||security_system(p))))a->error=5;
     else {
       if(p->w32)p->w32->exit_reason=W32_EXIT_KILLED;
       proc_stop(p, (int)a->value, 0);
@@ -102,6 +129,8 @@ uint32_t w32_system_call(struct proc_thread *t,
     }
     if (!target || (o && o->signalled))
       a->error = 6;
+    else if (!security_same(t->process,target->process) || !w32_handle_access(t,a->handle,1))
+      a->error=5;
     else if (target->process->personality != PROC_WIN32)
       a->error = 120;
     else {
@@ -128,6 +157,10 @@ uint32_t w32_system_call(struct proc_thread *t,
     }
     if (!target)
       a->error = 6;
+    else if (!security_same(t->process,target->process)) a->error=5;
+    else if (a->action == W32_S_QUERY_PRIORITY ?
+        (!w32_handle_access(t,a->handle,0x40u)&&!w32_handle_access(t,a->handle,0x800u)) :
+        !w32_handle_access(t,a->handle,0x20u)) a->error=5;
     else if (a->action == W32_S_QUERY_PRIORITY)
       a->result = (uint32_t)target->w32->relative_priority;
     else if (proc_priority_win32(target->process->w32->priority_class,
@@ -143,6 +176,10 @@ uint32_t w32_system_call(struct proc_thread *t,
     struct process *p = o ? proc_find(o->id) : 0;
     if (!p || !p->w32 || o->signalled)
       a->error = 6;
+    else if (!security_same(t->process,p)) a->error=5;
+    else if (a->action == W32_S_QUERY_PRIORITY ?
+        (!w32_handle_access(t,a->handle,0x400u)&&!w32_handle_access(t,a->handle,0x1000u)) :
+        !w32_handle_access(t,a->handle,0x200u)) a->error=5;
     else if (a->action == W32_S_QUERY_PRIORITY)
       a->result = p->w32->priority_class;
     else if (a->value!=0x100 && proc_priority_win32(a->value, 0, false) < 0)

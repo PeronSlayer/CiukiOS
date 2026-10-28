@@ -4,7 +4,7 @@
 static void test_speed_window(void)
 {
     memset(fake_proc, 0, sizeof(fake_proc));
-    fake_proc[0].pid = 10; fake_proc[0].state = PROC_LIVE; fake_proc[0].dosvm_capability = true;
+    fake_proc[0].pid = 10; fake_proc[0].state = PROC_LIVE; fake_identity(0, true, false);
     fake_current = &fake_proc[0];
     fake_surface[0] = (struct surface){.info = {sizeof(struct ciuki_surface_info), 640, 480, 2560,
         CIUKI_SURFACE_XRGB8888, 640 * 480 * 4}, .pixels = frame_buffer, .references = 1};
@@ -263,9 +263,10 @@ static void test_planar_completions(void)
               v->video_direct == 4 && v->video_faults == faults);
         dosvm_vga_sync(v, false);
         CHECK(v->perf.direct_pages == pages + 16 && v->perf.harvests == harvests + 1);
-        /* fx-27: at least three plane swaps of 16 entries (plane 0 may
-         * already be mapped), invalidated per entry, and no CR3 reload. */
-        CHECK(cr3_reloads == reloads && invalidations >= invalidated + 3 * 16);
+        /* fx-27: at least three plane swaps (plane 0 may already be
+         * mapped), invalidated per entry, and no CR3 reload; fx-doswin3:
+         * per swap only the four pages the previous plane stored through. */
+        CHECK(cr3_reloads == reloads && invalidations >= invalidated + 3 * 4 && invalidations <= invalidated + 5 * 4);
         for (unsigned page = 0; page < VIDEO_WINDOW_PAGES; page++)
             CHECK(!(*window_pte(v, 0xA0000 + page * PAGE_SIZE) & DOSVM_PTE_DIRTY));
         port_out(v, 0x3D4, 2, (base & 0xFF00u) | 0x0C);
@@ -310,14 +311,26 @@ static void test_video_pte_batch(void)
     *window_pte(v, 0xAF000) |= 0x40;
     unsigned flush = cr3_reloads, single = invalidations;
     CHECK(!as_replace_pages(&v->as, 0xA0000, frames, 16, PTE_U | PTE_W, &dirty, &accessed));
-    /* fx-27: every changed entry is invalidated by INVLPG; no CR3 reload. */
-    CHECK(dirty == 0x8001 && accessed == 1 && cr3_reloads == flush && invalidations == single + 16);
+    /* fx-27: changed entries are invalidated by INVLPG, never a CR3
+     * reload; fx-doswin3: only those whose replaced value had A or D set
+     * (SDM 5.10.2.3: no TLB entry without A), here the first and last. */
+    CHECK(dirty == 0x8001 && accessed == 1 && cr3_reloads == flush && invalidations == single + 2);
     CHECK(v->as.pages == pages && v->as.tables == tables_before && g_user_mappings == mappings);
+    for (unsigned i = 0; i < 16; i++)
+        CHECK(*window_pte(v, 0xA0000 + i * PAGE_SIZE) == (frames[i] | PTE_U | PTE_W | PTE_P));
     CHECK(!as_replace_pages(&v->as, 0xA0000, 0, 16, 0, &dirty, 0) && !dirty && cr3_reloads == flush &&
-          invalidations == single + 16);
-    *window_pte(v, 0xA3000) |= 0x40;
+          invalidations == single + 2);
+    *window_pte(v, 0xA3000) |= 0x60;
     CHECK(!as_replace_pages(&v->as, 0xA0000, 0, 16, 0, &dirty, 0) && dirty == 0x0008 &&
-          invalidations == single + 17 && !(*window_pte(v, 0xA3000) & 0x40));
+          invalidations == single + 3 && !(*window_pte(v, 0xA3000) & 0x40) && (*window_pte(v, 0xA3000) & 0x20));
+    /* A still set after the D collection: the next replacement of that
+     * entry invalidates it; a never-accessed entry is replaced silently. */
+    uint32_t moved[16];
+    for (unsigned i = 0; i < 16; i++) moved[i] = frames[(i + 1) % 16];
+    CHECK(!as_replace_pages(&v->as, 0xA0000, moved, 16, PTE_U | PTE_W, &dirty, &accessed) &&
+          !dirty && accessed == 0x0008 && invalidations == single + 4);
+    CHECK(!as_replace_pages(&v->as, 0xA0000, frames, 16, PTE_U | PTE_W, &dirty, &accessed) &&
+          !dirty && !accessed && invalidations == single + 4);
     uint32_t snapshot[16];
     for (unsigned i = 0; i < 16; i++) snapshot[i] = *window_pte(v, 0xA0000 + i * PAGE_SIZE);
     frames[15] |= 1;
@@ -327,11 +340,12 @@ static void test_video_pte_batch(void)
     CHECK(as_replace_pages(&v->as, KERNEL_VBASE, 0, 16, 0, 0, 0) == -EINVAL);
     for (unsigned i = 0; i < 16; i++) CHECK(snapshot[i] == *window_pte(v, 0xA0000 + i * PAGE_SIZE));
     cpu_cr3 = 0; frames[15] &= ~1u;
+    for (unsigned i = 0; i < 16; i++) *window_pte(v, 0xA0000 + i * PAGE_SIZE) |= 0x20;
     CHECK(!as_replace_pages(&v->as, 0xA0000, frames, 16, dosvm_low_flags(0xA0), 0, 0));
-    CHECK(cr3_reloads == flush && invalidations == single + 17); /* inactive: nothing cached */
+    CHECK(cr3_reloads == flush && invalidations == single + 4); /* inactive: nothing cached */
     for (unsigned i = 0; i < 16; i++) CHECK(old[i] == *window_pte(v, 0xA0000 + i * PAGE_SIZE));
     destroy(v, true); empty();
-    puts("f3-19 PTE batch: D/A masks, per-entry INVLPG when active (fx-27), no inactive/clean flush, unchanged ownership and atomic rejection PASS");
+    puts("f3-19 PTE batch: D/A masks, per-entry INVLPG when active (fx-27) for accessed entries only (fx-doswin3), no inactive/clean flush, unchanged ownership and atomic rejection PASS");
 }
 static void test_doom_column_replay(void)
 {
@@ -344,9 +358,15 @@ static void test_doom_column_replay(void)
     for (unsigned frame = 0; frame < 3; frame++) {
         unsigned base = frame * 0x4000, harvests = v->perf.harvests, pages = v->perf.direct_pages;
         unsigned flush = cr3_reloads, single = invalidations, writes = v->perf.port_count[DOSVM_VGA_SR_MASK];
+        unsigned expected = 0, swaps = 0;
         for (unsigned n = 0; n < 1279; n++) {
-            unsigned p = n < 320 ? n & 3 : (n - 320) & 3;
+            unsigned p = n < 320 ? n & 3 : (n - 320) & 3, remaps = v->perf.port_remaps, used = 0;
+            /* Entries whose A or D is set: the stores since the last swap,
+             * plus A kept by a D collection (the frame's presentation). */
+            for (unsigned page = 0; page < VIDEO_WINDOW_PAGES; page++)
+                used += (*window_pte(v, 0xA0000 + page * PAGE_SIZE) & 0x60u) != 0;
             port_out(v, 0x3C5, 1, 1u << p);
+            if (v->perf.port_remaps != remaps) { swaps++; expected += used; }
             cvga_write_port(&oracle, 0x3C5, (uint8_t)(1u << p));
             unsigned count = n < 320 ? 200 : 80;
             for (unsigned i = 0; i < count; i++) {
@@ -359,8 +379,13 @@ static void test_doom_column_replay(void)
         }
         CHECK(v->perf.port_count[DOSVM_VGA_SR_MASK] == writes + 1279);
         CHECK(v->perf.harvests == harvests && v->perf.direct_pages == pages);
-        /* fx-27: each plane swap invalidates its 16 changed entries. */
-        CHECK(cr3_reloads == flush && invalidations - single >= 1278 * 16 && invalidations - single <= 1279 * 16);
+        /* fx-27: each plane swap invalidates its changed entries; fx-doswin3:
+         * only the pages the previous plane's stores accessed (a column
+         * spans four pages of 51 rows, a span one), not all sixteen. */
+        if (invalidations - single != expected)
+            printf("doom columns: swaps=%u invalidations=%u expected=%u\n", swaps, invalidations - single, expected);
+        CHECK(swaps >= 1278 && cr3_reloads == flush && invalidations - single == expected &&
+              expected <= swaps * 5 && expected < swaps * 16 / 3);
         unsigned remaps = v->perf.port_remaps;
         port_out(v, 0x3D4, 2, (base & 0xff00u) | 0x0C);
         CHECK(v->perf.harvests == harvests && v->perf.port_remaps == remaps);
@@ -383,7 +408,7 @@ static void test_doom_column_replay(void)
     port_out(v, 0x3CE, 2, 0x4105);
     CHECK(!v->video_direct && v->perf.latch_read_windows);
     cpu_cr3 = 0; destroy(v, true); empty();
-    puts("f3-19 DOOM columns/spans: 1279 OUTs/frame, triple buffers, exact planes, one harvest/frame, border skip and GC04 read window PASS");
+    puts("f3-19 DOOM columns/spans: 1279 OUTs/frame, triple buffers, exact planes, one harvest/frame, accessed-only INVLPG, border skip and GC04 read window PASS");
 }
 static void test_modex_conversion(void)
 {

@@ -157,6 +157,10 @@ static void test_menu_pm_devices(void)
         int31(v, 0x0901); CHECK(cur.tf.eip == 0x700); /* pending timer has priority */
         uint8_t eoi[] = {0xE6, 0x20}, in[] = {0xE4, 0x60};
         cur.tf.eax = 0x20; exec(v, eoi, sizeof(eoi), 13, 0); pm_iret(v); at_stub(v, DPMI_PM_IRQRET);
+        /* fx-dospic: return releases one already-paced tick owed from the
+         * 100 ms CLI interval. The next owed tick still waits half a period. */
+        CHECK(cur.tf.eip == 0x700 && v->monitor.stats.delivered[0] == 2);
+        cur.tf.eax = 0x20; exec(v, eoi, sizeof(eoi), 13, 0); pm_iret(v); at_stub(v, DPMI_PM_IRQRET);
         for (unsigned byte = 0; byte < 2; byte++) {
             CHECK(cur.tf.eip == 0x800 && !v->monitor.vif);
             exec(v, in, sizeof(in), 13, 0); CHECK((cur.tf.eax & 255) == (byte ? 0x81 : 0x01));
@@ -165,7 +169,7 @@ static void test_menu_pm_devices(void)
         CHECK(cur.tf.eip == 0x900 && !v->kbd.count && v->kbd.reads == 2);
         a_in(v, SB + 0xE);
         cur.tf.eax = 0x20; exec(v, eoi, sizeof(eoi), 13, 0); pm_iret(v); at_stub(v, DPMI_PM_IRQRET);
-        CHECK(v->monitor.vif && v->monitor.stats.delivered[0] == 1 && v->monitor.stats.delivered[1] == 2 &&
+        CHECK(v->monitor.vif && v->monitor.stats.delivered[0] == 2 && v->monitor.stats.delivered[1] == 2 &&
               v->monitor.stats.delivered[7] == 1 && !v->monitor.pic[0].isr);
         destroy(v, true); empty();
     }
@@ -505,14 +509,26 @@ static void test_menu_near_return(void)
             cur.tf.eip = 0x400; cur.tf.user_esp += consumed + w + (bits ? 12 : 2);
             debug_dr6 = 1u << v->dpmi.return_slot; step(v, 1, 0);
             CHECK(!v->dpmi.return_steps && !(cur.tf.eflags & V86_TF) && v->monitor.vif);
+            uint32_t cli_esp = cur.tf.user_esp;
             cur.tf.eip = 0x402; cur.tf.eax = V86_IF | 2; step(v, 13, 0);
             CHECK(v->dpmi.if_armed && !v->monitor.vif && (cur.tf.eax & V86_TF));
-            /* A restored image returns to DMX's value-computing epilogue.
-             * It must acquire the next caller boundary with IF unchanged. */
+            /* fx-doomwin: the CLI's site is now cached, so no seed is wanted
+             * and the restore acquires no boundary. */
+            cur.tf.eip = 0x100; cur.tf.user_esp = 0x600; cur.tf.eflags |= V86_TF;
+            debug_dr6 = 1u << 14; step(v, 1, 0);
+            CHECK(!v->dpmi.if_armed && v->monitor.vif && !v->dpmi.return_steps && !dpmi_seed_wanted(v) &&
+                  !(cur.tf.eflags & V86_TF) && v->dpmi.stats.if_restored == 1);
+            /* The cached site arms again; with seeds wanted (an unproven CLI
+             * elsewhere) a restored image returning to DMX's value-computing
+             * epilogue must acquire the next caller boundary, IF unchanged. */
+            cur.tf.eip = 0x402; cur.tf.user_esp = cli_esp; cur.tf.eax = cur.tf.eflags = V86_IF | 2;
+            step(v, 13, 0);
+            CHECK(v->dpmi.if_armed && !v->monitor.vif && (cur.tf.eax & V86_TF));
+            dpmi_cli_sites_reset(v);
             cur.tf.eip = 0x100; cur.tf.user_esp = 0x600; cur.tf.eflags |= V86_TF;
             debug_dr6 = 1u << 14; step(v, 1, 0);
             CHECK(!v->dpmi.if_armed && v->monitor.vif && v->dpmi.return_steps == DPMI_RETURN_STEPS &&
-                  !(cur.tf.eflags & V86_TF) && v->dpmi.stats.if_restored == 1);
+                  !(cur.tf.eflags & V86_TF) && v->dpmi.stats.if_restored == 2);
         }
         destroy(v, true); empty();
     }

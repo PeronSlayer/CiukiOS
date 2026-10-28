@@ -231,6 +231,7 @@ class Services:
         # dispatched for this session yet.
         with self.lock:
             session.pid = process.pid
+            session.image = label  # the parent image directory of its own spawns
         worker = threading.Thread(target=session.serve, args=(parent,), daemon=True)
         result = Child(process, worker, log, session)
         with self.lock:
@@ -289,11 +290,19 @@ class Services:
 
     def close(self):
         errors = []
-        for child in self.children:
+        # Kill every live descendant before joining any service thread: a
+        # parent's thread may be serving an INFINITE wait on a child (the
+        # IS5 bootstrap waits for its engine) and only returns once that
+        # child has exited too.
+        for child in list(self.children):
             try:
                 if child.process.poll() is None:
                     child.session.terminating = True
                     child.process.kill()
+            except Exception as error:
+                errors.append(repr(error))
+        for child in list(self.children):
+            try:
                 child.finish(10)
             except Exception as error:
                 errors.append(repr(error))
@@ -371,6 +380,28 @@ class Session:
         self.last_reply = 'none'
         self.pending_header, self.pending_payload = bytearray(), bytearray()
         self.expected_payload = None
+
+    def search(self, image):
+        """The kernel's CreateProcess search (src/kernel/proc/win32/process.c,
+        the Windows order): an explicit path is used as given; a bare name,
+        with .exe appended when it has no extension, is looked up in the
+        parent's image directory, the parent's current directory,
+        C:\\WINDOWS\\SYSTEM and C:\\WINDOWS. The adapter's loader would treat a
+        bare name as a DLL search (fx-is5boot: the IS5 engine's final launch)."""
+        if not image or any(c in image for c in '\\/:'):
+            return image
+        name = image if '.' in image else image + '.exe'
+        parent = getattr(self, 'image', '') or ''
+        directories = [parent.rsplit('\\', 1)[0]] if '\\' in parent else []
+        directories += [self.cwd, 'C:\\WINDOWS\\SYSTEM', 'C:\\WINDOWS']
+        for directory in directories:
+            candidate = directory.rstrip('\\') + '\\' + name
+            try:
+                if self.path(candidate).is_file():
+                    return self.fullpath(candidate)
+            except OSError:
+                continue
+        return image
 
     def add(self, handle):
         self.next_handle += 4
@@ -608,7 +639,7 @@ class Session:
                 # Each adapter starts with fresh core DLL error-mode state.
                 if a[10] & ~(0x08000000 | 0x04000000 | 0x200) or a[9]:
                     raise OSError(errno.EINVAL, 'unsupported spawn flags/inheritance')
-                child = self.service.start(image, command, cwd or self.cwd, a[10])
+                child = self.service.start(self.search(image), command, cwd or self.cwd, a[10])
                 a[11], a[12] = self.add(Handle(1, child)), self.add(Handle(2, child))
                 a[13], a[14], a[15] = child.process.pid, child.process.pid, 0
             elif op == OBJECT:

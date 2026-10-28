@@ -6,6 +6,12 @@
  * SPDX-License-Identifier: GPL-2.0-only */
 #include <ciuki/fs_ro.h>
 #include <ciuki/ntfs_ro.h>
+#ifdef FS_HOST
+#include <stdio.h>
+#define ntfs_log(...) do { fprintf(stderr,__VA_ARGS__); fputc('\n',stderr); } while (0)
+#else
+#define ntfs_log klog
+#endif
 
 #define SNAP_RAW (2u * FS_RO_ENTRIES + 2u) /* every entry may carry a DOS alias entry */
 #define SNAP_POOL 32768u                   /* UTF-8 bytes of one directory's names */
@@ -87,7 +93,10 @@ static int mount_ntfs(struct fs_ro_volume *v)
     s->bytes = total; s->volume = v; v->state = s;
     enum ntfs_ro_reason reason = NTFS_RO_INVALID;
     int e = ntfs_ro_mount((uint8_t *)s + workspace_offset(), ws, lib_read, s, 512, v->sectors, &s->lib, &reason);
-    if (!e) { v->diagnostic = "ntfs"; return 0; }
+    if (!e) {
+        if (reason==NTFS_RO_DIRTY) ntfs_log("[ntfs] dirty flag: accepted read-only after clean journal and hibernation checks");
+        v->diagnostic = "ntfs"; return 0;
+    }
     e = result(s, e);
     switch (reason) {
     case NTFS_RO_DIRTY: v->diagnostic = "ntfs_dirty"; return -FS_EUCLEAN;

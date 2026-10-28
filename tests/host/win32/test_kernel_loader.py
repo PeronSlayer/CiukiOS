@@ -237,6 +237,9 @@ class KernelLoaderTests(unittest.TestCase):
             self.assertIn('/System/Win32/ntdll.dll',sources)
             self.assertIn('/System/Win32',directories)
             self.assertIn('/System/Win32/BUILTIN.BIN',sources)
+            self.assertEqual(sources['/System/Win32/is5boot.exe'],folder/'is5boot.exe')
+            self.assertIn('/system/licenses/IS5-blast.txt',sources)
+            self.assertEqual((folder/'is5boot.exe').read_bytes()[:2],b'MZ')
             self.assertFalse(any(p.startswith('/WINDOWS/SYSTEM/') for p in sources))
             combined=directories|{'/System','/system/licenses'}
             self.assertEqual(len(combined),len({d.casefold() for d in combined}))

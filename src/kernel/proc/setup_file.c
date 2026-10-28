@@ -1,6 +1,7 @@
 /* Capability-scoped, bounded native FAT inspection for Setup.
  * SPDX-License-Identifier: GPL-2.0-only */
 #include <ciuki/kernel.h>
+#include <ciuki/security_device.h>
 #include <ciuki/files.h>
 #include <ciuki/setup_mode.h>
 
@@ -23,7 +24,7 @@ static int setup_media_live(struct px_node *n)
 
 int file_setup_fat(struct process *p,struct file_description *d,uint32_t op,struct ciuki_setup_fat *q)
 {
-    if (!p || !p->setup_capability || !setup_mode()) return -EPERM;
+    if (!security_device_setup(p) || !setup_mode()) return -EPERM;
     if (!d || !q) return -EBADF;
     if (op==CIUKI_SETUP_FAT_ATTRIB && (!q->mount_generation || !q->chain_generation)) return -EINVAL;
     if (q->version!=CIUKI_SETUP_FAT_VERSION || q->size!=sizeof(*q) ||

@@ -30,7 +30,7 @@ class BrowserIntegration(unittest.TestCase):
                  'apps/control/display.c','apps/control/fonts.c','sdk/libfont/font.c','apps/libdeskui/text_ttf.c',
                  'apps/desktop/protocol.c']
         sources += ['apps/desktop/'+name+'.c' for name in ('settings','sounds','wallpaper','image','compositor','theme')]
-        sources += ['apps/libdeskui/'+name+'.c' for name in ('draw','widgets','list','menu','dialog','controls','commdlg','textarea','icons','icon_map')]
+        sources += ['apps/libdeskui/'+name+'.c' for name in ('draw','widgets','list','menu','dialog','controls','commdlg','textarea','icons','icon_map','iconx','fileicon')]
         subprocess.run(['clang','-std=c17','-D_POSIX_C_SOURCE=200809L','-O1','-g','-Wall','-Wextra','-Werror',
                         '-fsanitize=address,undefined','-fno-sanitize-recover=all',*icons.defines(),
                         '-I'+str(ROOT/'apps/control'),'-I'+str(ROOT/'src/kernel/include'),

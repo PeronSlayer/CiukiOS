@@ -91,14 +91,33 @@ int main(void)
     assert(!desk_display_frame_commit(&d,0) && d.sh.cfg.display_mode == 0x118);
     d.damage.count = 0;
     assert(!desk_display_frame_commit(&d,-1) && d.sh.cfg.display_mode == 0x118);
-    assert(desk_display_frame_commit(&d,0) && !d.display_pending && d.sh.cfg.display_mode == 0x111);
+    assert(desk_display_frame_commit(&d,0) && !d.display_pending && d.sh.cfg.display_mode == 0x118);
     assert(!desk_display_frame_commit(&d,0));
     d.display_reply_mode=0x118; d.display_reply_preview=1; d.display_mode=d.display_pending=0x118;
-    assert(desk_display_frame_commit(&d,0)==DESK_DISPLAY_PREVIEW_FRAME && d.sh.cfg.display_mode==0x111);
+    assert(desk_display_frame_commit(&d,0)==DESK_DISPLAY_PREVIEW_FRAME && d.sh.cfg.display_mode==0x118);
     assert(!d.display_pending); d.display_reply_mode=0; d.display_reply_preview=0;
     d.display_mode=d.display_pending=0x118;
-    assert(desk_display_frame_commit(&d,0)==DESK_DISPLAY_PERSIST_FRAME && d.sh.cfg.display_mode==0x118);
-    puts("PASS display persistence: failed allocation/partial/failed frame retains saved id; successful confirmed frame commits once");
+    assert(desk_display_frame_commit(&d,0)==DESK_DISPLAY_COMPLETE_FRAME && d.sh.cfg.display_mode==0x118);
+    /* T23: a temporary Win32 carrier or DOS return to 274, followed by an
+     * unrelated settings save, must not make 640x480 the next boot's mode. */
+    d.display_mode=d.display_pending=274;
+    assert(desk_display_frame_commit(&d,0)==DESK_DISPLAY_COMPLETE_FRAME);
+    static struct ciuki_settings durable;
+    desk_preferences_persistent(&d,&durable);
+    assert(durable.display_mode==280 && !d.sh.want_save);
+    /* An accepted startup mode which never completed a frame can roll back.
+     * Only startup recovery resets the preference and explains the fallback. */
+    d.display_start_mode=280; d.display_pending=274;
+    assert(desk_display_frame_commit(&d,0)==DESK_DISPLAY_COMPLETE_FRAME);
+    assert(d.sh.cfg.display_mode==274 && d.sh.want_save && !d.display_start_mode);
+    assert(!strcmp(d.sh.message_title,"Display Settings") && strstr(d.sh.message_text,"640x480"));
+    assert(!strstr(d.sh.message_text,"error (5)"));
+    for (int i=1;i<DESK_CLIENTS;i++) desk_drop_client(&d,i);
+    d.sh.cfg.display_mode=280; d.sh.want_save=0; d.damage.count=0;
+    d.display_start_mode=d.display_mode=d.display_pending=280;
+    assert(desk_display_frame_commit(&d,0)==DESK_DISPLAY_COMPLETE_FRAME);
+    assert(!d.display_start_mode && !d.sh.want_save && d.sh.cfg.display_mode==280);
+    puts("PASS display persistence: failed/partial/preview/lease/return frames preserve confirmed preference; startup rollback resets it once");
     static struct ciuki_settings saver_config, saver_roundtrip;
     static char saver_text[CFG_TEXT_MAX];
     cfg_defaults(&saver_config);
@@ -140,11 +159,11 @@ int main(void)
     assert(desk_parse(&c->tx[c->tx_head],0,NULL,&p) && p.serial==42 && !p.result);c->tx_count=0;
     desk_put32(m.data+4,43);desk_put32(m.data+8,DESK_SETTINGS_DISPLAY);desk_put32(m.data+12,0x118);
     desk_receive(&d,0,&m);assert(!d.display_reply_preview && d.display_reply_mode==0x118);
-    assert(desk_display_frame_commit(&d,0)==DESK_DISPLAY_PERSIST_FRAME);desk_display_reply(&d,0);c->tx_count=0;
+    assert(desk_display_frame_commit(&d,0)==DESK_DISPLAY_COMPLETE_FRAME);desk_display_reply(&d,0);c->tx_count=0;
     c->program=0;desk_put32(m.data+8,DESK_SETTINGS_DISPLAY_PREVIEW);
     desk_receive(&d,0,&m);assert(c->tx_count==1 && !d.display_pending);
     assert(desk_parse(&c->tx[c->tx_head],0,NULL,&p) && p.result==-EPERM);
-    puts("PASS display preview ownership: admitted Control Panel request, deferred reply, no automatic preference save, legacy durable frame, ordinary-client refusal");
+    puts("PASS display preview ownership: admitted Control Panel request, deferred reply, no automatic preference save, ordinary-client refusal");
     desk_drop_client(&d,0); free(d.pixels); free(d.sh.wall);
     assert(!fake_live()); return 0;
 }

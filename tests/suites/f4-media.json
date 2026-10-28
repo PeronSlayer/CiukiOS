@@ -3380,6 +3380,11 @@
       "timeout": 120,
       "fixtures": [
         {
+          "generator": "mkfs.fat",
+          "fat_type": 16,
+          "seed": 1
+        },
+        {
           "generator": "mkntfs",
           "kind": "dirty",
           "seed": 1
@@ -3388,40 +3393,28 @@
       "expected": {
         "terminal": "END",
         "predicates": [
-          {
-            "where": {
-              "event": "DATA",
-              "case": "device"
-            },
-            "exact_count": 1,
-            "fields": {
-              "result": {
-                "encoding": "signed",
-                "eq": -117
-              },
-              "reason": "ntfs_dirty"
-            }
-          },
-          {
-            "where": {
-              "event": "DATA",
-              "case": "refusal"
-            },
-            "exact_count": 1,
-            "fields": {
-              "result": {
-                "encoding": "signed",
-                "eq": -117
-              },
-              "reason": "ntfs_dirty",
-              "letter_absent": {
-                "eq": 1
-              },
-              "writes": {
-                "eq": 0
-              }
-            }
-          }
+          {"where": {"event": "DATA", "case": "device"}, "exact_count": 1, "fields": {"result": {"encoding": "signed", "eq": 0}, "reason": "ntfs"}},
+          {"where": {"event": "DATA", "case": "cycle", "cycle": "1"}, "exact_count": 1, "fields": {"result": {"encoding": "signed", "eq": 0}}},
+          {"where": {"event": "DATA", "case": "cycle", "cycle": "2"}, "exact_count": 1, "fields": {"result": {"encoding": "signed", "eq": 0}}},
+          {"where": {"event": "DATA", "case": "mutation", "operation": "0"}, "exact_count": 1, "fields": {"result": {"encoding": "signed", "eq": -30}}},
+          {"where": {"event": "DATA", "case": "mutation", "operation": "1"}, "exact_count": 1, "fields": {"result": {"encoding": "signed", "eq": -30}}},
+          {"where": {"event": "DATA", "case": "mutation", "operation": "2"}, "exact_count": 1, "fields": {"result": {"encoding": "signed", "eq": -30}}},
+          {"where": {"event": "DATA", "case": "mutation", "operation": "3"}, "exact_count": 1, "fields": {"result": {"encoding": "signed", "eq": -30}}},
+          {"where": {"event": "DATA", "case": "mutation", "operation": "4"}, "exact_count": 1, "fields": {"result": {"encoding": "signed", "eq": -30}}},
+          {"where": {"event": "DATA", "case": "mutation", "operation": "5"}, "exact_count": 1, "fields": {"result": {"encoding": "signed", "eq": -30}}},
+          {"where": {"event": "DATA", "case": "mutation", "operation": "6"}, "exact_count": 1, "fields": {"result": {"encoding": "signed", "eq": -30}}},
+          {"where": {"event": "DATA", "case": "mutation", "operation": "7"}, "exact_count": 1, "fields": {"result": {"encoding": "signed", "eq": -30}}},
+          {"where": {"event": "DATA", "case": "mutation", "operation": "8"}, "exact_count": 1, "fields": {"result": {"encoding": "signed", "eq": -30}}},
+          {"where": {"event": "DATA", "case": "mutation", "operation": "9"}, "exact_count": 1, "fields": {"result": {"encoding": "signed", "eq": -30}}},
+          {"where": {"event": "DATA", "case": "mutation", "operation": "10"}, "exact_count": 1, "fields": {"result": {"encoding": "signed", "eq": -30}}},
+          {"where": {"event": "DATA", "case": "ads"}, "exact_count": 1, "fields": {"result": {"encoding": "signed", "eq": -95}}},
+          {"where": {"event": "DATA", "case": "peer", "stage": "before"}, "exact_count": 1, "fields": {"result": {"eq": 1}}},
+          {"where": {"event": "DATA", "case": "peer", "stage": "after"}, "exact_count": 1, "fields": {"result": {"eq": 1}}},
+          {"where": {"event": "DATA", "case": "unmount", "stage": "busy"}, "exact_count": 1, "fields": {"result": {"encoding": "signed", "eq": -16}, "mounted": {"eq": 1}}},
+          {"where": {"event": "DATA", "case": "unmount", "stage": "clean"}, "exact_count": 1, "fields": {"result": {"encoding": "signed", "eq": 0}, "letter_absent": {"eq": 1}, "cwd_expired": {"eq": 1}}},
+          {"where": {"event": "DATA", "case": "gone"}, "exact_count": 1, "fields": {"stat": {"encoding": "signed", "le": -1}}},
+          {"where": {"event": "DATA", "case": "remount"}, "exact_count": 1, "fields": {"result": {"encoding": "signed", "ge": 3}, "reason": "ntfs"}},
+          {"where": {"event": "DATA", "case": "counters"}, "exact_count": 1, "fields": {"view_writes": {"eq": 0}, "view_flushes": {"eq": 0}, "cache_writes": {"eq": 0}}}
         ]
       }
     },
@@ -4822,6 +4815,11 @@
       "timeout": 120,
       "fixtures": [
         {
+          "generator": "mkfs.fat",
+          "fat_type": 16,
+          "seed": 1
+        },
+        {
           "generator": "mkntfs",
           "kind": "dirty",
           "seed": 1
@@ -4830,40 +4828,28 @@
       "expected": {
         "terminal": "END",
         "predicates": [
-          {
-            "where": {
-              "event": "DATA",
-              "case": "device"
-            },
-            "exact_count": 1,
-            "fields": {
-              "result": {
-                "encoding": "signed",
-                "eq": -117
-              },
-              "reason": "ntfs_dirty"
-            }
-          },
-          {
-            "where": {
-              "event": "DATA",
-              "case": "refusal"
-            },
-            "exact_count": 1,
-            "fields": {
-              "result": {
-                "encoding": "signed",
-                "eq": -117
-              },
-              "reason": "ntfs_dirty",
-              "letter_absent": {
-                "eq": 1
-              },
-              "writes": {
-                "eq": 0
-              }
-            }
-          }
+          {"where": {"event": "DATA", "case": "device"}, "exact_count": 1, "fields": {"result": {"encoding": "signed", "eq": 0}, "reason": "ntfs"}},
+          {"where": {"event": "DATA", "case": "cycle", "cycle": "1"}, "exact_count": 1, "fields": {"result": {"encoding": "signed", "eq": 0}}},
+          {"where": {"event": "DATA", "case": "cycle", "cycle": "2"}, "exact_count": 1, "fields": {"result": {"encoding": "signed", "eq": 0}}},
+          {"where": {"event": "DATA", "case": "mutation", "operation": "0"}, "exact_count": 1, "fields": {"result": {"encoding": "signed", "eq": -30}}},
+          {"where": {"event": "DATA", "case": "mutation", "operation": "1"}, "exact_count": 1, "fields": {"result": {"encoding": "signed", "eq": -30}}},
+          {"where": {"event": "DATA", "case": "mutation", "operation": "2"}, "exact_count": 1, "fields": {"result": {"encoding": "signed", "eq": -30}}},
+          {"where": {"event": "DATA", "case": "mutation", "operation": "3"}, "exact_count": 1, "fields": {"result": {"encoding": "signed", "eq": -30}}},
+          {"where": {"event": "DATA", "case": "mutation", "operation": "4"}, "exact_count": 1, "fields": {"result": {"encoding": "signed", "eq": -30}}},
+          {"where": {"event": "DATA", "case": "mutation", "operation": "5"}, "exact_count": 1, "fields": {"result": {"encoding": "signed", "eq": -30}}},
+          {"where": {"event": "DATA", "case": "mutation", "operation": "6"}, "exact_count": 1, "fields": {"result": {"encoding": "signed", "eq": -30}}},
+          {"where": {"event": "DATA", "case": "mutation", "operation": "7"}, "exact_count": 1, "fields": {"result": {"encoding": "signed", "eq": -30}}},
+          {"where": {"event": "DATA", "case": "mutation", "operation": "8"}, "exact_count": 1, "fields": {"result": {"encoding": "signed", "eq": -30}}},
+          {"where": {"event": "DATA", "case": "mutation", "operation": "9"}, "exact_count": 1, "fields": {"result": {"encoding": "signed", "eq": -30}}},
+          {"where": {"event": "DATA", "case": "mutation", "operation": "10"}, "exact_count": 1, "fields": {"result": {"encoding": "signed", "eq": -30}}},
+          {"where": {"event": "DATA", "case": "ads"}, "exact_count": 1, "fields": {"result": {"encoding": "signed", "eq": -95}}},
+          {"where": {"event": "DATA", "case": "peer", "stage": "before"}, "exact_count": 1, "fields": {"result": {"eq": 1}}},
+          {"where": {"event": "DATA", "case": "peer", "stage": "after"}, "exact_count": 1, "fields": {"result": {"eq": 1}}},
+          {"where": {"event": "DATA", "case": "unmount", "stage": "busy"}, "exact_count": 1, "fields": {"result": {"encoding": "signed", "eq": -16}, "mounted": {"eq": 1}}},
+          {"where": {"event": "DATA", "case": "unmount", "stage": "clean"}, "exact_count": 1, "fields": {"result": {"encoding": "signed", "eq": 0}, "letter_absent": {"eq": 1}, "cwd_expired": {"eq": 1}}},
+          {"where": {"event": "DATA", "case": "gone"}, "exact_count": 1, "fields": {"stat": {"encoding": "signed", "le": -1}}},
+          {"where": {"event": "DATA", "case": "remount"}, "exact_count": 1, "fields": {"result": {"encoding": "signed", "ge": 3}, "reason": "ntfs"}},
+          {"where": {"event": "DATA", "case": "counters"}, "exact_count": 1, "fields": {"view_writes": {"eq": 0}, "view_flushes": {"eq": 0}, "cache_writes": {"eq": 0}}}
         ]
       }
     },

@@ -14,7 +14,7 @@
 #include <stdint.h>
 #include <string.h>
 
-#define SETUP_INF_VERSION 1
+#define SETUP_INF_VERSION 2   /* sec-user-02: Version=1 and Version=2 parse; neither carries passwords */
 #define SETUP_INF_MAX_BYTES 16384u   /* larger files stop with file_too_large */
 
 /* Components (the catalogue bitmask of struct setup_plan.components). The
@@ -42,7 +42,9 @@ enum setup_net_mode { SETUP_NET_UNSET, SETUP_NET_DHCP, SETUP_NET_STATIC, SETUP_N
 enum setup_clock { SETUP_CLOCK_LOCAL, SETUP_CLOCK_UTC };
 enum setup_restart { SETUP_RESTART_EJECT, SETUP_RESTART_WAIT, SETUP_RESTART_FORCE };
 
-#define SETUP_USER_MAX 32u        /* characters (UTF-8 Latin-1 range) */
+/* Account name: 1-31 ASCII letters, digits, '_' or '-', not a reserved name
+ * (user-security-contract.md 3.1; supersedes the 32-character label). */
+#define SETUP_USER_MAX 31u
 #define SETUP_COMPUTER_MAX 15u    /* NetBIOS limit; RFC 1123 label characters */
 #define SETUP_TZ_MIN (-720)       /* minutes east of UTC */
 #define SETUP_TZ_MAX 840
@@ -98,6 +100,11 @@ struct setup_answers {
      * configuration step (\SYSTEM\HARDWARE.TXT and \SYSTEM\SETUP.LOG). */
     const char *hardware_report; size_t hardware_report_length;
     const struct setup_log *log;
+    /* sec-user-02: the section 3.6 Setup provisioning seed (CIUKISEE, origin 2,
+     * salted verifiers only, never plaintext), owned by the application and
+     * staged by the configuration step with its bootstrap.state record. No
+     * answer-file key can supply it: unattended mode stops before any write. */
+    const uint8_t *account_seed; size_t account_seed_length;
 };
 
 /* Stop status ids ([setup] status=stopped reason=<id> key=<k>). */
@@ -136,7 +143,9 @@ struct setup_inf_disk { uint8_t present, occupied, installed; char model[41], se
 int setup_inf_disk_rules(const struct setup_answers *, const struct setup_inf_disk disks[4],
                          const char *release, struct setup_inf_status *);
 /* Unattended completeness in page order: 0, or -1 with missing_answer and
- * the first key that has no answer. */
+ * the first key that has no answer. After the INF keys, the two passwords
+ * (key "UserPassword") are required; no secure answer transport exists, so a
+ * SETUP.INF run always stops here before any disk write (contract 5.2). */
 int setup_inf_complete(const struct setup_answers *, struct setup_inf_status *);
 /* Validation helpers shared with the interactive pages. */
 int setup_valid_user(const char *);

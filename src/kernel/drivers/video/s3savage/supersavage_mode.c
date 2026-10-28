@@ -144,12 +144,11 @@ int supersavage_mode_save(struct supersavage_mode *s, const struct supersavage_m
     for (unsigned i=0;i<ARRAY_SIZE(cr_regs);i++) s->cr[cr_regs[i].index]=rd(b,0x3D4,cr_regs[i].index);
     s->cr[0x40]=cr40;
     for (unsigned i=0;i<ARRAY_SIZE(sr_regs);i++) s->sr[sr_regs[i].index]=rd(b,0x3C4,sr_regs[i].index);
-    unsigned panel_x=(s->sr[0x61]+((s->sr[0x66]&2)<<7)+1)*8;
-    unsigned panel_y=s->sr[0x69]+((s->sr[0x6E]&0x70)<<4)+1;
-    /* No native power-on, TV or two independent display pipelines recipe.
-     * Restoring the same active panel is the supported firmware contract. */
-    if (!(s->misc&1) || !(s->cr[0x6B]&2) || (s->cr[0x6B]&0xA4) ||
-        panel_x<640 || panel_x>1600 || panel_y<480 || panel_y>1200 ||
+    /* X.Org SavageGetPanelInfo: CR6B bits 0/1 are active CRT/LCD.
+     * The T23 panel's clocks/expansion/IGA routing are not qualified by
+     * our native readback. Refuse before blanking or touching VRAM; the
+     * display service releases this provider and uses the video BIOS. */
+    if (!(s->misc&1) || (s->cr[0x6B]&0xA7)!=1 ||
         (s->cr[0x66]&2)) {
         cr(b,0x40,cr40); locks(s,b); return -EOPNOTSUPP;
     }

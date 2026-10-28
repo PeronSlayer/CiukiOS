@@ -2,6 +2,7 @@
  * independent desktop-frame watchdog. See docs/design/f1-acceptance.md.
  * SPDX-License-Identifier: GPL-2.0-only */
 #include <ciuki/kernel.h>
+#include <ciuki/security_device.h>
 #include <ciuki/cpu.h>
 #include <ciuki/display.h>
 #include <ciuki/biosvm.h>
@@ -11,13 +12,20 @@
 #include <ciuki/blackbox.h>
 #include <ciuki/display_driver.h>
 #include <ciuki/edid.h>
+#include <ciuki/dos_video_modes.h>
+#include <ciuki/selftest.h>
 static const struct display_mode_provider *fullscreen_provider;
+static const struct display_mode_provider *present_provider;
+static struct fb_device present_previous;
+static void *fullscreen_window;
+static struct display_lfb fullscreen_lfb;
 
 static bool switching, awaiting_frame;
 static bool awaiting_restored_frame;
 static bool fullscreen_display;
 static bool fullscreen_native;
 static bool awaiting_native_frame;
+static bool awaiting_present_frame;
 static bool fullscreen_return_timed;
 static bool fullscreen_log_failed;
 static bool fullscreen_recovering;
@@ -31,6 +39,16 @@ extern bool display_present_active(void) __attribute__((weak));
 extern int display_present_revoke_kernel(void) __attribute__((weak));
 extern void display_present_poll(void) __attribute__((weak));
 static uint32_t changes;
+/* fx-selftest observations: full desktop frames, last refusal, provider. */
+static uint32_t desktop_frames;
+static int fullscreen_refusal;
+static unsigned fullscreen_last_provider;
+void display_selftest_info(struct display_selftest_info *out)
+{
+    uint32_t flags=irq_save();
+    *out=(struct display_selftest_info){desktop_frames,awaiting_frame,fullscreen_refusal,fullscreen_last_provider};
+    irq_restore(flags);
+}
 static uint64_t frame_deadline;
 static struct fb_device previous;
 static struct task *watchdog;
@@ -120,11 +138,16 @@ void display_fullscreen_entry_request(void)
 
 uint32_t display_change_counter(void) { return changes; }
 static void changed(void) { if (!++changes) ++changes; }
+/* sec-k07: a secure console domain switch; both owners repaint on the
+ * changed counter they read from their display grant (no I/O, IRQ safe). */
+void display_console_changed(void) { changed(); }
+#pragma weak grants_console_trusted
 void display_present_returned(void)
 {
     changed();
     previous=*fbdev_get();
     awaiting_frame=true; awaiting_restored_frame=true; awaiting_native_frame=false;
+    awaiting_present_frame=true;
     frame_deadline=deadline_after_ms(10000);
 }
 
@@ -207,15 +230,23 @@ static void log_mode(uint16_t mode, int result)
 
 static int refuse(uint16_t mode, int e) { log_mode(mode, e); return e; }
 
+static int mode_failure(uint16_t id, const char *stage, int error)
+{
+    klog("[display] mode_failure mode=%u stage=%s error=%d",id,stage,error);
+    return -EIO;
+}
 static int apply(uint16_t id, struct fb_device *out)
 {
     uint8_t info[256];
     int e = biosvm_video_switch(id, info);
-    if (e) return -EIO;
-    if (fbdev_mode_decode(id, info, out)) return -EIO;
+    if (e) return mode_failure(id,"bios-switch",e);
+    e=fbdev_mode_decode(id, info, out);
+    if (e) return mode_failure(id,"mode-decode",e);
     const struct ciuki_boot_display_mode *m = listed(id);
-    if (!m || m->width != out->width || m->height != out->height || m->bpp != out->bpp) return -EIO;
-    return fbdev_change_commit(out) ? -EIO : 0;
+    if (!m || m->width != out->width || m->height != out->height || m->bpp != out->bpp)
+        return mode_failure(id,"mode-inventory",-EINVAL);
+    e=fbdev_change_commit(out);
+    return e ? mode_failure(id,"framebuffer-commit",e) : 0;
 }
 
 static int restore(void)
@@ -240,8 +271,10 @@ static int check_restore(void)
 }
 int display_check_begin(uint16_t id)
 {
-    if (!(g_boot.flags & CBI_F_HW_CHECK) || grants_display_pid()) return -EPERM;
-    if (check_display || switching || fullscreen_display || awaiting_frame) return -EBUSY;
+    /* H page and the T self-test (before its desktop) only. */
+    if (!(g_boot.flags & (CBI_F_HW_CHECK | CBI_F_SELF_TEST)) || grants_display_pid()) return -EPERM;
+    if (grants_console_trusted && grants_console_trusted()) return -EPERM; /* sec-k07: trusted UI owns scanout */
+    if (check_display || switching || fullscreen_display || present_provider || awaiting_frame) return -EBUSY;
     if (!listed(id) || !listed(fbdev_get()->mode_id)) return -EOPNOTSUPP;
     if (!fbdev_get()->present) return -ENODEV;
     if (display_worker_start()) return -ENOMEM;
@@ -324,8 +357,12 @@ int display_check_end(void)
     return check_result;
 }
 
+extern void display_driver_desktop_presented(uint32_t) __attribute__((weak));
 void display_frame_complete(uint32_t generation, bool full_frame)
 {
+    if (full_frame && generation==fbdev_get()->generation) desktop_frames++;
+    if (full_frame && generation==fbdev_get()->generation && display_driver_desktop_presented)
+        display_driver_desktop_presented(generation);
     if (!switching && awaiting_frame && (full_frame || awaiting_restored_frame) &&
         generation == fbdev_get()->generation && !deadline_passed(frame_deadline)) {
         if (awaiting_native_frame && fullscreen_return_timed)
@@ -334,6 +371,7 @@ void display_frame_complete(uint32_t generation, bool full_frame)
                 (unsigned)(g_ticks-fullscreen_return_tick>fullscreen_return_budget));
         awaiting_frame = false;
         awaiting_native_frame = false;
+        awaiting_present_frame = false;
         awaiting_restored_frame = false;
     }
 }
@@ -380,11 +418,13 @@ void display_watchdog_poll(void)
     switching = true;
     awaiting_frame = false;
     awaiting_restored_frame = false;
-    if (awaiting_native_frame) {
-        /* The native provider already restored and verified scanout. A
-         * missing desktop repaint cannot authorize a quarantined BIOS call. */
-        klog("[display] native_driver desktop_frame_timeout");
+    if (awaiting_native_frame || awaiting_present_frame) {
+        /* Native and present-lease returns already verified scanout. A
+         * missing desktop repaint cannot authorize another BIOS mode set. */
+        if (awaiting_present_frame) klog("[display] present_lease desktop_frame_timeout");
+        else klog("[display] native_driver desktop_frame_timeout");
         awaiting_native_frame=false;
+        awaiting_present_frame=false;
     } else if (!fbdev_change_begin()) { restore(); fbdev_change_end(); }
     switching = false;
 }
@@ -436,29 +476,98 @@ int display_set_for_present(struct process *p, uint16_t id, bool delegated)
     if (switching || fullscreen_display || check_display || awaiting_frame || grants_display_busy()) return refuse(id, -EBUSY);
     if (!fbdev_get()->present) return refuse(id, -ENODEV);
     if (!listed(fbdev_get()->mode_id)) return refuse(id, -EOPNOTSUPP); /* cannot promise restore */
-    if (id == fbdev_get()->mode_id) return refuse(id, 0);
+    const struct fb_device *f=fbdev_get();
+    /* Firmware mode numbers can alias one scanout layout. In particular a
+     * lease of the boot layout must work even when firmware is unavailable. */
+    if (m->width==f->width && m->height==f->height && m->bpp==f->bpp && m->pitch==f->pitch)
+        return refuse(id, 0);
+    const struct display_mode_provider *provider=present_provider;
+    bool returning=provider!=0;
+    if (returning && id!=present_previous.mode_id) return refuse(id,-EBUSY);
+    if (!returning && delegated) {
+        int binding=display_driver_mode_bind(f,&provider);
+        if (binding) return refuse(id,binding);
+        if (provider && (!provider->publish || (m->bpp!=16 && m->bpp!=32) || !provider->supported(f,id)))
+            provider=0;
+        if (provider) {
+            int ready=provider->prepare(f,id);
+            if (ready==-EOPNOTSUPP) provider=0; /* clean software refusal */
+            else if (ready) return refuse(id,ready);
+        }
+    }
     if (display_worker_start()) return refuse(id, -ENOMEM);
+    /* fx-q3vise: which path set the mode, in one durable record before the
+     * mode record. biosvm_video_switch (INT 10h 4F02/4F01/4F03) records
+     * nothing when it succeeds, and the [biosvm] step=fullscreen records
+     * belong to the DOS full screen's VBE state transaction only, so a panel
+     * lease set by the video BIOS (T23 6c3b7800: mode 112h, which no native
+     * provider implements) looked like a lease without a BIOS call. */
+    const char *path = !provider ? "firmware-vbe" : returning ? "native-return" : "native-driver";
     switching = true;
     previous = *fbdev_get();
-    int e = biosvm_video_prepare();
-    if (e) { switching = false; return refuse(id, -EIO); }
+    int e = provider ? 0 : biosvm_video_prepare();
+    if (e) { switching = false; klog("[display] mode_path mode=%u path=%s result=%d",id,path,-EIO); return refuse(id, mode_failure(id,"bios-prepare",e)); }
     if (grants_display_busy()) { switching = false; return refuse(id, -EBUSY); }
     e = fbdev_change_begin();
+    if (e) mode_failure(id,"framebuffer-begin",e);
     if (!e) {
         struct fb_device next;
-        e = apply(id, &next);
-        if (e) restore();
-        else {
+        if (!provider) {
+            e=apply(id,&next);
+            if (e) restore();
+        } else if (returning) {
+            e=provider->end();
+            if (!e) e=fbdev_change_commit(&present_previous);
+            if (e && !biosvm_video_prepare()) { path="native-return-firmware-vbe"; e=apply(id,&next); }
+            provider->complete(!e);
+            if (!e) present_provider=0;
+        } else {
+            e=provider->begin(id);
+            if (e==-EOPNOTSUPP) {
+                /* The provider refused this head (a flat panel: fx-biosvm
+                 * amendment 1) before touching scanout: the video BIOS sets it. */
+                path="native-refused-firmware-vbe";
+                int released=provider->end();
+                if (!released) {
+                    provider->complete(true);
+                    provider=0;
+                    e=biosvm_video_prepare();
+                    if (!e) e=apply(id,&next);
+                    if (e) restore();
+                } else e=released;
+            }
+            if (!e && provider) e=provider->publish(&next);
+            if (!e && provider && (next.width!=m->width || next.height!=m->height ||
+                next.bpp!=m->bpp || next.pitch!=m->pitch)) e=-EIO;
+            if (!e && provider) e=fbdev_change_commit(&next);
+            if (!e && provider) {
+                present_previous=previous;
+                present_provider=provider;
+            } else if (e && provider) {
+                int recovered=provider->end();
+                if (!recovered) recovered=fbdev_change_commit(&previous);
+                if (recovered && !biosvm_video_prepare()) recovered=restore();
+                provider->complete(!recovered);
+                if (recovered) {
+                    present_previous=previous;
+                    present_provider=provider; /* retain recovery ownership */
+                    e=recovered;
+                }
+            }
+        }
+        if (!e) {
             changed();
             awaiting_frame = !delegated;
             awaiting_restored_frame = false;
             awaiting_native_frame = false;
+            awaiting_present_frame = false;
             frame_deadline = deadline_after_ms(10000);
         }
         fbdev_change_end();
     }
     switching = false;
     if (e) e = -EIO;
+    klog("[display] mode_path mode=%u path=%s result=%d",id,path,e);
     log_mode(id, e);
     return e;
 }
@@ -489,7 +598,10 @@ static int screen_control(struct process *p, struct ciuki_screen_control *q)
 {
     if (q->version!=CIUKI_SCREEN_VERSION || q->size!=sizeof(*q) ||
         (q->flags&~CIUKI_SCREEN_PERSIST)) return -EINVAL;
-    bool desktop=p && p->pid==supervisor_desktop_pid();
+    bool trusted=security_device_system(p) && security_role(p)==CIUKI_SECURITY_ROLE_LOGON_UI;
+    bool desktop=security_device_desktop(p) || trusted;
+    if (!trusted && (!security_device_session(p) || (!desktop &&
+        !security_same(p,proc_find(supervisor_desktop_pid()))))) return -EPERM;
     if ((q->action==CIUKI_SCREEN_CONFIG || q->action==CIUKI_SCREEN_STATUS) && !desktop) return -EPERM;
     uint32_t action=q->action;
     bool inhibited=fullscreen_display || (display_present_active && display_present_active());
@@ -601,26 +713,79 @@ int32_t display_syscall(struct trap_frame *tf)
     return e ? e : copy_to_user(tf->ecx, &out, sizeof(out));
 }
 
-bool display_fullscreen_active(void) { return fullscreen_display; }
+bool display_fullscreen_active(void) { return fullscreen_display || present_provider; }
 bool display_fullscreen_supported(uint16_t mode)
 {
     const struct display_mode_provider *p = display_driver_modes(fbdev_get());
-    return p && p->supported(fbdev_get(),mode);
+    return (p && p->supported(fbdev_get(),mode)) ||
+        (dos_video_mode(mode) && fbdev_get()->present && fbdev_get()->size>=DOS_VBE_BYTES);
 }
 int display_fullscreen_write(uint32_t offset,const void *data,uint32_t bytes)
 {
-    return fullscreen_display && fullscreen_native && !switching ?
-        fullscreen_provider->write(offset,data,bytes) : -EIO;
+    if (!fullscreen_display || switching) return -EIO;
+    if (fullscreen_native) return fullscreen_provider->write(offset,data,bytes);
+    if (!fullscreen_lfb.mapped) return -EIO;
+    if (!data || offset>fullscreen_lfb.bytes || bytes>fullscreen_lfb.bytes-offset) return -EINVAL;
+    const uint8_t *src=data;
+    for (uint32_t i=0;i<bytes;i++) fullscreen_lfb.mapped[offset+i]=src[i];
+    return 0;
 }
 int display_fullscreen_lfb(struct display_lfb *out)
 {
     if (!out) return -EINVAL;
     memset(out,0,sizeof(*out));
-    return fullscreen_display && fullscreen_native && !switching &&
-        fullscreen_provider && fullscreen_provider->lfb ? fullscreen_provider->lfb(out) : -EOPNOTSUPP;
+    if (!fullscreen_display || switching) return -EOPNOTSUPP;
+    if (fullscreen_native && fullscreen_provider && fullscreen_provider->lfb) return fullscreen_provider->lfb(out);
+    if (!fullscreen_lfb.mapped) return -EOPNOTSUPP;
+    *out=fullscreen_lfb;
+    return 0;
+}
+unsigned display_fullscreen_dac_bits(void)
+{
+    if (!fullscreen_display || switching) return 0;
+    /* VBE mode setting restores six-bit precision (VBE 2.0, 4.2/4.11).
+     * Native providers describe the precision their packed setup verifies. */
+    return fullscreen_native ? fullscreen_provider->indexed_dac_bits : 6;
+}
+static int fullscreen_map(uint16_t mode,const uint8_t info[256])
+{
+    const struct dos_video_mode *m=dos_video_mode(mode);
+    unsigned attributes=(unsigned)info[0]|(unsigned)info[1]<<8;
+    unsigned width=(unsigned)info[18]|(unsigned)info[19]<<8;
+    unsigned height=(unsigned)info[20]|(unsigned)info[21]<<8;
+    unsigned pitch_at=g_boot.display.vbe_version>=0x300 ? 50 : 16;
+    unsigned pitch=(unsigned)info[pitch_at]|(unsigned)info[pitch_at+1]<<8;
+    uint32_t physical=(uint32_t)info[40]|(uint32_t)info[41]<<8|(uint32_t)info[42]<<16|(uint32_t)info[43]<<24;
+    /* Borrow only the stopped desktop's exact aperture. Firmware pointers
+     * never authorize RAM or another device, and the guest layout is fixed. */
+    const struct resource *r=registry_get(previous.handle);
+    if (!m || (attributes&0x91)!=0x91 || info[24]!=1 || info[25]!=m->bpp ||
+        info[27]!=(m->bpp==8 ? 4 : 6) || width!=m->width || height!=m->height || pitch!=m->pitch ||
+        physical!=previous.phys || (physical&(PAGE_SIZE-1)) || previous.size<DOS_VBE_BYTES ||
+        !r || r->generation!=previous.generation || r->state!=RS_QUIESCING || r->type!=RES_MMIO ||
+        r->start!=physical || r->end-r->start<DOS_VBE_BYTES) return -EOPNOTSUPP;
+    if (m->bpp==16) {
+        unsigned masks=g_boot.display.vbe_version>=0x300 ? 54 : 31;
+        if (info[masks]!=5 || info[masks+1]!=11 || info[masks+2]!=6 ||
+            info[masks+3]!=5 || info[masks+4]!=5 || info[masks+5]!=0 || info[masks+6]!=0)
+            return -EOPNOTSUPP;
+    }
+    volatile uint8_t *mapped=vmm_replace_framebuffer(fullscreen_window,DOS_VBE_BYTES,physical,DOS_VBE_BYTES);
+    if (!mapped) return -ENOMEM;
+    uint32_t cache=0;
+    if (!vmm_cache_alias_ok(physical,DOS_VBE_BYTES,cache)) {
+        cache=PTE_PCD|PTE_PWT;
+        if (!vmm_cache_alias_ok(physical,DOS_VBE_BYTES,cache)) {
+            vmm_revoke_mmio((void *)mapped,DOS_VBE_BYTES);
+            return -EIO;
+        }
+    }
+    fullscreen_lfb=(struct display_lfb){physical,DOS_VBE_BYTES,pitch,m->width,m->height,m->bpp,cache,mapped};
+    return 0;
 }
 static int fullscreen_windowed(int error)
 {
+    fullscreen_refusal=error;
     klog("[display] fullscreen=0 continuation=windowed error=%d",error);
     return DISPLAY_FULLSCREEN_WINDOWED;
 }
@@ -643,7 +808,7 @@ int display_fullscreen_begin(uint16_t mode)
         klog("[display] fullscreen_refused reason=%s owner_pid=%u mode=%u",why,grants_display_pid(),mode);
         return fullscreen_windowed(-EPERM);
     }
-    if (switching || fullscreen_display || (awaiting_frame && !reclaimed) || grants_display_busy()) {
+    if (switching || fullscreen_display || present_provider || (awaiting_frame && !reclaimed) || grants_display_busy()) {
         klog("[display] fullscreen_refused reason=busy switching=%u active=%u awaiting_frame=%u presenting=%u",
             (unsigned)switching,(unsigned)fullscreen_display,(unsigned)awaiting_frame,(unsigned)grants_display_busy());
         return fullscreen_windowed(-EBUSY);
@@ -659,14 +824,19 @@ int display_fullscreen_begin(uint16_t mode)
     bool native = provider != 0;
     if (native) {
         int e = provider->prepare(fbdev_get(),mode);
-        if (e) {
+        if (e==-EOPNOTSUPP) { provider=0; native=false; }
+        else if (e) {
             klog("[display] fullscreen_refused reason=native-recovery-unavailable mode=%u error=%d",mode,e);
             display_fullscreen_checkpoint("refused",e);
             return fullscreen_windowed(e);
         }
     }
+    if (dos_video_mode(mode) && !fullscreen_window) {
+        fullscreen_window=vmm_reserve_mmio(DOS_VBE_BYTES);
+        if (!fullscreen_window) return fullscreen_windowed(-ENOMEM);
+    }
     if (display_worker_start()) return fullscreen_windowed(-ENOMEM);
-    if (!native && mode>0x7F) return fullscreen_windowed(-EOPNOTSUPP);
+    if (!native && mode>0x7F && !dos_video_mode(mode)) return fullscreen_windowed(-EOPNOTSUPP);
     switching=true;
     previous=*fbdev_get();
     int e=native ? 0 : biosvm_video_prepare();
@@ -684,8 +854,23 @@ int display_fullscreen_begin(uint16_t mode)
     fullscreen_provider=provider;
     fullscreen_return_budget=NATIVE_RETURN_MS;
     fullscreen_return_timed=false;
-    e=native ? fullscreen_provider->begin(mode) : biosvm_video_fullscreen_begin((uint8_t)mode);
+    if (native) {
+        e=provider->begin(mode);
+        if (e==-EOPNOTSUPP && !provider->end()) {
+            provider->complete(true);
+            fullscreen_provider=provider=0;
+            fullscreen_native=native=false;
+            e=0;
+        }
+    }
+    if (!native) {
+        uint8_t info[256];
+        e=biosvm_video_fullscreen_begin(mode,info);
+        if (!e && dos_video_mode(mode)) e=fullscreen_map(mode,info);
+    }
     fullscreen_display=true; /* also brackets rollback of a partially set mode */
+    fullscreen_last_provider=native ? 1u : 2u;
+    if (!e) fullscreen_refusal=0;
     switching=false;
     if (e) {
         if (native && e==-EOPNOTSUPP)
@@ -693,7 +878,7 @@ int display_fullscreen_begin(uint16_t mode)
         int restored=display_fullscreen_end();
         return restored ? restored : fullscreen_windowed(e);
     }
-    klog("[display] fullscreen=1 mode=%u desktop_mode=%u provider=%s",mode,previous.mode_id,native ? "native-driver" : "firmware-vga");
+    klog("[display] fullscreen=1 mode=%u desktop_mode=%u provider=%s",mode,previous.mode_id,native ? "native-driver" : "firmware-video");
     return 0;
 }
 int display_fullscreen_end(void)
@@ -704,6 +889,10 @@ int display_fullscreen_end(void)
     display_fullscreen_return_request();
     /* Logging failure must never prevent an already needed recovery. */
     display_fullscreen_checkpoint("desktop-restore",0);
+    if (fullscreen_lfb.mapped) {
+        vmm_revoke_mmio((void *)fullscreen_lfb.mapped,fullscreen_lfb.bytes);
+        memset(&fullscreen_lfb,0,sizeof(fullscreen_lfb));
+    }
     uint8_t info[256]; struct fb_device next;
     int e, native_result=0, fallback_result=0;
     bool fallback=false;

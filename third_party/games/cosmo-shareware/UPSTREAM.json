@@ -1,0 +1,16 @@
+{
+  "project": "Cosmo's Cosmic Adventure (original DOS shareware)",
+  "authors": "Apogee",
+  "archive": "1cosmo.zip",
+  "sources": [
+    "https://www.gamers.org/pub/mirrors/ftp.3drealms.com/share/1cosmo.zip"
+  ],
+  "sha256": "lead-pins",
+  "size": null,
+  "status": "lead-pins",
+  "license": "Original shareware package only. Exact package terms and licence member hashes await lead download/read-back; no bundling grant asserted.",
+  "license_files": [],
+  "redistribution": "test-media only; package review pending",
+  "game_data": "No retail, registered or abandonware payload. Never commit game bytes.",
+  "qualification": "Pin the download, inspect original installer and manual, record exact licence clauses and installed tree before running."
+}
