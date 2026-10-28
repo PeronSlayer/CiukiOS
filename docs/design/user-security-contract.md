@@ -674,6 +674,20 @@ Durable state machine, with barriers after each transition:
 | DONE or success already acknowledged | Preserve G, owner receipt and password changes; clean only proven obsolete staging/backups. |
 | ABORTED | Old database remains authoritative, all reservations retired; STATUS stays ABORTED within the retained window, then CHECKPOINTED. Any visible G is contradictory and closes recovery. |
 
+**First-boot uid recovery (sec-sysvc amendment, lead decision 2026-10-27).**
+The watermarks still never decrease, but a uid whose **only** OWNER
+reservations were aborted before **any** batch committed may be reserved again:
+OWNER admits a CREATE below `uid_high` only while its complete history proves
+nothing was ever published (no committed owner generation or account batch, no
+checkpoint floor or candidate, no profile record, no batch in flight, every
+retained receipt ABORTED) and at least one aborted receipt named that uid. A
+power cut between OWNER's durable RESERVE and ACCOUNT's intent write on a first
+boot therefore no longer leaves a fresh installation closed: the next boot
+aborts the orphan as the first table row requires, and the ready/Setup recipe
+is published at the next generation with the same uid 1000. Every other
+retired uid (never reserved, or any uid once a batch committed) stays retired.
+Evidence: H15 (power cut at that write), H02 (`docs/validation/sec-sysvc.md`).
+
 Deletion/disable/type change of an active account returns EBUSY before reservation.
 The 18-account and 32-profile bounds are independent; retained deleted roots
 consume profile capacity. SESSION_CREATE accepts only committed owner descriptors,

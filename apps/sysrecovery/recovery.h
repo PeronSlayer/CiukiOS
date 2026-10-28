@@ -7,10 +7,62 @@
  * fixture directory on the host). Functions return 0 or a negative errno. */
 #ifndef CIUKI_SYSRECOVERY_H
 #define CIUKI_SYSRECOVERY_H
+#include <errno.h>
+#include <stdio.h>
 #include <ciuki/abi.h>
 #include <stdbool.h>
 #include <stddef.h>
 #include <stdint.h>
+#if defined(__CIUKIOS__) && !defined(__linux__)
+#include <ciuki/recovery.h>
+#endif
+
+/* ---- sec-sysvc: SYSTEM services (K-Q4) ------------------------------------
+ * C:\SYSTEM\LOGS and BOOT.CFG are SYSTEM-only on a managed system volume. An
+ * administrator appends the maintenance reports (SCANDISK.LOG, SFC.LOG)
+ * through the SYSTEM log service and saves BOOT.CFG through the SYSTEM
+ * boot-configuration service (ciuki/recovery.h). Host fixtures (root not ""),
+ * an older kernel (ENOSYS) and Setup media without a managed system volume
+ * (ENODEV) use the files directly. */
+#define SR_LOG_LIMIT (256u * 1024u)   /* a report log starts over past this */
+static inline int sr_log_append(const char *root, const char *name, const char *text, size_t n)
+{
+#if defined(__CIUKIOS__) && !defined(__linux__)
+    if (!root || !*root) {
+        int e = 0;
+        for (size_t at = 0; !e && at < n;) {
+            size_t part = n - at > CIUKI_SYSTEM_LOG_DATA_MAX ? CIUKI_SYSTEM_LOG_DATA_MAX : n - at;
+            e = ciuki_system_log_write(CIUKI_SYSTEM_LOG_MACHINE, name, 0, text + at, part, SR_LOG_LIMIT) ? -errno : 0;
+            at += part;
+        }
+        if (e != -ENOSYS && e != -ENODEV) return e;
+    }
+#endif
+    char path[512];
+    int k = snprintf(path, sizeof(path), "%s/System/LOGS/%s", root ? root : "", name);
+    if (k < 0 || (size_t)k >= sizeof(path)) return -ENAMETOOLONG;
+    FILE *f = fopen(path, "a");
+    if (!f) return -errno;
+    int e = n && fwrite(text, 1, n, f) != n ? -EIO : 0;
+    if (!e && ferror(f)) e = -EIO;
+    if (fclose(f) && !e) e = -errno;
+    return e;
+}
+/* 0: saved by the service; 1: write the file yourself (host, older kernel). */
+static inline int sr_boot_config(const char *root, const char *text, size_t n, int *error)
+{
+    *error = 0;
+#if defined(__CIUKIOS__) && !defined(__linux__)
+    if (!root || !*root) {
+        if (!ciuki_boot_config_set(text, n)) return 0;
+        if (errno != ENOSYS && errno != ENODEV) { *error = -errno; return 0; }
+    }
+#else
+    (void)root; (void)text; (void)n;
+#endif
+    return 1;
+}
+/* ---- end sec-sysvc ---- */
 
 /* ---- Registry Checker (Windows 98 ScanReg/ScanRegW) -------------------- */
 #define RC_BACKUP_DIR "/System/SysBckup"

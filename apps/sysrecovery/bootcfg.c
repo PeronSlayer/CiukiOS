@@ -69,6 +69,8 @@ int bootcfg_update(const char *root, const struct bootcfg_options *o)
     size_t length;
     int e = bootcfg_apply(in, size, o, out, &length);
     if (e) return e;
+    /* sec-sysvc: BOOT.CFG is sealed; the SYSTEM service saves it. */
+    if (!sr_boot_config(root, out, length, &e)) return e;
     snprintf(temp, sizeof(temp), "%s.new", path); snprintf(old, sizeof(old), "%s.old", path);
     int fd = open(temp, O_WRONLY | O_CREAT | O_TRUNC, 0644);
     if (fd < 0) return -errno;

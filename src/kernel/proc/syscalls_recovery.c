@@ -24,6 +24,12 @@ int32_t recovery_syscall_subject(struct process *p, const struct security_subjec
     if (subject!=p->subject && !security_device_system(p)) return -EPERM;
     bool authority = security_storage_admin(subject);
     uint32_t op = tf->ebx;
+    /* sec-sysvc: SYSTEM services (boot configuration, logs, driver packs, SFC);
+     * each checks the retained subject itself (fs/sysvc.h). */
+    extern int sysvc_syscall(struct process *, struct security_subject *, struct trap_frame *, int32_t *) __attribute__((weak));
+    int32_t serviced;
+    if (sysvc_syscall && sysvc_syscall(p, (struct security_subject *)subject, tf, &serviced)) return serviced;
+    /* end sec-sysvc */
     if (op == CIUKI_RECOVERY_SCANDISK || op == CIUKI_RECOVERY_REPORT) {
         struct ciuki_scandisk r;
         if (tf->edx != sizeof(r)) return -EINVAL;

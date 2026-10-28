@@ -25,6 +25,7 @@ static struct reg_remote registry_broker={.fd=-1};
 #endif
 uint32_t desk_w32_record(void *,uint32_t);
 extern int desk_w32_crash_store(const char *,const struct ciuki_w32_fault *) __attribute__((weak));
+extern int desk_w32_crash_log(const struct ciuki_w32_fault *) __attribute__((weak)); /* sec-sysvc */
 extern void desk_w32_fault_dialog(struct desktop *,const struct ciuki_w32_fault *) __attribute__((weak));
 extern void desk_v3_revoke(struct desktop *) __attribute__((weak));
 extern void desk_v3_pointer_release(struct desktop *) __attribute__((weak));
@@ -34,14 +35,19 @@ static pthread_mutex_t crash_disk_lock=PTHREAD_MUTEX_INITIALIZER;
 static void *crash_disk_worker(void *p)
 {
     pthread_mutex_lock(&crash_disk_lock);
-    /* G13: native program faults live with the other logs (BOOT.LOG, NETSURF.LOG). */
+    /* sec-sysvc: the report is the faulting user's own log, written through
+     * the SYSTEM log service (Log Viewer lists it). */
     const struct ciuki_w32_fault *f=p;
-    /* sec-user-05: a profile session's crash reports stay with their owner
-     * (<profile>/Local Settings/Application Data/Crash); the machine folders
-     * remain for the profile-less bootstrap desktop only. */
-    char own[200];const char *directory=profile_data(own,sizeof(own),"Crash",0);
-    if(!directory)directory=profile_root_path()?NULL:f->kind==W32_REPORT_NATIVE_FAULT?"/system/logs":"/WINDOWS/CRASH";
-    int error=!directory?-EACCES:desk_w32_crash_store?desk_w32_crash_store(directory,p):-ENOSYS;
+    int error=desk_w32_crash_log?desk_w32_crash_log(f):-ENOSYS;
+    if(error==-ENOSYS || error==-ENODEV){
+        /* Without the log service (an older kernel, ENOSYS; no managed system
+         * volume, ENODEV) a profile session keeps its reports in its own log
+         * folder, the one the service uses; only the profile-less bootstrap
+         * desktop writes G13's machine folders (sec-user-05). */
+        char own[200];const char *directory=profile_data(own,sizeof(own),"CiukiOS/Logs",0);
+        if(!directory)directory=profile_root_path()?NULL:f->kind==W32_REPORT_NATIVE_FAULT?"/system/logs":"/WINDOWS/CRASH";
+        error=!directory?-EACCES:desk_w32_crash_store?desk_w32_crash_store(directory,p):-ENOSYS;
+    }
     pthread_mutex_unlock(&crash_disk_lock);
     if(error)fprintf(stderr,"[win32] warning check=crash-file-write error=%d\n",error);
     free(p);return NULL;
