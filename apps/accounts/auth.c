@@ -148,7 +148,8 @@ int acct_auth_execute(struct acct_service *s, struct acct_job *job, struct acct_
 {
     if(s->faulted) { acct_attempts_clear(s); return -EIO; }
     if(job->request.operation==ACCT_CHALLENGE) return issue(s,job,out);
-    if(job->request.operation==ACCT_ENROLL_PLAN) return acct_enrollment_execute(s,job,out);
+    if(job->request.operation==ACCT_ENROLL_PLAN || job->request.operation==ACCT_ENROLL_SOURCE) /* sec-user-04 */
+        return acct_enrollment_execute(s,job,out);
     struct acct_request *q=&job->request; struct acct_attempt saved={0};
     for(unsigned i=0;i<8;++i) {
         struct acct_attempt *a=&s->attempts[i];

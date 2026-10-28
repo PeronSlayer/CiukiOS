@@ -34,7 +34,12 @@ static uint64_t now_of(struct lgn *g) { return g->sys->now_ms(g->sys->ctx); }
 static void changed(struct lgn *g) { g->state_generation++; }
 static void set_message(struct lgn *g, uint32_t message, int error)
 { g->message=message; g->error=error>0 ? -error : error; changed(g); }
-static void set_screen(struct lgn *g, uint32_t mode) { if (g->mode!=mode) { g->mode=mode; changed(g); } }
+static void set_screen(struct lgn *g, uint32_t mode)
+{
+    if (g->mode==mode) return;
+    if (mode!=LGN_MODE_LOCKED) g->override=0;   /* sec-user-04: armed only on the locked screen */
+    g->mode=mode; changed(g);
+}
 
 /* ---- kernel calls --------------------------------------------------- */
 static int session_query(struct lgn *g, uint32_t id, uint32_t *state, uint32_t *generation)
@@ -267,7 +272,8 @@ static void session_collect(struct lgn *g)
         return;
     }
     if (end==LGN_END_CRASH) set_message(g,LGN_MSG_SESSION_ENDED,0);
-    else if (end!=LGN_END_FAILED) set_message(g,LGN_MSG_NONE,0); /* a failed start keeps its notice */
+    else if (end!=LGN_END_FAILED && !(end==LGN_END_FORCED && g->message==LGN_MSG_ADMIN_ENDED))
+        set_message(g,LGN_MSG_NONE,0); /* a failed start (and sec-user-04: an administrator's log-off) keeps its notice */
     set_screen(g,LGN_MODE_WELCOME);
     (void)console_enter(g,0,CIUKI_SECURITY_SECURE_ATTENTION);
 }
@@ -342,9 +348,42 @@ static void autologon(struct lgn *g)
     if (e) { lgn_note(g,"[logon] automatic logon not used: %d",e); set_screen(g,LGN_MODE_WELCOME); }
     else lgn_note(g,"[logon] automatic logon requested");
 }
+/* sec-user-04: LIST ENOENT (no catalogue yet) or a provisional catalogue
+ * (no enabled account: a published database always has an enabled
+ * administrator) means a G32 upgrade waiting for enrollment. ENROLL_SOURCE
+ * confirms it before the trusted screen switches to the enrollment flow. */
+static void probe_enrollment(struct lgn *g)
+{
+    if (g->probe_pending || g->session.phase || now_of(g)<g->next_probe) return;
+    if (!lgn_auth_queue(g,LGN_AUTH_ENROLL_SOURCE,0,NULL,0,LGN_PURPOSE_PROBE,NO_LINK,0)) g->probe_pending=1;
+    g->next_probe=now_of(g)+(g->enrolling ? 2000u : LGN_LIST_RETRY_MS);
+}
+static void probe_reply(struct lgn *g, int status, const uint8_t *p, size_t n)
+{
+    struct lgn_source src;
+    g->probe_pending=0;
+    int enrolling=!status && !lgn_source_decode(&src,p,n);
+    if (enrolling!=g->enrolling) { g->enrolling=enrolling; changed(g); }
+    if (enrolling && !g->session.phase) {
+        g->autologon_done=1; g->correlation.autologon_used=1; /* an upgrade never logs on automatically */
+        if (g->mode!=LGN_MODE_POWER) set_screen(g,LGN_MODE_ENROLL);
+        lgn_note(g,"[logon] G32 upgrade: enrollment required (%u old accounts, plan %s)",src.count,
+                 (src.flags&LGN_SOURCE_PLAN) ? "staged" : "pending");
+    }
+}
+static int provisional(const uint8_t *p)
+{
+    uint32_t count=a32(p+4);
+    for (uint32_t i=0;i<count;i++) if (a32(p+16+144*i+8)&1u) return 0;
+    return 1;
+}
 static void list_reply(struct lgn *g, int status, const uint8_t *p, size_t n)
 {
     g->list_pending=0;
+    if (!status && n>=16 && a32(p)==1 && a32(p+4)<=ACCT_MAX && n==16+144*(size_t)a32(p+4) && provisional(p))
+        status=-ENOENT;   /* sec-user-04: a provisional enrollment catalogue is not a logon list */
+    if (status==-ENOENT) probe_enrollment(g);
+    else if (g->enrolling) { g->enrolling=0; changed(g); }
     if (status || n<16 || a32(p)!=1 || a32(p+4)>ACCT_MAX || n!=16+144*(size_t)a32(p+4)) {
         if (g->accounts_ready) { g->accounts_ready=0; changed(g); }
         if (!g->unavailable_since) g->unavailable_since=now_of(g);
@@ -353,7 +392,7 @@ static void list_reply(struct lgn *g, int status, const uint8_t *p, size_t n)
         if (status==-ENOENT && g->unavailable_since>LGN_UNAVAILABLE_MS) g->unavailable_since=now_of(g)-LGN_UNAVAILABLE_MS;
         if (g->error!=(status ? status : -EIO)) changed(g);
         g->error=status ? status : -EIO;
-        g->next_list=now_of(g)+LGN_LIST_RETRY_MS;
+        g->next_list=now_of(g)+(g->enrolling ? 2000u : LGN_LIST_RETRY_MS);   /* sec-user-04: quieter while enrolling */
         return;
     }
     g->accounts_generation=a64(p+8);
@@ -371,7 +410,8 @@ void lgn_auth_reply(struct lgn *g, const struct lgn_auth_request *q, int status,
 {
     const uint8_t *p=body;
     if (q->purpose==LGN_PURPOSE_LIST) { list_reply(g,status,p,n); return; }
-    if (q->purpose==LGN_PURPOSE_PLAN) {
+    if (q->purpose==LGN_PURPOSE_PROBE) { probe_reply(g,status,p,n); return; }   /* sec-user-04 */
+    if (q->purpose==LGN_PURPOSE_PLAN || q->purpose==LGN_PURPOSE_SOURCE) {
         if (link_waiting(g,q->link,q->attempt)) (void)lgn_reply(g,q->link,status,status ? NULL : body,status ? 0 : n);
         return;
     }
@@ -418,7 +458,8 @@ void lgn_state(const struct lgn *g, struct lgn_state *st)
     memset(st,0,sizeof(*st));
     st->mode=g->mode ? g->mode : LGN_MODE_STARTING;
     st->flags=(s->blank ? LGN_STATE_BLANK : 0)|(g->safe ? LGN_STATE_SAFE : 0)|(s->phase ? LGN_STATE_SESSION : 0)|
-              (g->power_action==LGN_EVENT_RESTART ? LGN_STATE_RESTART : 0);
+              (g->power_action==LGN_EVENT_RESTART ? LGN_STATE_RESTART : 0)|
+              (g->override && g->mode==LGN_MODE_LOCKED ? LGN_STATE_OVERRIDE : 0);   /* sec-user-04 */
     for (unsigned i=0;i<LGN_LINKS;i++)
         if (g->links[i].occupied && !g->links[i].retiring && g->links[i].peer_role==LGN_ROLE_DESKTOP &&
             s->phase && g->links[i].session_id==s->id) st->flags|=LGN_STATE_DESKTOP;
@@ -432,8 +473,13 @@ static void begin_auth(struct lgn *g, unsigned i)
     uint8_t relay[128];
     if (l->total!=64) { (void)lgn_reply(g,i,-EINVAL,NULL,0); return; }
     uint32_t action=a32(l->body+4);
-    int allowed=action==2 ? g->mode==LGN_MODE_WELCOME && !g->session.phase && g->accounts_ready :
-                action==3 ? g->mode==LGN_MODE_LOCKED && g->session.phase==LGN_ACTIVE && !g->enter_reason : 0;
+    /* sec-user-04: ENROLL (4) in the enrollment workflow before any session;
+     * LOGON (2) also while an administrator's log-off of the locked session
+     * is armed (it authenticates, it never creates a session there). */
+    int allowed=action==2 ? (g->mode==LGN_MODE_WELCOME && !g->session.phase && g->accounts_ready) ||
+                            (g->override && g->mode==LGN_MODE_LOCKED && g->session.phase==LGN_ACTIVE && !g->enter_reason) :
+                action==3 ? g->mode==LGN_MODE_LOCKED && g->session.phase==LGN_ACTIVE && !g->enter_reason :
+                action==4 ? g->mode==LGN_MODE_ENROLL && g->enrolling && !g->session.phase : 0;
     if (!allowed) { (void)lgn_reply(g,i,action==4 ? -EOPNOTSUPP : -EBUSY,NULL,0); return; }
     int e=gate_refresh(g);
     struct acct_subject ui;
@@ -481,7 +527,7 @@ static int unlock(struct lgn *g, const struct acct_auth_outcome *o)
         o->challenge.authentication_epoch!=s->console.authentication_epoch ||
         o->challenge.console!=s->console.console_generation) return -EAGAIN;
     int e=console_leave(g);
-    if (!e) { set_screen(g,LGN_MODE_HIDDEN); set_message(g,LGN_MSG_NONE,0); }
+    if (!e) { g->override=0; set_screen(g,LGN_MODE_HIDDEN); set_message(g,LGN_MSG_NONE,0); }
     return e;
 }
 static void outcome(struct lgn *g, unsigned i)
@@ -509,7 +555,19 @@ static void outcome(struct lgn *g, unsigned i)
     int waiting=link==NO_LINK || link_waiting(g,link,attempt);
     struct lgn_progress p; (void)lgn_progress_decode(&p,progress,16);
     if (o.disposition==LGN_AUTHENTICATED) {
-        if (o.challenge.action==2 || o.challenge.action==5) {
+        if (o.challenge.action==2 && g->session.phase && g->override) {
+            /* sec-user-04: an administrator ends the locked session of another
+             * user (WlxWkstaLockedSAS FORCE_LOGOFF, confirmed by LOGON_UI). The
+             * outcome's credential is only read for Administrators (544). */
+            int administrator=0;
+            for (uint32_t k=0;k<a32(o.credential+16) && k<8;k++) administrator|=a32(o.credential+20+4*k)==544;
+            g->override=0;
+            if (administrator && g->session.phase==LGN_ACTIVE) {
+                lgn_note(g,"[logon] administrator uid=%u ends locked session %u of uid=%u",o.challenge.uid,g->session.id,g->session.uid);
+                set_message(g,LGN_MSG_ADMIN_ENDED,0);
+                begin_ending(g,LGN_END_FORCED);
+            } else { p=(struct lgn_progress){LGN_FAILED,-EACCES,0}; set_message(g,LGN_MSG_NOT_ADMIN,0); }
+        } else if (o.challenge.action==2 || o.challenge.action==5) {
             if (!g->session.phase) start_session(g,&o,v->empty_secret);
             else p=(struct lgn_progress){LGN_FAILED,-EBUSY,0};
         } else if (o.challenge.action==3) {
@@ -523,6 +581,12 @@ static void outcome(struct lgn *g, unsigned i)
                 else g->session.blank=0;
             }
         }
+    } else if (o.disposition==LGN_ENROLL_COMMITTED) {
+        /* sec-user-04: the converted accounts are published; a fresh LOGON
+         * challenge is required (A2-1), so back to Welcome via LIST. */
+        g->enrolling=0; g->accounts_ready=0; g->list_pending=0; g->next_list=0;
+        set_message(g,LGN_MSG_ENROLLED,0); set_screen(g,LGN_MODE_STARTING);
+        lgn_note(g,"[logon] enrollment committed generation=%llu",(unsigned long long)o.resulting_generation);
     } else if (o.disposition==LGN_FAILED && link==NO_LINK) {
         lgn_note(g,"[logon] automatic logon refused: %d",o.status); set_screen(g,LGN_MODE_WELCOME);
     }
@@ -549,6 +613,7 @@ static int security_target(const struct lgn *g, uint32_t session, uint32_t conso
 static void attention(struct lgn *g)
 {
     struct lgn_session *s=&g->session;
+    g->override=0;   /* sec-user-04 */
     if (!s->phase) { (void)console_enter(g,0,CIUKI_SECURITY_SECURE_ATTENTION); return; }
     if (s->phase!=LGN_ACTIVE) return;
     int e=console_enter(g,s->id,CIUKI_SECURITY_SECURE_ATTENTION);
@@ -566,6 +631,14 @@ static void ui_state(struct lgn *g, unsigned i)
     case LGN_CMD_QUERY: break;
     case LGN_CMD_ATTENTION: attention(g); break;
     case LGN_CMD_ACKNOWLEDGE: set_message(g,LGN_MSG_NONE,0); break;
+    case LGN_CMD_OVERRIDE:   /* sec-user-04: armed on the current locked console only */
+        e=security_target(g,c.session,c.console);
+        if (!e && (g->mode!=LGN_MODE_LOCKED || g->enter_reason)) e=-EBUSY;
+        if (!e && !g->override) { g->override=1; changed(g); }
+        break;
+    case LGN_CMD_OVERRIDE_CANCEL:
+        if (g->override) { g->override=0; changed(g); }
+        break;
     case LGN_CMD_FORCE_LOGOFF:
         e=security_target(g,c.session,c.console);
         if (!e && g->mode!=LGN_MODE_SECURITY && !(g->mode==LGN_MODE_LOCKED && s->blank)) e=-EACCES;
@@ -616,7 +689,8 @@ static void power_event(struct lgn *g, unsigned i)
     int e=0;
     if (!s->phase) {
         if (ev.session || ev.console!=current_console(g)) e=-EAGAIN;
-        else if (g->mode!=LGN_MODE_WELCOME && g->mode!=LGN_MODE_UNAVAILABLE && g->mode!=LGN_MODE_STARTING) e=-EBUSY;
+        else if (g->mode!=LGN_MODE_WELCOME && g->mode!=LGN_MODE_UNAVAILABLE && g->mode!=LGN_MODE_STARTING &&
+                 g->mode!=LGN_MODE_ENROLL /* sec-user-04 */) e=-EBUSY;
         else { g->power_action=ev.action; set_screen(g,LGN_MODE_POWER); }
     } else {
         /* A logged-on user's shutdown follows the desktop's save/veto. */
@@ -658,13 +732,26 @@ static void session_event(struct lgn *g, unsigned i)
     case LGN_NOTICE_SHUTDOWN: s->end=LGN_END_SHUTDOWN; break;
     case LGN_NOTICE_RESTART: s->end=LGN_END_RESTART; break;
     case LGN_NOTICE_PASSWORD: s->blank=0; changed(g); break;
+    case LGN_NOTICE_SAVER: case LGN_NOTICE_STANDBY:
+        /* sec-user-04 (contract 4.3): password-protected saver dismissal and
+         * password-on-resume (armed before Stand by) lock through the trusted
+         * gate (WlxScreenSaverNotify pSecure; XP's resume prompt); a blank
+         * owner keeps the saver's concealment only, never a false lock. */
+        if (!s->blank && s->phase==LGN_ACTIVE && g->mode!=LGN_MODE_LOCKED) {
+            int e=console_enter(g,s->id,n.notice==LGN_NOTICE_SAVER ? CIUKI_SECURITY_SECURE_SAVER : CIUKI_SECURITY_SECURE_RESUME);
+            if (e && e!=-EBUSY) { (void)lgn_reply(g,i,e,NULL,0); return; }
+            set_screen(g,LGN_MODE_LOCKED);
+            lgn_note(g,"[logon] session %u locked by the %s",s->id,n.notice==LGN_NOTICE_SAVER ? "screen saver" : "stand by");
+        }
+        break;
     default: break;
     }
     struct lgn_session_event ev;
     memset(&ev,0,sizeof(ev));
     ev.action=n.notice==LGN_NOTICE_QUERY ? s->pending_action : LGN_ACT_NONE;
     if (n.notice==LGN_NOTICE_QUERY) s->pending_action=0;
-    ev.flags=(s->blank ? LGN_EVENT_BLANK : 0)|(s->recovery ? LGN_EVENT_RECOVERY : 0);
+    ev.flags=(s->blank ? LGN_EVENT_BLANK : 0)|(s->recovery ? LGN_EVENT_RECOVERY : 0)|
+             (g->mode==LGN_MODE_LOCKED && !g->enter_reason ? LGN_EVENT_LOCKED : 0);   /* sec-user-04 */
     ev.uid=s->uid; ev.session=s->id; memcpy(ev.name,s->name,31);
     uint8_t body[LGN_SESSION_EVENT_BYTES];
     if (lgn_event_encode(&ev,body,sizeof(body))) (void)lgn_reply(g,i,-EIO,NULL,0);
@@ -681,12 +768,23 @@ static void enroll_plan(struct lgn *g, unsigned i)
     if (e) { (void)lgn_reply(g,i,e,NULL,0); return; }
     l->attempt=attempt;
 }
+/* sec-user-04: ENROLL_SOURCE relayed unchanged on LOGON's own AUTH link. */
+static void enroll_source(struct lgn *g, unsigned i)
+{
+    struct lgn_link *l=&g->links[i];
+    if (l->total || g->session.phase || !g->own_generation) { (void)lgn_reply(g,i,l->total ? -EINVAL : -EBUSY,NULL,0); return; }
+    static uint64_t source_attempt;
+    uint64_t attempt=++source_attempt|((uint64_t)1<<62);
+    int e=lgn_auth_queue(g,LGN_AUTH_ENROLL_SOURCE,0,NULL,0,LGN_PURPOSE_SOURCE,i,attempt);
+    if (e) { (void)lgn_reply(g,i,e,NULL,0); return; }
+    l->attempt=attempt;
+}
 void lgn_request(struct lgn *g, unsigned i)
 {
     struct lgn_link *l=&g->links[i];
     static const uint32_t role[]={0,LGN_ROLE_ACCOUNT,LGN_ROLE_UI,LGN_ROLE_UI,LGN_ROLE_UI,LGN_ROLE_DESKTOP,
-                                  LGN_ROLE_UI,LGN_ROLE_UI,LGN_ROLE_UI,LGN_ROLE_DESKTOP};
-    if (!l->operation || l->operation>LGN_OP_SESSION_EVENT) { (void)lgn_reply(g,i,-EOPNOTSUPP,NULL,0); return; }
+                                  LGN_ROLE_UI,LGN_ROLE_UI,LGN_ROLE_UI,LGN_ROLE_DESKTOP,LGN_ROLE_UI /* sec-user-04 */};
+    if (!l->operation || l->operation>LGN_OP_ENROLL_SOURCE) { (void)lgn_reply(g,i,-EOPNOTSUPP,NULL,0); return; }
     if (l->peer_role!=role[l->operation] || (l->peer_role==LGN_ROLE_DESKTOP ? !l->session_id : l->session_id)) {
         (void)lgn_reply(g,i,-EPERM,NULL,0); return;
     }
@@ -700,6 +798,7 @@ void lgn_request(struct lgn *g, unsigned i)
     case LGN_OP_ENROLL_PLAN: enroll_plan(g,i); break;
     case LGN_OP_UI_STATE: ui_state(g,i); break;
     case LGN_OP_SESSION_EVENT: session_event(g,i); break;
+    case LGN_OP_ENROLL_SOURCE: enroll_source(g,i); break;   /* sec-user-04 */
     }
     lgn_wipe(l->body,sizeof(l->body));
 }
@@ -709,6 +808,7 @@ void lgn_link_lost(struct lgn *g, unsigned i, uint32_t role)
 {
     (void)i;
     struct lgn_session *s=&g->session;
+    if (role==LGN_ROLE_UI) g->override=0;   /* sec-user-04: a new LOGON_UI starts disarmed */
     if (role==LGN_ROLE_UI && s->phase==LGN_ACTIVE && g->mode!=LGN_MODE_LOCKED) {
         int e=console_enter(g,s->id,CIUKI_SECURITY_SECURE_LOCK);
         if (!e || e==-EBUSY) { set_screen(g,LGN_MODE_LOCKED); set_message(g,LGN_MSG_SERVICE_RESTART,0); }
@@ -757,6 +857,7 @@ static void advance(struct lgn *g)
     switch (s->phase) {
     case LGN_NONE:
         if (g->power_action) break;
+        if (g->enrolling) { if (g->mode!=LGN_MODE_ENROLL && g->mode!=LGN_MODE_POWER) set_screen(g,LGN_MODE_ENROLL); break; } /* sec-user-04 */
         if (g->accounts_ready && !g->autologon_done && (g->safe || !g->autologon_candidate)) {
             g->autologon_done=1; g->correlation.autologon_used=1; /* consumed: never later in this boot */
             lgn_note(g,"[logon] automatic logon not applicable safe=%d",g->safe);
@@ -769,7 +870,7 @@ static void advance(struct lgn *g)
             for (unsigned i=0;i<g->auth.queued;i++) pending|=g->auth.queue[i].link==NO_LINK && g->auth.queue[i].purpose!=LGN_PURPOSE_LIST;
             pending|=g->auth.busy && g->auth.active.link==NO_LINK && g->auth.active.purpose!=LGN_PURPOSE_LIST;
             if (!pending) set_screen(g,LGN_MODE_WELCOME);
-        } else if (!g->accounts_ready && g->unavailable_since && now-g->unavailable_since>=LGN_UNAVAILABLE_MS)
+        } else if (!g->accounts_ready && g->unavailable_since && now-g->unavailable_since>=LGN_UNAVAILABLE_MS && !g->probe_pending)
             set_screen(g,LGN_MODE_UNAVAILABLE);
         break;
     case LGN_CREATE: if (now>=s->next_poll) session_create(g); break;

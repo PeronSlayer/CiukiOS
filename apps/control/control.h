@@ -25,6 +25,8 @@
 #include <stdint.h>
 #include "driver_pack.h"
 #include "../desktop/users.h"
+#include "accounts_client.h"   /* sec-user-04 */
+#include "../desktop/session_prefs.h"   /* sec-user-04: per-user lock preferences */
 #include "internet_options.h"
 #include "../systools/systools.h"
 #include <ciuki/system_settings.h>
@@ -92,6 +94,17 @@ struct cp_menu_result { struct sh_folder_item entries[CP_MENU_MAX]; unsigned cou
 struct cp_host {
     int (*user_begin)(void *,const struct users_request *);
     int (*user_poll)(void *,struct users_view *,int *);
+    /* --- sec-user-04: User Accounts through the SYSTEM account service.
+     * Set in a kernel profile session (USERPROFILE): the Users and Passwords
+     * pages become one User Accounts page; NULL keeps the G32 pages of an
+     * interim image. accounts_begin copies the request (secrets included)
+     * to a worker and the caller wipes its copy; accounts_poll returns the
+     * refreshed view and the result once. self_admin: the caller's kernel
+     * credential is in Administrators (machine pages); NULL = legacy host. */
+    int (*accounts_begin)(void *,const struct cpa_request *);
+    int (*accounts_poll)(void *,struct cpa_view *,int *);
+    int (*self_admin)(void *);
+    /* --- end sec-user-04 --- */
     int (*internet_clear_history)(void *);
     int (*internet_default)(void *);
     int (*internet_programs)(void *);
@@ -198,6 +211,18 @@ struct cp_app {
     struct du_item user_items[USERS_MAX];
     int user_busy, user_loaded, user_operation;
     char user_note[160];
+    /* --- sec-user-04: User Accounts state (accounts.inc). The request holds
+     * the only copies of typed secrets; it is wiped after every submission,
+     * cancel and page change. machine_locked: Standard/Guest caller. --- */
+    struct cpa_view accounts;
+    struct cpa_request account_request;
+    struct du_item account_items[CPA_MAX];
+    char account_labels[CPA_MAX][64], account_note[192];
+    int account_busy, account_loaded, account_task, account_password_page, machine_locked;
+    unsigned account_action, account_count;
+    uint32_t account_uid, account_shown[CPA_MAX];
+    int secure_resume;                       /* LOGON session: secure_resume preference (Power page) */
+    /* --- end sec-user-04 --- */
     struct regional regional_edit;
     struct du_item regional_tabs[5], regional_presets[2];
     unsigned regional_tab;

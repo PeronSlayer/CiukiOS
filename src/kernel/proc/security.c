@@ -511,10 +511,11 @@ int security_subject_check(const struct security_subject *s, uint32_t action, ui
     if (!s->origin || !channel_peer_service || channel_peer_service(&s->peer)!=service) return -EACCES;
     /* sec-own: OWNER query operations 8..14 (fs/owner_system.h). */
     if (!op || (service==2 && op>9) || (service==3 && op>14)) return -EOPNOTSUPP;
-    if (service==1) return r==1 ? (op>=1 && op<=7 ? 0 : -EOPNOTSUPP) :
+    /* sec-user-04: AUTH ENROLL_SOURCE=8 (LOGON), LOGON ENROLL_SOURCE=10 (LOGON_UI). */
+    if (service==1) return r==1 ? (op>=1 && op<=8 ? 0 : -EOPNOTSUPP) :
         r==2 && op==1 ? 0 : -EPERM;
     if (service==5) {
-        if ((r==3 && op==1) || (r==2 && (op==2 || op==3 || op==4 || op==6 || op==7 || op==8)) ||
+        if ((r==3 && op==1) || (r==2 && (op==2 || op==3 || op==4 || op==6 || op==7 || op==8 || op==10)) ||
             (r==6 && (op==5 || op==9) && scope && s->credential.session_id==scope)) return 0; /* sec-user-03: 8, 9 */
         return -EPERM;
     }

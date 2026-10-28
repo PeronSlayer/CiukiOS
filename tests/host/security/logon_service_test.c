@@ -663,6 +663,15 @@ static void scenario_restart(void)
     puts("H10 LOGON restart: session adopted locked, empty-password unlock refused for the blank owner, confirmed end of session returns to Welcome PASS");
 }
 
+/* --- sec-user-04 block: H12 scenarios (test_account_controls.py builds this
+ * harness with -DCIUKI_H12_ACCOUNTS and the Control Panel's client). --- */
+#ifdef CIUKI_H12_ACCOUNTS
+#include "users.h"
+#include "account_controls_test.inc"
+#else
+static int h12_scenario(const char *name) { (void)name; return 0; }
+#endif
+/* --- end sec-user-04 block --- */
 int main(int argc, char **argv)
 {
     setvbuf(stdout, 0, _IONBF, 0);
@@ -679,6 +688,7 @@ int main(int argc, char **argv)
     else if (!strcmp(argv[1], "safe")) scenario_safe();
     else if (!strcmp(argv[1], "ready-safe")) scenario_ready_boot_safe();
     else if (!strcmp(argv[1], "restart")) scenario_restart();
+    else if (h12_scenario(argv[1])) {}   /* sec-user-04 */
     else CHECK(false);
     /* Teardown: every session, service and link is released. */
     lgn_client_close(&ui_logon); lgn_client_close(&ui_auth); lgn_client_close(&desk_logon);

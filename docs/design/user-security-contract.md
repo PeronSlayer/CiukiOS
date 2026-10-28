@@ -1494,6 +1494,73 @@ warn that formerly shared settings were not private. Copy per-user roots without
 carrying machine-authority fields. An upgrade cannot claim new isolation until
 old public secrets, writable machine roots and service startup paths are closed.
 
+#### G32 enrollment source and account controls (sec-user-04 amendment, 2026-10-28, for lead review)
+
+*Proposed by the sec-user-04 implementer; binding only after the lead's review.
+It closes the open item of sec-user-03: A2-1 requires the trusted enrollment UI
+to submit every protected G32 record exactly, but no interface gave LOGON_UI
+that list. Research and decisions: `docs/validation/sec-user04.md`.*
+
+1. **AUTH ENROLL_SOURCE=8** (service 1, registered LOGON role only, uid 0,
+   session 0; empty request). ACCOUNT answers ENOENT unless the installation
+   is waiting for enrollment (no published database and a protected
+   `enrollment.source`). The reply is a 32-byte header (version u32@0=1,
+   count u32@4 0..16, flags u32@8 bit0 = a confirmed plan is staged, staged
+   mask u32@12 by provisional-catalogue index, plan generation u64@16, zero
+   reserved[8]@24) and count 48-byte rows in ascending old-id order (old id
+   u32@0, flags u32@4 bit0 = a replacement label is required because the old
+   name is invalid, reserved or a duplicate, staged uid u32@8 or 0 without a
+   plan, zero u32@12, the G32 name[32]@16, zero padded). It never carries a
+   salt, verifier, path or role; it is not throttled by the failed-
+   authentication delay. The kernel route table admits AUTH op 8 for LOGON
+   only (`channel.c` service-1 limit 7 -> 8, `security.c`).
+2. **LOGON ENROLL_SOURCE=10** (service 5, LOGON_UI only, empty request, no
+   session): LOGON relays AUTH op 8 unchanged on its own AUTH link (as it
+   relays ENROLL_PLAN). LOGON itself probes op 8 when AUTH LIST answers ENOENT
+   or returns a provisional catalogue (no enabled account; a published
+   database always has an enabled administrator with a password) and then
+   shows the trusted enrollment screen (UI_STATE mode ENROLL=10) instead of
+   "Logon is not available". An upgraded installation never logs on
+   automatically.
+3. **Trusted workflow** (LOGON_UI): the operator chooses the first
+   administrator among the listed accounts (or names a new one when the G32
+   store is empty) and types a replacement label for every flagged row; LOGON_UI
+   sends ENROLL_PLAN with every row exactly. Then, for every provisional
+   catalogue record except Guest (501), BEGIN_AUTH ENROLL (action 4, UID
+   selector, allowed by LOGON only in mode ENROLL with no session) and
+   SUBMIT_AUTH with the old G32 password (imported records; empty when the
+   account had none) or an empty old secret (recovery 500, a fresh record) and
+   a new 8-63 byte password, confirmed locally. ENROLL_STAGED moves to the
+   next record; ENROLL_COMMITTED returns LOGON to LIST and Welcome with a
+   notice, and the next logon needs a fresh LOGON challenge (A2-1). LOGON_UI
+   offers no change of a staged plan (an exact retry returns the same map);
+   changing it after staging remains an ACCOUNT-level capability.
+4. **SESSION_EVENT notices SAVER=5 and STANDBY=6** (same-session DESKTOP):
+   LOGON enters SECURE_ENTER(SAVER) for a password-protected saver being
+   dismissed and SECURE_ENTER(RESUME) for password-on-resume, armed before
+   Stand by (the desktop waits, at most 3 s, for reply flag LOCKED=4 before
+   the STANDBY call; a gate that cannot be raised refuses Stand by) or at a
+   resume the desktop did not arm. A password-less owner gets reply flag
+   BLANK and no lock (no guidance either: the saver only conceals). Notice
+   PASSWORD=4 is now sent after the owner changes his own password in User
+   Accounts (Control Panel -> desktop DESK_SETTINGS_PASSWORD_SET=11 ->
+   LOGON); it only clears LOGON's blank state, so a forged notice can make a
+   later lock stricter, never weaker.
+5. **Administrator log-off of a locked session** (UI_STATE OVERRIDE=9 /
+   OVERRIDE_CANCEL=10, LOGON_UI on the LOCKED screen, bound to the current
+   session and console): while armed, BEGIN_AUTH LOGON (action 2, typed name,
+   session 0) authenticates against the locked console's current epochs; an
+   AUTHENTICATED outcome never creates a session there. When the outcome's
+   credential is in Administrators (544) LOGON ends the locked session forced
+   (Windows XP WlxWkstaLockedSAS FORCE_LOGOFF; LOGON_UI warned that unsaved
+   work is lost) and returns to Welcome, where the administrator logs on
+   afresh; otherwise the attempt fails EACCES and the session stays locked.
+   Attention, unlock or any console change disarms it.
+6. **Per-user lock preferences**: `secure_saver` and `secure_resume` lines of
+   the user's own settings file (absent = on), shown in Display > Screen Saver
+   ("On resume, password protect") and Power > Advanced in a LOGON session;
+   the G32 interim desktop keeps USERS_LOCK/power_password.
+
 ## 7. Control Panel and old authority mechanisms
 
 ### 7.1 User Accounts and machine settings

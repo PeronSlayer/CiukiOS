@@ -2,6 +2,7 @@
  * the items of the selected category on the right, a Tools menu and a status bar.
  * SPDX-License-Identifier: MIT */
 #include "sysinfo_view.h"
+#include "../desktop/profile.h" /* sec-user-04: My Documents is per user */
 #include "sysui.h"
 #include <errno.h>
 #include <stdlib.h>
@@ -263,7 +264,7 @@ int siv_init(struct sysinfo_app *a, struct du_ui *u, const struct sysinfo_host *
     if (!a || !u || !host || !host->collect || !host->launch || !host->write_file || !devices || !tree) return -EINVAL;
     memset(a, 0, sizeof(*a));
     a->ui = u; a->host = *host; a->devices = devices; a->tree = tree;
-    snprintf(a->folder, sizeof(a->folder), "/Documents");
+    snprintf(a->folder, sizeof(a->folder), "%s", profile_home());
     a->root_icon = du_icon_argb(du_icon_name("place:computer"), 16);
     a->folder_icon = du_icon_argb(du_icon_name("type:folder"), 16);
     a->warning_icon = du_icon_argb(du_icon_name("status:warning"), 16);

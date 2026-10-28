@@ -64,7 +64,8 @@ struct lgn_auth_request {
     uint64_t generation, attempt;
     uint8_t body[LGN_BODY_MAX];
 };
-enum lgn_purpose { LGN_PURPOSE_LIST = 1, LGN_PURPOSE_CHALLENGE, LGN_PURPOSE_VERIFY, LGN_PURPOSE_PLAN };
+enum lgn_purpose { LGN_PURPOSE_LIST = 1, LGN_PURPOSE_CHALLENGE, LGN_PURPOSE_VERIFY, LGN_PURPOSE_PLAN,
+                   LGN_PURPOSE_SOURCE, LGN_PURPOSE_PROBE /* sec-user-04: ENROLL_SOURCE relay / enrollment probe */ };
 struct lgn_auth {
     int fd;
     unsigned refs;
@@ -107,6 +108,11 @@ struct lgn {
     int32_t error;
     uint64_t state_generation, accounts_generation, started, next_list, next_auth_connect, next_enter, unavailable_since;
     char log_line[160];
+    /* sec-user-04: the armed administrator log-off of the locked session
+     * (UI_STATE OVERRIDE), the G32 enrollment workflow (LIST ENOENT or a
+     * provisional catalogue, confirmed by ENROLL_SOURCE) and its probe. */
+    int override, enrolling, probe_pending;
+    uint64_t next_probe;
 };
 
 int lgn_init(struct lgn *, const struct lgn_sys *);

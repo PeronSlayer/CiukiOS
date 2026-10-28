@@ -612,6 +612,11 @@ python3 -B -m unittest discover -s "$root/tests/host/security" -p test_system_se
 # (administrator-only tools, the daily SYSTEM job, the next-start restore).
 python3 -B -m unittest discover -s "$root/tests/host/security" -p test_registry_checker.py
 # ---- end sec-sysvc2 ----
+# --- sec-user-04 block: H12, User Accounts (Control Panel client against the
+# production account service), saver/resume locks, an administrator's log-off
+# of a locked session and the G32 upgrade enrollment, on H10's harness. ---
+python3 -B -m unittest discover -s "$root/tests/host/security" -p test_account_controls.py
+# --- sec-user-04 block (end) ---
 
 # F2 production parser, mappings, wait queues, stack and lifecycle with fake
 # physical memory/scheduling; no guest execution or host runner lock.

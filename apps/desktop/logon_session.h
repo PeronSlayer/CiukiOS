@@ -12,6 +12,9 @@ void desk_logon_ready(struct desktop *);     /* readiness handshake, once */
 int desk_logon_ready_sent(void);
 void desk_logon_poll(struct desktop *);      /* after RESYNC: secure-menu action */
 int desk_logon_lock(struct desktop *);       /* SESSION_LOCK */
+/* sec-user-04: one SESSION_EVENT notice (SAVER, STANDBY, PASSWORD, QUERY);
+ * *flags (optional) gets LOGON's LGN_EVENT_* flags. */
+int desk_logon_secure(struct desktop *, unsigned notice, unsigned *flags);
 /* SESSION_EVENT notice (LGN_NOTICE_LOGOFF/SHUTDOWN/RESTART), w32srv flush,
  * exit. Never returns. */
 void desk_logon_end(struct desktop *, unsigned notice) __attribute__((noreturn));

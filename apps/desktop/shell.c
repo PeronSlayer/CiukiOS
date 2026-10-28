@@ -2094,9 +2094,16 @@ static void standby_service(struct desktop *d)
         return;
     case DESK_STANDBY_SUSPEND: {
         if (!broadcast_finished(d, PP_PBT_SUSPEND)) return;
+        /* sec-user-04 (contract 4.3): a LOGON session arms password-on-resume
+         * before the firmware sleeps: LOGON enters the trusted gate (RESUME)
+         * and Stand by waits, bounded, until it is up, so no application
+         * frame or input can follow the resume before authentication. A gate
+         * that cannot be raised refuses Stand by (locally, nothing slept). */
+        int arm=d->logon_session ? desk_session_arm_resume(d) : 1;
+        if (!arm) return;
         errno = 0;
         int prepared=0,paint_error=0;
-        if (d->sh.power_cfg.password && d->sh.profile.name[0] && !d->sh.user_gate) {
+        if (!d->logon_session && d->sh.power_cfg.password && d->sh.profile.name[0] && !d->sh.user_gate) {
             /* Firmware may wake scanout before returning to us. Conceal the
              * framebuffer before sleeping, after every program has agreed. */
             desk_logon_open(d,2); prepared=1;
@@ -2106,7 +2113,8 @@ static void standby_service(struct desktop *d)
             } /* DPMS already published black before suspending grants. */
         }
         int attempted=0,r;
-        if (paint_error) { errno=EAGAIN; r=-1; }
+        if (arm<0) { errno=-arm; r=-1; }   /* sec-user-04: the trusted gate could not be raised */
+        else if (paint_error) { errno=EAGAIN; r=-1; }
         else if (desk_session_busy(d) || d->sh.gate) { errno=EBUSY; r=-1; }
         else if (!d->power_standby) { errno=ENOSYS; r=-1; }
         else { attempted=1; r=d->power_standby(); }

@@ -49,9 +49,10 @@ int lgn_secret_syntax(const char *s)
 
 int lgn_ui_command_encode(const struct lgn_ui_command *c, void *v, size_t n)
 {
-    if (!c || !v || n!=LGN_UI_COMMAND_BYTES || c->command>LGN_CMD_RESTART) return -EINVAL;
+    if (!c || !v || n!=LGN_UI_COMMAND_BYTES || c->command>LGN_CMD_OVERRIDE_CANCEL) return -EINVAL; /* sec-user-04: 9, 10 */
     int targeted=c->command==LGN_CMD_LOGOFF || c->command==LGN_CMD_TASKMGR || c->command==LGN_CMD_FORCE_LOGOFF ||
-                 c->command==LGN_CMD_SET_PASSWORD || c->command==LGN_CMD_SHUTDOWN || c->command==LGN_CMD_RESTART;
+                 c->command==LGN_CMD_SET_PASSWORD || c->command==LGN_CMD_SHUTDOWN || c->command==LGN_CMD_RESTART ||
+                 c->command==LGN_CMD_OVERRIDE; /* sec-user-04: bound to the locked session */
     if (targeted ? (!c->session || !c->console) : (c->session || c->console)) return -EINVAL;
     uint8_t *p=v; memset(p,0,n); wr32(p,1); wr32(p+4,c->command); wr32(p+8,c->session); wr32(p+12,c->console);
     return 0;
@@ -68,8 +69,9 @@ int lgn_ui_command_decode(struct lgn_ui_command *c, const void *v, size_t n)
 }
 int lgn_state_encode(const struct lgn_state *s, void *v, size_t n)
 {
-    if (!s || !v || n!=LGN_UI_STATE_BYTES || s->mode<LGN_MODE_STARTING || s->mode>LGN_MODE_POWER ||
-        s->message>LGN_MSG_SERVICE_RESTART || s->error>0 || (s->flags&~31u) || !padded(s->owner_name,32)) return -EINVAL;
+    /* sec-user-04: mode ENROLL, messages 8..10, flag OVERRIDE. */
+    if (!s || !v || n!=LGN_UI_STATE_BYTES || s->mode<LGN_MODE_STARTING || s->mode>LGN_MODE_ENROLL ||
+        s->message>LGN_MSG_ENROLLED || s->error>0 || (s->flags&~63u) || !padded(s->owner_name,32)) return -EINVAL;
     uint8_t *p=v; memset(p,0,n);
     wr32(p,1); wr32(p+4,LGN_UI_STATE_BYTES); wr32(p+8,s->mode); wr32(p+12,s->flags); wr32(p+16,s->session);
     wr32(p+20,s->console); wr32(p+24,s->owner_uid); wr32(p+28,s->message); wr32(p+32,(uint32_t)s->error);
@@ -91,7 +93,7 @@ int lgn_state_decode(struct lgn_state *s, const void *v, size_t n)
 }
 int lgn_notice_encode(const struct lgn_session_notice *s, void *v, size_t n)
 {
-    if (!s || !v || n!=LGN_SESSION_NOTICE_BYTES || s->notice>LGN_NOTICE_PASSWORD || !s->session) return -EINVAL;
+    if (!s || !v || n!=LGN_SESSION_NOTICE_BYTES || s->notice>LGN_NOTICE_STANDBY || !s->session) return -EINVAL; /* sec-user-04: 5, 6 */
     uint8_t *p=v; memset(p,0,n); wr32(p,1); wr32(p+4,s->notice); wr32(p+8,s->session);
     return 0;
 }
@@ -107,7 +109,7 @@ int lgn_notice_decode(struct lgn_session_notice *s, const void *v, size_t n)
 }
 int lgn_event_encode(const struct lgn_session_event *s, void *v, size_t n)
 {
-    if (!s || !v || n!=LGN_SESSION_EVENT_BYTES || s->action>LGN_ACT_SET_PASSWORD || (s->flags&~3u) ||
+    if (!s || !v || n!=LGN_SESSION_EVENT_BYTES || s->action>LGN_ACT_SET_PASSWORD || (s->flags&~7u) || /* sec-user-04: LOCKED */
         !s->session || !padded(s->name,32)) return -EINVAL;
     uint8_t *p=v; memset(p,0,n);
     wr32(p,1); wr32(p+4,LGN_SESSION_EVENT_BYTES); wr32(p+8,s->action); wr32(p+12,s->flags); wr32(p+16,s->uid);
@@ -123,6 +125,38 @@ int lgn_event_decode(struct lgn_session_event *s, const void *v, size_t n)
     uint8_t canonical[LGN_SESSION_EVENT_BYTES];
     int e=lgn_event_encode(&t,canonical,sizeof(canonical));
     if (!e && memcmp(canonical,p,n)) e=-EINVAL;
+    if (!e) *s=t;
+    return e;
+}
+/* sec-user-04: ENROLL_SOURCE reply (logon_proto.h). */
+int lgn_source_encode(const struct lgn_source *s, void *v, size_t cap, size_t *n)
+{
+    if (!s || !v || !n || s->count>LGN_SOURCE_MAX || (s->flags&~LGN_SOURCE_PLAN) ||
+        (!(s->flags&LGN_SOURCE_PLAN) && (s->generation || s->staged)) || ((s->flags&LGN_SOURCE_PLAN) && !s->generation) ||
+        cap<LGN_SOURCE_BYTES(s->count)) return -EINVAL;
+    uint8_t *p=v; size_t total=LGN_SOURCE_BYTES(s->count); memset(p,0,total);
+    wr32(p,1); wr32(p+4,s->count); wr32(p+8,s->flags); wr32(p+12,s->staged); wr64(p+16,s->generation);
+    for (uint32_t i=0;i<s->count;i++) {
+        uint8_t *r=p+32+48*i;
+        if ((s->rows[i].flags&~LGN_SOURCE_REPLACE) || !padded(s->rows[i].name,32) || !s->rows[i].name[0] ||
+            (i && s->rows[i-1].old_id>=s->rows[i].old_id) || (!(s->flags&LGN_SOURCE_PLAN) && s->rows[i].uid)) return -EINVAL;
+        wr32(r,s->rows[i].old_id); wr32(r+4,s->rows[i].flags); wr32(r+8,s->rows[i].uid); memcpy(r+16,s->rows[i].name,32);
+    }
+    *n=total; return 0;
+}
+int lgn_source_decode(struct lgn_source *s, const void *v, size_t n)
+{
+    const uint8_t *p=v;
+    if (!s || !p || n<32 || rd32(p)!=1 || rd32(p+4)>LGN_SOURCE_MAX || n!=LGN_SOURCE_BYTES(rd32(p+4))) return -EINVAL;
+    struct lgn_source t; memset(&t,0,sizeof(t));
+    t.count=rd32(p+4); t.flags=rd32(p+8); t.staged=rd32(p+12); t.generation=rd64(p+16);
+    for (uint32_t i=0;i<t.count;i++) {
+        const uint8_t *r=p+32+48*i;
+        t.rows[i].old_id=rd32(r); t.rows[i].flags=rd32(r+4); t.rows[i].uid=rd32(r+8); memcpy(t.rows[i].name,r+16,32);
+    }
+    uint8_t canonical[LGN_SOURCE_BYTES(LGN_SOURCE_MAX)]; size_t m=0;
+    int e=lgn_source_encode(&t,canonical,sizeof(canonical),&m);
+    if (!e && (m!=n || memcmp(canonical,p,n))) e=-EINVAL;
     if (!e) *s=t;
     return e;
 }
