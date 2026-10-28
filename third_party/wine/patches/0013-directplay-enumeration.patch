@@ -1,0 +1,55 @@
+CiukiOS Wine 10.0: enumerate only matching hosted sessions, bound request, check allocation
+Pinned base: b073859675060c9211fcbccfd90e4e87520dc2c2
+Modified by CiukiOS, 2026-10-28. LGPL-2.1-or-later. See docs/design/directplay.md.
+
+--- a/dlls/dplayx/dplay.c
++++ b/dlls/dplayx/dplay.c
+@@ -463,9 +463,19 @@
+   {
+     /* Name server needs to handle this request */
+     case DPMSGCMD_ENUMSESSIONSREQUEST:
++    {
++      const DPMSG_ENUMSESSIONSREQUEST *request = messageBody;
++      const DPSESSIONDESC2 *session = This->dp2->lpSessionDesc;
++      if (dwMessageBodySize < sizeof(*request) || !This->dp2->bConnectionOpen ||
++          !This->dp2->bHostInterface || !session ||
++          !IsEqualGUID(&request->guidApplication, &session->guidApplication)) break;
++      if ((request->dwFlags & DPENUMSESSIONS_AVAILABLE) &&
++          ((session->dwFlags & (DPSESSION_JOINDISABLED | DPSESSION_NEWPLAYERSDISABLED)) ||
++           (session->dwMaxPlayers && session->dwCurrentPlayers >= session->dwMaxPlayers))) break;
+       /* Reply expected */
+       NS_ReplyToEnumSessionsRequest( messageBody, lplpReply, lpdwMsgSize, This );
+       break;
++    }
+ 
+     /* Name server needs to handle this request */
+     case DPMSGCMD_ENUMSESSIONSREPLY:
+--- a/dlls/dplayx/name_server.c
++++ b/dlls/dplayx/name_server.c
+@@ -369,7 +369,8 @@
+   FIXME( ": few fixed + need to check request for response, might need UNICODE input ability.\n" );
+ 
+   dwVariableLen = MultiByteToWideChar( CP_ACP, 0,
+-                                       lpDP->dp2->lpSessionDesc->lpszSessionNameA,
++                                       lpDP->dp2->lpSessionDesc->lpszSessionNameA ?
++                                       lpDP->dp2->lpSessionDesc->lpszSessionNameA : "",
+                                        -1, NULL, 0 );
+   dwVariableSize = dwVariableLen * sizeof( WCHAR );
+ 
+@@ -377,6 +378,7 @@
+                      sizeof( *rmsg ) + dwVariableSize;
+   *lplpReplyData = calloc( 1, *lpdwReplySize );
+ 
++  if (!*lplpReplyData) { *lpdwReplySize = 0; return; }
+   rmsg = (LPDPMSG_ENUMSESSIONSREPLY)( (BYTE*)*lplpReplyData +
+                                              lpDP->dp2->spData.dwSPHeaderSize);
+ 
+@@ -387,6 +389,7 @@
+   CopyMemory( &rmsg->sd, lpDP->dp2->lpSessionDesc,
+               lpDP->dp2->lpSessionDesc->dwSize );
+   rmsg->dwUnknown = 0x0000005c;
+-  MultiByteToWideChar( CP_ACP, 0, lpDP->dp2->lpSessionDesc->lpszSessionNameA, -1,
++  MultiByteToWideChar( CP_ACP, 0, lpDP->dp2->lpSessionDesc->lpszSessionNameA ?
++                       lpDP->dp2->lpSessionDesc->lpszSessionNameA : "", -1,
+                        (LPWSTR)(rmsg+1), dwVariableLen );
+ }
