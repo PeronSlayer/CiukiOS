@@ -1040,6 +1040,18 @@ void dosvm_audio_log(struct dosvm *v)
             states[a & 0xFF], reasons[(a >> 8) & 0xFF], a >> 16, b & 0xFF, (b >> 16) & 1,
             (b >> 8) & 0xFF, c & 0xFFFF, b >> 24, c >> 16);
     }
+    else if (!v->audio.diag.opl_activity && v->audio.opl_key_writes) {
+        /* First musical register activity, emitted by the worker rather
+         * than the port trap. Timer probing/reset alone cannot satisfy it. */
+        v->audio.diag.opl_activity = true;
+        klog("[vm-audio] vm=%u gen=%u opl_writes=%llu key_writes=%llu",id,v->info.key.generation,
+             (unsigned long long)v->audio.opl_writes,(unsigned long long)v->audio.opl_key_writes);
+    }
+    else if (!v->audio.diag.midi_activity && v->audio.midi.age) {
+        v->audio.diag.midi_activity = true;
+        klog("[vm-audio] vm=%u gen=%u midi_bytes=%u note_ons=%u",id,v->info.key.generation,
+             v->audio.sb.midi_bytes,v->audio.midi.age);
+    }
     else if (!v->audio.diag.environment && v->audio.sb.resets) {
         char blaster[40]; audio_blaster(v, blaster); v->audio.diag.environment = true;
         klog("[vm-audio] vm=%u blaster=%s source=guest_env", id, blaster);

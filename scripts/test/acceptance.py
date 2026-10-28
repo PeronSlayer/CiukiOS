@@ -65,17 +65,18 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 import resources as res  # noqa: E402
 from evidence import EvidenceError, EvidenceNotRun  # noqa: E402
 import iso_fixtures  # noqa: E402
+import dos_games  # noqa: E402
 
 ROOT = Path(__file__).resolve().parents[2]
 KIND = 'acceptance'
 CASE_KEYS = {'id', 'kind', 'probe', 'profile', 'timeout', 'expected', 'item', 'items', 'title', 'gate', 'devices',
              'media', 'resets', 'forbid', 'steps', 'assertions', 'figures', 'disk', 'pending', 'note',
-             'blocking', '_run_id', '_prune_keep'}
+             'blocking', '_run_id', '_prune_keep', 'dos_game', 'guests', '_lan'}
 STEP_KEYS = {'name', 'check', 'wait', 'fail', 'since', 'timeout', 'wait_event', 'settle', 'actions',
              'screen_settle', 'screen', 'required', 'on_fail', 'known_failure', 'requires', 'unless', 'fallback',
              'arm', 'note', 'wizard'}
 TEMPLATE_KEYS = {'template', 'prefix', 'check', 'note', 'settle', 'timeout'}
-ACTION_KEYS = {'keys', 'text', 'pause', 'media', 'screendump', 'sleep', 'hold'}
+ACTION_KEYS = {'keys', 'text', 'pause', 'media', 'screendump', 'sleep', 'hold', 'mouse'}
 ASSERTION_KEYS = {'name', 'check', 'pattern', 'from', 'to', 'min', 'max', 'required', 'known_failure', 'note'}
 FIGURE_KEYS = {'name', 'check', 'pattern', 'from', 'to', 'reducer', 'page'}
 WIZARD_KEYS = {'keys', 'then', 'idle', 'max', 'focus', 'press_when', 'close_when', 'close_keys', 'max_closes',
@@ -245,8 +246,15 @@ def media_var(name):
 
 def validate_action(action, where):
     refuse(isinstance(action, dict) and action and not set(action) - ACTION_KEYS, where + ': action keys ' + ', '.join(sorted(ACTION_KEYS)))
-    kinds = [k for k in ('keys', 'text', 'media', 'screendump', 'sleep') if k in action]
-    refuse(len(kinds) == 1, where + ': one of keys, text, media, screendump or sleep per action')
+    kinds = [k for k in ('keys', 'text', 'media', 'screendump', 'sleep', 'mouse') if k in action]
+    refuse(len(kinds) == 1, where + ': one of keys, text, media, screendump, sleep or mouse per action')
+    if 'mouse' in action:
+        mouse = action['mouse']
+        refuse(isinstance(mouse, dict) and set(mouse) <= {'dx', 'dy', 'button'} and mouse,
+               where + ': mouse dx/dy/button')
+        refuse(all(type(mouse.get(axis, 0)) is int and -32767 <= mouse.get(axis, 0) <= 32767 for axis in ('dx', 'dy')),
+               where + ': bounded relative mouse motion')
+        refuse(mouse.get('button') in (None, 'left', 'middle', 'right'), where + ': mouse button')
     if 'keys' in action:
         keys = action['keys'] if isinstance(action['keys'], list) else [action['keys']]
         refuse(keys and len(keys) <= 64, where + ': 1..64 key chords')
@@ -334,6 +342,9 @@ def validate_wizard(spec, where):
 
 
 def validate_case(case, root=ROOT):
+    if 'guests' in case:
+        import lan_runner
+        return lan_runner.validate(case, root)
     refuse(case.get('kind') == KIND and case.get('probe') == KIND, 'kind and probe are "acceptance"')
     extra = sorted(set(case) - CASE_KEYS)
     refuse(not extra, 'refused keys: ' + ', '.join(extra))
@@ -348,6 +359,21 @@ def validate_case(case, root=ROOT):
     refuse(isinstance(devices, dict) and set(devices) <= {'optical', 'network'}, 'devices: optical, network')
     refuse(devices.get('optical') in (None, 'empty'), 'devices.optical is "empty" (media come from steps)')
     refuse(devices.get('network') in NICS, 'devices.network: ' + ', '.join(n for n in NICS if n))
+    if 'dos_game' in case:
+        spec = case['dos_game']
+        refuse(isinstance(spec, dict) and set(spec) == {'title', 'role'} and spec['role'] in ('single', 'host', 'join'), 'dos_game title/role')
+        try:
+            title, _ = dos_games.title_for(spec['title'], root)
+        except (ValueError, OSError) as error:
+            raise res.Refusal(str(error)) from error
+        refuse(spec['role'] == 'single' or title['lan'] is not None, 'IPX title required')
+        recipe = dos_games.acceptance_case(title, spec['role'])
+        refuse({k: v for k, v in case.items() if k not in ('_run_id', '_prune_keep', '_lan')} == recipe,
+               'DOS title case must use the complete menu/screen/audio/gameplay/exit recipe (dos_games.py write-cases)')
+    if '_lan' in case:
+        import lan_runner
+        lan_runner.validate_network(case['_lan'])
+        refuse(devices.get('network') is not None and case.get('dos_game', {}).get('role') in ('host', 'join'), 'LAN network requires paired DOS title')
     media = case.get('media', {})
     refuse(isinstance(media, dict) and len(media) <= 6, 'media: at most 6 generated images')
     for name, spec in media.items():
@@ -410,7 +436,12 @@ def validate_case(case, root=ROOT):
         refuse(settle is None or isinstance(settle, dict) and set(settle) <= {'stable', 'timeout', 'changed', 'region'},
                where + ': screen_settle stable, timeout, changed, region')
         screen = step.get('screen')
-        refuse(screen is None or isinstance(screen, dict) and set(screen) <= {'geometry', 'desktop'}, where + ': screen geometry, desktop')
+        refuse(screen is None or isinstance(screen, dict) and set(screen) <= {'geometry', 'desktop', 'region', 'sha256'}, where + ': screen geometry, desktop, region, sha256')
+        if screen and 'sha256' in screen:
+            refuse(isinstance(screen['sha256'], str) and re.fullmatch('[0-9a-f]{64}', screen['sha256']), where + ': screen SHA-256')
+            region = screen.get('region')
+            refuse(isinstance(region, list) and len(region) == 4 and all(type(v) is int and 0 <= v <= 2048 for v in region) and min(region[2:]) > 0,
+                   where + ': bounded nonempty screen region')
         refuse(step.get('on_fail', 'stop') in ('stop', 'continue'), where + ': on_fail stop|continue')
         refuse(type(step.get('required', True)) is bool, where + ': required boolean')
         refuse('known_failure' not in step or isinstance(step['known_failure'], dict) and step['known_failure'].get('directive')
@@ -487,8 +518,15 @@ def qemu_args(case):
     if devices.get('network'):
         # The T23's NIC model on a restricted user network: DHCP from slirp,
         # no route to the host or the internet.
-        args += ['-netdev', 'user,id=ciuknet0,restrict=on',
-                 '-device', devices['network'] + ',netdev=ciuknet0,mac=52:54:00:12:34:56,romfile=']
+        if '_lan' in case:
+            import lan_runner
+            lan_runner.validate_network(case['_lan'])
+            network = case['_lan']
+            netdev = 'socket,id=ciuknet0,mcast=%s:%d,localaddr=127.0.0.1' % (network['group'], network['port'])
+            mac = network['mac']
+        else:
+            netdev, mac = 'user,id=ciuknet0,restrict=on', '52:54:00:12:34:56'
+        args += ['-netdev', netdev, '-device', devices['network'] + ',netdev=ciuknet0,mac=' + mac + ',romfile=']
     if devices.get('optical') == 'empty':
         # The T23 CD drive is the secondary master (channel 1 unit 0). A
         # backend without a file is an empty drive (no medium); the explicit
@@ -591,6 +629,15 @@ class Session:
 
     # -- run.py hooks --
     def precheck(self):
+        if 'dos_game' in self.case:
+            title, _, _ = dos_games.precheck(self.case['dos_game'], self.root)
+            role = self.case['dos_game']['role']
+            # The placeholder screen cannot pass without a reviewed calibration.
+            for step in self.steps:
+                if step['name'] == 'gameplay':
+                    step['screen'] = {'desktop': False, **title['calibration'][role]}
+                if step['name'] == 'enter-game' and role != 'single':
+                    step['actions'] = [{'keys': title['lan'][role + '_input'], 'pause': 1}]
         pending = self.case.get('pending')
         if pending:
             missing = [p for p in pending.get('requires', []) if not (self.root / p).exists()]
@@ -855,6 +902,8 @@ class Session:
                         for c in text_chords(action['text'])]
             elif 'media' in action:
                 out.append({'media': action['media'], 'pause': pause})
+            elif 'mouse' in action:
+                out.append({'mouse': action['mouse'], 'pause': pause, 'hold': action.get('hold', KEY_HOLD)})
             elif 'screendump' in action:
                 out.append({'screendump': action['screendump'], 'pause': pause})
             elif 'sleep' in action:
@@ -888,6 +937,18 @@ class Session:
                                                            'format': 'raw', 'read-only-mode': 'read-only'}
             qmp.command(command, args)
             log.append({'t': self._rel(now), 'qmp': command, **({'media': item['media']['insert']} if 'insert' in item['media'] else {})})
+            return item['pause']
+        if 'mouse' in item:
+            mouse = item['mouse']
+            events = [{'type': 'rel', 'data': {'axis': axis, 'value': mouse[key]}}
+                      for axis, key in (('x', 'dx'), ('y', 'dy')) if mouse.get(key)]
+            if events:
+                qmp.input_events(events)
+            if mouse.get('button'):
+                qmp.input_events([{'type': 'btn', 'data': {'button': mouse['button'], 'down': True}}])
+                time.sleep(item['hold'])
+                qmp.input_events([{'type': 'btn', 'data': {'button': mouse['button'], 'down': False}}])
+            log.append({'t': self._rel(now), 'mouse': mouse})
             return item['pause']
         if 'screendump' in item:
             path = self._screendump(qmp, item['screendump'])
@@ -1096,6 +1157,15 @@ class Session:
                      screen_file=path.name)
         if observed['failures']:
             raise StepFailure('step %s: screen check failed: %s' % (step['name'], ', '.join(observed['failures'])), 'screen')
+        if 'sha256' in spec:
+            width, height, _ = self.read_ppm(path)
+            x, y, w, h = spec['region']
+            if x + w > width or y + h > height:
+                raise StepFailure('gameplay region outside screen', 'screen')
+            actual = screen_hash(self.read_ppm, path, spec['region'])
+            self._record(gameplay_sha256=actual, expected_sha256=spec['sha256'])
+            if actual != spec['sha256']:
+                raise StepFailure('gameplay frame does not match reviewed checkpoint', 'screen')
 
     def _fail_step(self, now, qmp, reason, kind='other'):
         """A blocking failure stops the script unless on_fail is continue; a

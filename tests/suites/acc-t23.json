@@ -3172,6 +3172,8215 @@
     ]
    },
    "note": "fx-acc1 item 9 (fx-is5boot): the native bootstrap's first guest run. The engine's file holds the current directory the bootstrap gave it (the media root D:\\); a different value is a finding, its bytes are in the kept overlay. Never the real Half-Life CD."
+  },
+  {
+   "id": "acc-dos-doom",
+   "kind": "acceptance",
+   "probe": "acceptance",
+   "profile": "qemu-t23",
+   "item": 3,
+   "title": "DOOM full screen, sound and gameplay",
+   "timeout": 2400,
+   "expected": {
+    "evidence_kind": "acceptance"
+   },
+   "dos_game": {
+    "title": "doom",
+    "role": "single"
+   },
+   "forbid": [
+    "^\\[dosvm\\] create refused ",
+    "^\\[launch\\] name=dosbox pid=\\d+ error=",
+    "^\\[dosvm\\] fullscreen_(?:refused|transport_fault) vm=\\d+ ",
+    "^\\[dosvm\\] lifecycle stage=stop vm=\\d+ generation=\\d+ reason=[234] "
+   ],
+   "steps": [
+    {
+     "template": "boot",
+     "prefix": "b1",
+     "check": "boot",
+     "settle": 15
+    },
+    {
+     "name": "menu-refresh",
+     "check": "menu",
+     "actions": [
+      {
+       "keys": [
+        "ctrl+esc",
+        "p"
+       ],
+       "pause": 1
+      },
+      {
+       "sleep": 5
+      },
+      {
+       "keys": [
+        "esc",
+        "esc"
+       ]
+      }
+     ]
+    },
+    {
+     "name": "launch",
+     "check": "menu",
+     "actions": [
+      {
+       "keys": [
+        "ctrl+esc",
+        "p",
+        "g",
+        "ret",
+        "t",
+        "ret"
+       ],
+       "pause": 1
+      }
+     ],
+     "note": "Start > Programs > Games > Trial DOOM; the only Trial entry in this private overlay"
+    },
+    {
+     "name": "vm",
+     "check": "menu",
+     "timeout": 240,
+     "wait": "^\\[launch-stage\\] name=dosbox pid=(?P<game_pid>\\d+) stage=vm-create window=DOOM$"
+    },
+    {
+     "name": "graphics",
+     "check": "fullscreen",
+     "timeout": 900,
+     "wait": "^\\[dosvm\\] fullscreen_request vm=(?P<game_vm>\\d+) generation=(?P<game_gen>\\d+) mode=\\d+$"
+    },
+    {
+     "name": "fullscreen",
+     "check": "fullscreen",
+     "timeout": 120,
+     "wait": "^\\[dosvm\\] fullscreen=1 vm=<<game_vm>> generation=<<game_gen>> mode=\\d+$"
+    },
+    {
+     "name": "enter-game",
+     "check": "gameplay",
+     "settle": 5,
+     "actions": [
+      {
+       "keys": [
+        "esc",
+        "ret",
+        "ret",
+        "ret"
+       ],
+       "pause": 1
+      }
+     ]
+    },
+    {
+     "name": "digital",
+     "check": "sound",
+     "since": "boot",
+     "timeout": 120,
+     "wait": "^\\[vm-audio\\] vm=<<game_vm>> play_dma=[15] hz=[1-9]\\d* units=[1-9]\\d*$"
+    },
+    {
+     "name": "opl",
+     "check": "sound",
+     "since": "boot",
+     "timeout": 120,
+     "wait": "^\\[vm-audio\\] vm=<<game_vm>> gen=<<game_gen>> opl_writes=[1-9]\\d* key_writes=[1-9]\\d*$"
+    },
+    {
+     "name": "gameplay",
+     "check": "gameplay",
+     "settle": 10,
+     "screen": {
+      "desktop": false
+     },
+     "note": "precheck replaces this screen with the lead-reviewed gameplay region/hash for this image and role"
+    },
+    {
+     "name": "play",
+     "check": "gameplay",
+     "actions": [
+      {
+       "keys": [
+        "up",
+        "ctrl"
+       ],
+       "pause": 1
+      },
+      {
+       "mouse": {
+        "dx": 40,
+        "dy": -12,
+        "button": "left"
+       },
+       "pause": 1
+      },
+      {
+       "mouse": {
+        "dx": -40,
+        "dy": 12
+       },
+       "pause": 1
+      },
+      {
+       "sleep": 30
+      }
+     ]
+    },
+    {
+     "name": "quit",
+     "check": "exit",
+     "actions": [
+      {
+       "keys": [
+        "f10",
+        "y"
+       ],
+       "pause": 1
+      }
+     ]
+    },
+    {
+     "name": "returned",
+     "check": "exit",
+     "timeout": 120,
+     "wait": "^\\[console\\] dosbox: program returned vm=<<game_vm>> generation=<<game_gen>> early=0$"
+    },
+    {
+     "name": "cleanup",
+     "check": "cleanup",
+     "timeout": 120,
+     "wait": "^\\[dosvm\\] lifecycle stage=cleanup vm=<<game_vm>> generation=<<game_gen>> result=0 data_loss=0 retained=0$"
+    },
+    {
+     "name": "desktop",
+     "check": "cleanup",
+     "settle": 3,
+     "screen": {
+      "geometry": [
+       1024,
+       768
+      ],
+      "desktop": true
+     }
+    }
+   ]
+  },
+  {
+   "id": "acc-dos-quake",
+   "kind": "acceptance",
+   "probe": "acceptance",
+   "profile": "qemu-t23",
+   "item": 3,
+   "title": "Quake full screen, sound and gameplay",
+   "timeout": 2400,
+   "expected": {
+    "evidence_kind": "acceptance"
+   },
+   "dos_game": {
+    "title": "quake",
+    "role": "single"
+   },
+   "forbid": [
+    "^\\[dosvm\\] create refused ",
+    "^\\[launch\\] name=dosbox pid=\\d+ error=",
+    "^\\[dosvm\\] fullscreen_(?:refused|transport_fault) vm=\\d+ ",
+    "^\\[dosvm\\] lifecycle stage=stop vm=\\d+ generation=\\d+ reason=[234] "
+   ],
+   "steps": [
+    {
+     "template": "boot",
+     "prefix": "b1",
+     "check": "boot",
+     "settle": 15
+    },
+    {
+     "name": "menu-refresh",
+     "check": "menu",
+     "actions": [
+      {
+       "keys": [
+        "ctrl+esc",
+        "p"
+       ],
+       "pause": 1
+      },
+      {
+       "sleep": 5
+      },
+      {
+       "keys": [
+        "esc",
+        "esc"
+       ]
+      }
+     ]
+    },
+    {
+     "name": "launch",
+     "check": "menu",
+     "actions": [
+      {
+       "keys": [
+        "ctrl+esc",
+        "p",
+        "g",
+        "ret",
+        "t",
+        "ret"
+       ],
+       "pause": 1
+      }
+     ],
+     "note": "Start > Programs > Games > Trial Quake; the only Trial entry in this private overlay"
+    },
+    {
+     "name": "vm",
+     "check": "menu",
+     "timeout": 240,
+     "wait": "^\\[launch-stage\\] name=dosbox pid=(?P<game_pid>\\d+) stage=vm-create window=Quake$"
+    },
+    {
+     "name": "graphics",
+     "check": "fullscreen",
+     "timeout": 900,
+     "wait": "^\\[dosvm\\] fullscreen_request vm=(?P<game_vm>\\d+) generation=(?P<game_gen>\\d+) mode=\\d+$"
+    },
+    {
+     "name": "fullscreen",
+     "check": "fullscreen",
+     "timeout": 120,
+     "wait": "^\\[dosvm\\] fullscreen=1 vm=<<game_vm>> generation=<<game_gen>> mode=\\d+$"
+    },
+    {
+     "name": "enter-game",
+     "check": "gameplay",
+     "settle": 5,
+     "actions": [
+      {
+       "keys": [
+        "esc",
+        "ret",
+        "ret",
+        "ret"
+       ],
+       "pause": 1
+      }
+     ]
+    },
+    {
+     "name": "digital",
+     "check": "sound",
+     "since": "boot",
+     "timeout": 120,
+     "wait": "^\\[vm-audio\\] vm=<<game_vm>> play_dma=[15] hz=[1-9]\\d* units=[1-9]\\d*$"
+    },
+    {
+     "name": "gameplay",
+     "check": "gameplay",
+     "settle": 10,
+     "screen": {
+      "desktop": false
+     },
+     "note": "precheck replaces this screen with the lead-reviewed gameplay region/hash for this image and role"
+    },
+    {
+     "name": "play",
+     "check": "gameplay",
+     "actions": [
+      {
+       "keys": [
+        "up",
+        "ctrl"
+       ],
+       "pause": 1
+      },
+      {
+       "mouse": {
+        "dx": 40,
+        "dy": -12,
+        "button": "left"
+       },
+       "pause": 1
+      },
+      {
+       "mouse": {
+        "dx": -40,
+        "dy": 12
+       },
+       "pause": 1
+      },
+      {
+       "sleep": 30
+      }
+     ]
+    },
+    {
+     "name": "quit",
+     "check": "exit",
+     "actions": [
+      {
+       "keys": [
+        "grave_accent",
+        "q",
+        "u",
+        "i",
+        "t",
+        "ret"
+       ],
+       "pause": 1
+      }
+     ]
+    },
+    {
+     "name": "returned",
+     "check": "exit",
+     "timeout": 120,
+     "wait": "^\\[console\\] dosbox: program returned vm=<<game_vm>> generation=<<game_gen>> early=0$"
+    },
+    {
+     "name": "cleanup",
+     "check": "cleanup",
+     "timeout": 120,
+     "wait": "^\\[dosvm\\] lifecycle stage=cleanup vm=<<game_vm>> generation=<<game_gen>> result=0 data_loss=0 retained=0$"
+    },
+    {
+     "name": "desktop",
+     "check": "cleanup",
+     "settle": 3,
+     "screen": {
+      "geometry": [
+       1024,
+       768
+      ],
+      "desktop": true
+     }
+    }
+   ]
+  },
+  {
+   "id": "acc-dos-wolf3d",
+   "kind": "acceptance",
+   "probe": "acceptance",
+   "profile": "qemu-t23",
+   "item": 3,
+   "title": "Wolfenstein 3D full screen, sound and gameplay",
+   "timeout": 2400,
+   "expected": {
+    "evidence_kind": "acceptance"
+   },
+   "dos_game": {
+    "title": "wolf3d",
+    "role": "single"
+   },
+   "forbid": [
+    "^\\[dosvm\\] create refused ",
+    "^\\[launch\\] name=dosbox pid=\\d+ error=",
+    "^\\[dosvm\\] fullscreen_(?:refused|transport_fault) vm=\\d+ ",
+    "^\\[dosvm\\] lifecycle stage=stop vm=\\d+ generation=\\d+ reason=[234] "
+   ],
+   "steps": [
+    {
+     "template": "boot",
+     "prefix": "b1",
+     "check": "boot",
+     "settle": 15
+    },
+    {
+     "name": "menu-refresh",
+     "check": "menu",
+     "actions": [
+      {
+       "keys": [
+        "ctrl+esc",
+        "p"
+       ],
+       "pause": 1
+      },
+      {
+       "sleep": 5
+      },
+      {
+       "keys": [
+        "esc",
+        "esc"
+       ]
+      }
+     ]
+    },
+    {
+     "name": "launch",
+     "check": "menu",
+     "actions": [
+      {
+       "keys": [
+        "ctrl+esc",
+        "p",
+        "g",
+        "ret",
+        "t",
+        "ret"
+       ],
+       "pause": 1
+      }
+     ],
+     "note": "Start > Programs > Games > Trial Wolfenstein 3D; the only Trial entry in this private overlay"
+    },
+    {
+     "name": "vm",
+     "check": "menu",
+     "timeout": 240,
+     "wait": "^\\[launch-stage\\] name=dosbox pid=(?P<game_pid>\\d+) stage=vm-create window=Wolfenstein\\ 3D$"
+    },
+    {
+     "name": "graphics",
+     "check": "fullscreen",
+     "timeout": 900,
+     "wait": "^\\[dosvm\\] fullscreen_request vm=(?P<game_vm>\\d+) generation=(?P<game_gen>\\d+) mode=\\d+$"
+    },
+    {
+     "name": "fullscreen",
+     "check": "fullscreen",
+     "timeout": 120,
+     "wait": "^\\[dosvm\\] fullscreen=1 vm=<<game_vm>> generation=<<game_gen>> mode=\\d+$"
+    },
+    {
+     "name": "enter-game",
+     "check": "gameplay",
+     "settle": 5,
+     "actions": [
+      {
+       "keys": [
+        "esc",
+        "ret",
+        "ret",
+        "ret"
+       ],
+       "pause": 1
+      }
+     ]
+    },
+    {
+     "name": "digital",
+     "check": "sound",
+     "since": "boot",
+     "timeout": 120,
+     "wait": "^\\[vm-audio\\] vm=<<game_vm>> play_dma=[15] hz=[1-9]\\d* units=[1-9]\\d*$"
+    },
+    {
+     "name": "opl",
+     "check": "sound",
+     "since": "boot",
+     "timeout": 120,
+     "wait": "^\\[vm-audio\\] vm=<<game_vm>> gen=<<game_gen>> opl_writes=[1-9]\\d* key_writes=[1-9]\\d*$"
+    },
+    {
+     "name": "gameplay",
+     "check": "gameplay",
+     "settle": 10,
+     "screen": {
+      "desktop": false
+     },
+     "note": "precheck replaces this screen with the lead-reviewed gameplay region/hash for this image and role"
+    },
+    {
+     "name": "play",
+     "check": "gameplay",
+     "actions": [
+      {
+       "keys": [
+        "up",
+        "ctrl"
+       ],
+       "pause": 1
+      },
+      {
+       "mouse": {
+        "dx": 40,
+        "dy": -12,
+        "button": "left"
+       },
+       "pause": 1
+      },
+      {
+       "mouse": {
+        "dx": -40,
+        "dy": 12
+       },
+       "pause": 1
+      },
+      {
+       "sleep": 30
+      }
+     ]
+    },
+    {
+     "name": "quit",
+     "check": "exit",
+     "actions": [
+      {
+       "keys": [
+        "f10",
+        "y"
+       ],
+       "pause": 1
+      }
+     ]
+    },
+    {
+     "name": "returned",
+     "check": "exit",
+     "timeout": 120,
+     "wait": "^\\[console\\] dosbox: program returned vm=<<game_vm>> generation=<<game_gen>> early=0$"
+    },
+    {
+     "name": "cleanup",
+     "check": "cleanup",
+     "timeout": 120,
+     "wait": "^\\[dosvm\\] lifecycle stage=cleanup vm=<<game_vm>> generation=<<game_gen>> result=0 data_loss=0 retained=0$"
+    },
+    {
+     "name": "desktop",
+     "check": "cleanup",
+     "settle": 3,
+     "screen": {
+      "geometry": [
+       1024,
+       768
+      ],
+      "desktop": true
+     }
+    }
+   ]
+  },
+  {
+   "id": "acc-dos-rott",
+   "kind": "acceptance",
+   "probe": "acceptance",
+   "profile": "qemu-t23",
+   "item": 3,
+   "title": "Rise of the Triad full screen, sound and gameplay",
+   "timeout": 2400,
+   "expected": {
+    "evidence_kind": "acceptance"
+   },
+   "dos_game": {
+    "title": "rott",
+    "role": "single"
+   },
+   "forbid": [
+    "^\\[dosvm\\] create refused ",
+    "^\\[launch\\] name=dosbox pid=\\d+ error=",
+    "^\\[dosvm\\] fullscreen_(?:refused|transport_fault) vm=\\d+ ",
+    "^\\[dosvm\\] lifecycle stage=stop vm=\\d+ generation=\\d+ reason=[234] "
+   ],
+   "steps": [
+    {
+     "template": "boot",
+     "prefix": "b1",
+     "check": "boot",
+     "settle": 15
+    },
+    {
+     "name": "menu-refresh",
+     "check": "menu",
+     "actions": [
+      {
+       "keys": [
+        "ctrl+esc",
+        "p"
+       ],
+       "pause": 1
+      },
+      {
+       "sleep": 5
+      },
+      {
+       "keys": [
+        "esc",
+        "esc"
+       ]
+      }
+     ]
+    },
+    {
+     "name": "launch",
+     "check": "menu",
+     "actions": [
+      {
+       "keys": [
+        "ctrl+esc",
+        "p",
+        "g",
+        "ret",
+        "t",
+        "ret"
+       ],
+       "pause": 1
+      }
+     ],
+     "note": "Start > Programs > Games > Trial Rise of the Triad; the only Trial entry in this private overlay"
+    },
+    {
+     "name": "vm",
+     "check": "menu",
+     "timeout": 240,
+     "wait": "^\\[launch-stage\\] name=dosbox pid=(?P<game_pid>\\d+) stage=vm-create window=Rise\\ of\\ the\\ Triad$"
+    },
+    {
+     "name": "graphics",
+     "check": "fullscreen",
+     "timeout": 900,
+     "wait": "^\\[dosvm\\] fullscreen_request vm=(?P<game_vm>\\d+) generation=(?P<game_gen>\\d+) mode=\\d+$"
+    },
+    {
+     "name": "fullscreen",
+     "check": "fullscreen",
+     "timeout": 120,
+     "wait": "^\\[dosvm\\] fullscreen=1 vm=<<game_vm>> generation=<<game_gen>> mode=\\d+$"
+    },
+    {
+     "name": "enter-game",
+     "check": "gameplay",
+     "settle": 5,
+     "actions": [
+      {
+       "keys": [
+        "esc",
+        "ret",
+        "ret",
+        "ret"
+       ],
+       "pause": 1
+      }
+     ]
+    },
+    {
+     "name": "digital",
+     "check": "sound",
+     "since": "boot",
+     "timeout": 120,
+     "wait": "^\\[vm-audio\\] vm=<<game_vm>> play_dma=[15] hz=[1-9]\\d* units=[1-9]\\d*$"
+    },
+    {
+     "name": "opl",
+     "check": "sound",
+     "since": "boot",
+     "timeout": 120,
+     "wait": "^\\[vm-audio\\] vm=<<game_vm>> gen=<<game_gen>> opl_writes=[1-9]\\d* key_writes=[1-9]\\d*$"
+    },
+    {
+     "name": "gameplay",
+     "check": "gameplay",
+     "settle": 10,
+     "screen": {
+      "desktop": false
+     },
+     "note": "precheck replaces this screen with the lead-reviewed gameplay region/hash for this image and role"
+    },
+    {
+     "name": "play",
+     "check": "gameplay",
+     "actions": [
+      {
+       "keys": [
+        "up",
+        "ctrl"
+       ],
+       "pause": 1
+      },
+      {
+       "mouse": {
+        "dx": 40,
+        "dy": -12,
+        "button": "left"
+       },
+       "pause": 1
+      },
+      {
+       "mouse": {
+        "dx": -40,
+        "dy": 12
+       },
+       "pause": 1
+      },
+      {
+       "sleep": 30
+      }
+     ]
+    },
+    {
+     "name": "quit",
+     "check": "exit",
+     "actions": [
+      {
+       "keys": [
+        "esc",
+        "up",
+        "ret",
+        "y"
+       ],
+       "pause": 1
+      }
+     ]
+    },
+    {
+     "name": "returned",
+     "check": "exit",
+     "timeout": 120,
+     "wait": "^\\[console\\] dosbox: program returned vm=<<game_vm>> generation=<<game_gen>> early=0$"
+    },
+    {
+     "name": "cleanup",
+     "check": "cleanup",
+     "timeout": 120,
+     "wait": "^\\[dosvm\\] lifecycle stage=cleanup vm=<<game_vm>> generation=<<game_gen>> result=0 data_loss=0 retained=0$"
+    },
+    {
+     "name": "desktop",
+     "check": "cleanup",
+     "settle": 3,
+     "screen": {
+      "geometry": [
+       1024,
+       768
+      ],
+      "desktop": true
+     }
+    }
+   ]
+  },
+  {
+   "id": "acc-dos-keen4",
+   "kind": "acceptance",
+   "probe": "acceptance",
+   "profile": "qemu-t23",
+   "item": 3,
+   "title": "Commander Keen 4 full screen, sound and gameplay",
+   "timeout": 2400,
+   "expected": {
+    "evidence_kind": "acceptance"
+   },
+   "dos_game": {
+    "title": "keen4",
+    "role": "single"
+   },
+   "forbid": [
+    "^\\[dosvm\\] create refused ",
+    "^\\[launch\\] name=dosbox pid=\\d+ error=",
+    "^\\[dosvm\\] fullscreen_(?:refused|transport_fault) vm=\\d+ ",
+    "^\\[dosvm\\] lifecycle stage=stop vm=\\d+ generation=\\d+ reason=[234] "
+   ],
+   "steps": [
+    {
+     "template": "boot",
+     "prefix": "b1",
+     "check": "boot",
+     "settle": 15
+    },
+    {
+     "name": "menu-refresh",
+     "check": "menu",
+     "actions": [
+      {
+       "keys": [
+        "ctrl+esc",
+        "p"
+       ],
+       "pause": 1
+      },
+      {
+       "sleep": 5
+      },
+      {
+       "keys": [
+        "esc",
+        "esc"
+       ]
+      }
+     ]
+    },
+    {
+     "name": "launch",
+     "check": "menu",
+     "actions": [
+      {
+       "keys": [
+        "ctrl+esc",
+        "p",
+        "g",
+        "ret",
+        "t",
+        "ret"
+       ],
+       "pause": 1
+      }
+     ],
+     "note": "Start > Programs > Games > Trial Commander Keen 4; the only Trial entry in this private overlay"
+    },
+    {
+     "name": "vm",
+     "check": "menu",
+     "timeout": 240,
+     "wait": "^\\[launch-stage\\] name=dosbox pid=(?P<game_pid>\\d+) stage=vm-create window=Commander\\ Keen\\ 4$"
+    },
+    {
+     "name": "graphics",
+     "check": "fullscreen",
+     "timeout": 900,
+     "wait": "^\\[dosvm\\] fullscreen_request vm=(?P<game_vm>\\d+) generation=(?P<game_gen>\\d+) mode=\\d+$"
+    },
+    {
+     "name": "fullscreen",
+     "check": "fullscreen",
+     "timeout": 120,
+     "wait": "^\\[dosvm\\] fullscreen=1 vm=<<game_vm>> generation=<<game_gen>> mode=\\d+$"
+    },
+    {
+     "name": "enter-game",
+     "check": "gameplay",
+     "settle": 5,
+     "actions": [
+      {
+       "keys": [
+        "ret",
+        "ret",
+        "ret"
+       ],
+       "pause": 1
+      }
+     ]
+    },
+    {
+     "name": "digital",
+     "check": "sound",
+     "since": "boot",
+     "timeout": 120,
+     "wait": "^\\[vm-audio\\] vm=<<game_vm>> play_dma=[15] hz=[1-9]\\d* units=[1-9]\\d*$"
+    },
+    {
+     "name": "opl",
+     "check": "sound",
+     "since": "boot",
+     "timeout": 120,
+     "wait": "^\\[vm-audio\\] vm=<<game_vm>> gen=<<game_gen>> opl_writes=[1-9]\\d* key_writes=[1-9]\\d*$"
+    },
+    {
+     "name": "gameplay",
+     "check": "gameplay",
+     "settle": 10,
+     "screen": {
+      "desktop": false
+     },
+     "note": "precheck replaces this screen with the lead-reviewed gameplay region/hash for this image and role"
+    },
+    {
+     "name": "play",
+     "check": "gameplay",
+     "actions": [
+      {
+       "keys": [
+        "up",
+        "ctrl"
+       ],
+       "pause": 1
+      },
+      {
+       "sleep": 30
+      }
+     ]
+    },
+    {
+     "name": "quit",
+     "check": "exit",
+     "actions": [
+      {
+       "keys": [
+        "esc",
+        "q",
+        "y"
+       ],
+       "pause": 1
+      }
+     ]
+    },
+    {
+     "name": "returned",
+     "check": "exit",
+     "timeout": 120,
+     "wait": "^\\[console\\] dosbox: program returned vm=<<game_vm>> generation=<<game_gen>> early=0$"
+    },
+    {
+     "name": "cleanup",
+     "check": "cleanup",
+     "timeout": 120,
+     "wait": "^\\[dosvm\\] lifecycle stage=cleanup vm=<<game_vm>> generation=<<game_gen>> result=0 data_loss=0 retained=0$"
+    },
+    {
+     "name": "desktop",
+     "check": "cleanup",
+     "settle": 3,
+     "screen": {
+      "geometry": [
+       1024,
+       768
+      ],
+      "desktop": true
+     }
+    }
+   ]
+  },
+  {
+   "id": "acc-dos-duke3d",
+   "kind": "acceptance",
+   "probe": "acceptance",
+   "profile": "qemu-t23",
+   "item": 3,
+   "title": "Duke Nukem 3D full screen, sound and gameplay",
+   "timeout": 2400,
+   "expected": {
+    "evidence_kind": "acceptance"
+   },
+   "dos_game": {
+    "title": "duke3d",
+    "role": "single"
+   },
+   "forbid": [
+    "^\\[dosvm\\] create refused ",
+    "^\\[launch\\] name=dosbox pid=\\d+ error=",
+    "^\\[dosvm\\] fullscreen_(?:refused|transport_fault) vm=\\d+ ",
+    "^\\[dosvm\\] lifecycle stage=stop vm=\\d+ generation=\\d+ reason=[234] "
+   ],
+   "steps": [
+    {
+     "template": "boot",
+     "prefix": "b1",
+     "check": "boot",
+     "settle": 15
+    },
+    {
+     "name": "menu-refresh",
+     "check": "menu",
+     "actions": [
+      {
+       "keys": [
+        "ctrl+esc",
+        "p"
+       ],
+       "pause": 1
+      },
+      {
+       "sleep": 5
+      },
+      {
+       "keys": [
+        "esc",
+        "esc"
+       ]
+      }
+     ]
+    },
+    {
+     "name": "launch",
+     "check": "menu",
+     "actions": [
+      {
+       "keys": [
+        "ctrl+esc",
+        "p",
+        "g",
+        "ret",
+        "t",
+        "ret"
+       ],
+       "pause": 1
+      }
+     ],
+     "note": "Start > Programs > Games > Trial Duke Nukem 3D; the only Trial entry in this private overlay"
+    },
+    {
+     "name": "vm",
+     "check": "menu",
+     "timeout": 240,
+     "wait": "^\\[launch-stage\\] name=dosbox pid=(?P<game_pid>\\d+) stage=vm-create window=Duke\\ Nukem\\ 3D$"
+    },
+    {
+     "name": "graphics",
+     "check": "fullscreen",
+     "timeout": 900,
+     "wait": "^\\[dosvm\\] fullscreen_request vm=(?P<game_vm>\\d+) generation=(?P<game_gen>\\d+) mode=\\d+$"
+    },
+    {
+     "name": "fullscreen",
+     "check": "fullscreen",
+     "timeout": 120,
+     "wait": "^\\[dosvm\\] fullscreen=1 vm=<<game_vm>> generation=<<game_gen>> mode=\\d+$"
+    },
+    {
+     "name": "enter-game",
+     "check": "gameplay",
+     "settle": 5,
+     "actions": [
+      {
+       "keys": [
+        "esc",
+        "ret",
+        "ret",
+        "ret"
+       ],
+       "pause": 1
+      }
+     ]
+    },
+    {
+     "name": "digital",
+     "check": "sound",
+     "since": "boot",
+     "timeout": 120,
+     "wait": "^\\[vm-audio\\] vm=<<game_vm>> play_dma=[15] hz=[1-9]\\d* units=[1-9]\\d*$"
+    },
+    {
+     "name": "opl",
+     "check": "sound",
+     "since": "boot",
+     "timeout": 120,
+     "wait": "^\\[vm-audio\\] vm=<<game_vm>> gen=<<game_gen>> opl_writes=[1-9]\\d* key_writes=[1-9]\\d*$"
+    },
+    {
+     "name": "gameplay",
+     "check": "gameplay",
+     "settle": 10,
+     "screen": {
+      "desktop": false
+     },
+     "note": "precheck replaces this screen with the lead-reviewed gameplay region/hash for this image and role"
+    },
+    {
+     "name": "play",
+     "check": "gameplay",
+     "actions": [
+      {
+       "keys": [
+        "up",
+        "ctrl"
+       ],
+       "pause": 1
+      },
+      {
+       "mouse": {
+        "dx": 40,
+        "dy": -12,
+        "button": "left"
+       },
+       "pause": 1
+      },
+      {
+       "mouse": {
+        "dx": -40,
+        "dy": 12
+       },
+       "pause": 1
+      },
+      {
+       "sleep": 30
+      }
+     ]
+    },
+    {
+     "name": "quit",
+     "check": "exit",
+     "actions": [
+      {
+       "keys": [
+        "esc",
+        "up",
+        "ret",
+        "y"
+       ],
+       "pause": 1
+      }
+     ]
+    },
+    {
+     "name": "returned",
+     "check": "exit",
+     "timeout": 120,
+     "wait": "^\\[console\\] dosbox: program returned vm=<<game_vm>> generation=<<game_gen>> early=0$"
+    },
+    {
+     "name": "cleanup",
+     "check": "cleanup",
+     "timeout": 120,
+     "wait": "^\\[dosvm\\] lifecycle stage=cleanup vm=<<game_vm>> generation=<<game_gen>> result=0 data_loss=0 retained=0$"
+    },
+    {
+     "name": "desktop",
+     "check": "cleanup",
+     "settle": 3,
+     "screen": {
+      "geometry": [
+       1024,
+       768
+      ],
+      "desktop": true
+     }
+    }
+   ]
+  },
+  {
+   "id": "acc-dos-heretic",
+   "kind": "acceptance",
+   "probe": "acceptance",
+   "profile": "qemu-t23",
+   "item": 3,
+   "title": "Heretic full screen, sound and gameplay",
+   "timeout": 2400,
+   "expected": {
+    "evidence_kind": "acceptance"
+   },
+   "dos_game": {
+    "title": "heretic",
+    "role": "single"
+   },
+   "forbid": [
+    "^\\[dosvm\\] create refused ",
+    "^\\[launch\\] name=dosbox pid=\\d+ error=",
+    "^\\[dosvm\\] fullscreen_(?:refused|transport_fault) vm=\\d+ ",
+    "^\\[dosvm\\] lifecycle stage=stop vm=\\d+ generation=\\d+ reason=[234] "
+   ],
+   "steps": [
+    {
+     "template": "boot",
+     "prefix": "b1",
+     "check": "boot",
+     "settle": 15
+    },
+    {
+     "name": "menu-refresh",
+     "check": "menu",
+     "actions": [
+      {
+       "keys": [
+        "ctrl+esc",
+        "p"
+       ],
+       "pause": 1
+      },
+      {
+       "sleep": 5
+      },
+      {
+       "keys": [
+        "esc",
+        "esc"
+       ]
+      }
+     ]
+    },
+    {
+     "name": "launch",
+     "check": "menu",
+     "actions": [
+      {
+       "keys": [
+        "ctrl+esc",
+        "p",
+        "g",
+        "ret",
+        "t",
+        "ret"
+       ],
+       "pause": 1
+      }
+     ],
+     "note": "Start > Programs > Games > Trial Heretic; the only Trial entry in this private overlay"
+    },
+    {
+     "name": "vm",
+     "check": "menu",
+     "timeout": 240,
+     "wait": "^\\[launch-stage\\] name=dosbox pid=(?P<game_pid>\\d+) stage=vm-create window=Heretic$"
+    },
+    {
+     "name": "graphics",
+     "check": "fullscreen",
+     "timeout": 900,
+     "wait": "^\\[dosvm\\] fullscreen_request vm=(?P<game_vm>\\d+) generation=(?P<game_gen>\\d+) mode=\\d+$"
+    },
+    {
+     "name": "fullscreen",
+     "check": "fullscreen",
+     "timeout": 120,
+     "wait": "^\\[dosvm\\] fullscreen=1 vm=<<game_vm>> generation=<<game_gen>> mode=\\d+$"
+    },
+    {
+     "name": "enter-game",
+     "check": "gameplay",
+     "settle": 5,
+     "actions": [
+      {
+       "keys": [
+        "esc",
+        "ret",
+        "ret",
+        "ret"
+       ],
+       "pause": 1
+      }
+     ]
+    },
+    {
+     "name": "digital",
+     "check": "sound",
+     "since": "boot",
+     "timeout": 120,
+     "wait": "^\\[vm-audio\\] vm=<<game_vm>> play_dma=[15] hz=[1-9]\\d* units=[1-9]\\d*$"
+    },
+    {
+     "name": "opl",
+     "check": "sound",
+     "since": "boot",
+     "timeout": 120,
+     "wait": "^\\[vm-audio\\] vm=<<game_vm>> gen=<<game_gen>> opl_writes=[1-9]\\d* key_writes=[1-9]\\d*$"
+    },
+    {
+     "name": "gameplay",
+     "check": "gameplay",
+     "settle": 10,
+     "screen": {
+      "desktop": false
+     },
+     "note": "precheck replaces this screen with the lead-reviewed gameplay region/hash for this image and role"
+    },
+    {
+     "name": "play",
+     "check": "gameplay",
+     "actions": [
+      {
+       "keys": [
+        "up",
+        "ctrl"
+       ],
+       "pause": 1
+      },
+      {
+       "mouse": {
+        "dx": 40,
+        "dy": -12,
+        "button": "left"
+       },
+       "pause": 1
+      },
+      {
+       "mouse": {
+        "dx": -40,
+        "dy": 12
+       },
+       "pause": 1
+      },
+      {
+       "sleep": 30
+      }
+     ]
+    },
+    {
+     "name": "quit",
+     "check": "exit",
+     "actions": [
+      {
+       "keys": [
+        "f10",
+        "y"
+       ],
+       "pause": 1
+      }
+     ]
+    },
+    {
+     "name": "returned",
+     "check": "exit",
+     "timeout": 120,
+     "wait": "^\\[console\\] dosbox: program returned vm=<<game_vm>> generation=<<game_gen>> early=0$"
+    },
+    {
+     "name": "cleanup",
+     "check": "cleanup",
+     "timeout": 120,
+     "wait": "^\\[dosvm\\] lifecycle stage=cleanup vm=<<game_vm>> generation=<<game_gen>> result=0 data_loss=0 retained=0$"
+    },
+    {
+     "name": "desktop",
+     "check": "cleanup",
+     "settle": 3,
+     "screen": {
+      "geometry": [
+       1024,
+       768
+      ],
+      "desktop": true
+     }
+    }
+   ]
+  },
+  {
+   "id": "acc-dos-hexen",
+   "kind": "acceptance",
+   "probe": "acceptance",
+   "profile": "qemu-t23",
+   "item": 3,
+   "title": "Hexen demo full screen, sound and gameplay",
+   "timeout": 2400,
+   "expected": {
+    "evidence_kind": "acceptance"
+   },
+   "dos_game": {
+    "title": "hexen",
+    "role": "single"
+   },
+   "forbid": [
+    "^\\[dosvm\\] create refused ",
+    "^\\[launch\\] name=dosbox pid=\\d+ error=",
+    "^\\[dosvm\\] fullscreen_(?:refused|transport_fault) vm=\\d+ ",
+    "^\\[dosvm\\] lifecycle stage=stop vm=\\d+ generation=\\d+ reason=[234] "
+   ],
+   "steps": [
+    {
+     "template": "boot",
+     "prefix": "b1",
+     "check": "boot",
+     "settle": 15
+    },
+    {
+     "name": "menu-refresh",
+     "check": "menu",
+     "actions": [
+      {
+       "keys": [
+        "ctrl+esc",
+        "p"
+       ],
+       "pause": 1
+      },
+      {
+       "sleep": 5
+      },
+      {
+       "keys": [
+        "esc",
+        "esc"
+       ]
+      }
+     ]
+    },
+    {
+     "name": "launch",
+     "check": "menu",
+     "actions": [
+      {
+       "keys": [
+        "ctrl+esc",
+        "p",
+        "g",
+        "ret",
+        "t",
+        "ret"
+       ],
+       "pause": 1
+      }
+     ],
+     "note": "Start > Programs > Games > Trial Hexen demo; the only Trial entry in this private overlay"
+    },
+    {
+     "name": "vm",
+     "check": "menu",
+     "timeout": 240,
+     "wait": "^\\[launch-stage\\] name=dosbox pid=(?P<game_pid>\\d+) stage=vm-create window=Hexen\\ demo$"
+    },
+    {
+     "name": "graphics",
+     "check": "fullscreen",
+     "timeout": 900,
+     "wait": "^\\[dosvm\\] fullscreen_request vm=(?P<game_vm>\\d+) generation=(?P<game_gen>\\d+) mode=\\d+$"
+    },
+    {
+     "name": "fullscreen",
+     "check": "fullscreen",
+     "timeout": 120,
+     "wait": "^\\[dosvm\\] fullscreen=1 vm=<<game_vm>> generation=<<game_gen>> mode=\\d+$"
+    },
+    {
+     "name": "enter-game",
+     "check": "gameplay",
+     "settle": 5,
+     "actions": [
+      {
+       "keys": [
+        "esc",
+        "ret",
+        "ret",
+        "ret"
+       ],
+       "pause": 1
+      }
+     ]
+    },
+    {
+     "name": "digital",
+     "check": "sound",
+     "since": "boot",
+     "timeout": 120,
+     "wait": "^\\[vm-audio\\] vm=<<game_vm>> play_dma=[15] hz=[1-9]\\d* units=[1-9]\\d*$"
+    },
+    {
+     "name": "opl",
+     "check": "sound",
+     "since": "boot",
+     "timeout": 120,
+     "wait": "^\\[vm-audio\\] vm=<<game_vm>> gen=<<game_gen>> opl_writes=[1-9]\\d* key_writes=[1-9]\\d*$"
+    },
+    {
+     "name": "gameplay",
+     "check": "gameplay",
+     "settle": 10,
+     "screen": {
+      "desktop": false
+     },
+     "note": "precheck replaces this screen with the lead-reviewed gameplay region/hash for this image and role"
+    },
+    {
+     "name": "play",
+     "check": "gameplay",
+     "actions": [
+      {
+       "keys": [
+        "up",
+        "ctrl"
+       ],
+       "pause": 1
+      },
+      {
+       "mouse": {
+        "dx": 40,
+        "dy": -12,
+        "button": "left"
+       },
+       "pause": 1
+      },
+      {
+       "mouse": {
+        "dx": -40,
+        "dy": 12
+       },
+       "pause": 1
+      },
+      {
+       "sleep": 30
+      }
+     ]
+    },
+    {
+     "name": "quit",
+     "check": "exit",
+     "actions": [
+      {
+       "keys": [
+        "f10",
+        "y"
+       ],
+       "pause": 1
+      }
+     ]
+    },
+    {
+     "name": "returned",
+     "check": "exit",
+     "timeout": 120,
+     "wait": "^\\[console\\] dosbox: program returned vm=<<game_vm>> generation=<<game_gen>> early=0$"
+    },
+    {
+     "name": "cleanup",
+     "check": "cleanup",
+     "timeout": 120,
+     "wait": "^\\[dosvm\\] lifecycle stage=cleanup vm=<<game_vm>> generation=<<game_gen>> result=0 data_loss=0 retained=0$"
+    },
+    {
+     "name": "desktop",
+     "check": "cleanup",
+     "settle": 3,
+     "screen": {
+      "geometry": [
+       1024,
+       768
+      ],
+      "desktop": true
+     }
+    }
+   ]
+  },
+  {
+   "id": "acc-dos-descent",
+   "kind": "acceptance",
+   "probe": "acceptance",
+   "profile": "qemu-t23",
+   "item": 3,
+   "title": "Descent full screen, sound and gameplay",
+   "timeout": 2400,
+   "expected": {
+    "evidence_kind": "acceptance"
+   },
+   "dos_game": {
+    "title": "descent",
+    "role": "single"
+   },
+   "forbid": [
+    "^\\[dosvm\\] create refused ",
+    "^\\[launch\\] name=dosbox pid=\\d+ error=",
+    "^\\[dosvm\\] fullscreen_(?:refused|transport_fault) vm=\\d+ ",
+    "^\\[dosvm\\] lifecycle stage=stop vm=\\d+ generation=\\d+ reason=[234] "
+   ],
+   "steps": [
+    {
+     "template": "boot",
+     "prefix": "b1",
+     "check": "boot",
+     "settle": 15
+    },
+    {
+     "name": "menu-refresh",
+     "check": "menu",
+     "actions": [
+      {
+       "keys": [
+        "ctrl+esc",
+        "p"
+       ],
+       "pause": 1
+      },
+      {
+       "sleep": 5
+      },
+      {
+       "keys": [
+        "esc",
+        "esc"
+       ]
+      }
+     ]
+    },
+    {
+     "name": "launch",
+     "check": "menu",
+     "actions": [
+      {
+       "keys": [
+        "ctrl+esc",
+        "p",
+        "g",
+        "ret",
+        "t",
+        "ret"
+       ],
+       "pause": 1
+      }
+     ],
+     "note": "Start > Programs > Games > Trial Descent; the only Trial entry in this private overlay"
+    },
+    {
+     "name": "vm",
+     "check": "menu",
+     "timeout": 240,
+     "wait": "^\\[launch-stage\\] name=dosbox pid=(?P<game_pid>\\d+) stage=vm-create window=Descent$"
+    },
+    {
+     "name": "graphics",
+     "check": "fullscreen",
+     "timeout": 900,
+     "wait": "^\\[dosvm\\] fullscreen_request vm=(?P<game_vm>\\d+) generation=(?P<game_gen>\\d+) mode=\\d+$"
+    },
+    {
+     "name": "fullscreen",
+     "check": "fullscreen",
+     "timeout": 120,
+     "wait": "^\\[dosvm\\] fullscreen=1 vm=<<game_vm>> generation=<<game_gen>> mode=\\d+$"
+    },
+    {
+     "name": "enter-game",
+     "check": "gameplay",
+     "settle": 5,
+     "actions": [
+      {
+       "keys": [
+        "ret",
+        "ret",
+        "ret",
+        "ret"
+       ],
+       "pause": 1
+      }
+     ]
+    },
+    {
+     "name": "digital",
+     "check": "sound",
+     "since": "boot",
+     "timeout": 120,
+     "wait": "^\\[vm-audio\\] vm=<<game_vm>> play_dma=[15] hz=[1-9]\\d* units=[1-9]\\d*$"
+    },
+    {
+     "name": "opl",
+     "check": "sound",
+     "since": "boot",
+     "timeout": 120,
+     "wait": "^\\[vm-audio\\] vm=<<game_vm>> gen=<<game_gen>> opl_writes=[1-9]\\d* key_writes=[1-9]\\d*$"
+    },
+    {
+     "name": "gameplay",
+     "check": "gameplay",
+     "settle": 10,
+     "screen": {
+      "desktop": false
+     },
+     "note": "precheck replaces this screen with the lead-reviewed gameplay region/hash for this image and role"
+    },
+    {
+     "name": "play",
+     "check": "gameplay",
+     "actions": [
+      {
+       "keys": [
+        "up",
+        "ctrl"
+       ],
+       "pause": 1
+      },
+      {
+       "mouse": {
+        "dx": 40,
+        "dy": -12,
+        "button": "left"
+       },
+       "pause": 1
+      },
+      {
+       "mouse": {
+        "dx": -40,
+        "dy": 12
+       },
+       "pause": 1
+      },
+      {
+       "sleep": 30
+      }
+     ]
+    },
+    {
+     "name": "quit",
+     "check": "exit",
+     "actions": [
+      {
+       "keys": [
+        "esc",
+        "esc",
+        "up",
+        "ret",
+        "ret"
+       ],
+       "pause": 1
+      }
+     ]
+    },
+    {
+     "name": "returned",
+     "check": "exit",
+     "timeout": 120,
+     "wait": "^\\[console\\] dosbox: program returned vm=<<game_vm>> generation=<<game_gen>> early=0$"
+    },
+    {
+     "name": "cleanup",
+     "check": "cleanup",
+     "timeout": 120,
+     "wait": "^\\[dosvm\\] lifecycle stage=cleanup vm=<<game_vm>> generation=<<game_gen>> result=0 data_loss=0 retained=0$"
+    },
+    {
+     "name": "desktop",
+     "check": "cleanup",
+     "settle": 3,
+     "screen": {
+      "geometry": [
+       1024,
+       768
+      ],
+      "desktop": true
+     }
+    }
+   ]
+  },
+  {
+   "id": "acc-dos-descent2",
+   "kind": "acceptance",
+   "probe": "acceptance",
+   "profile": "qemu-t23",
+   "item": 3,
+   "title": "Descent II demo full screen, sound and gameplay",
+   "timeout": 2400,
+   "expected": {
+    "evidence_kind": "acceptance"
+   },
+   "dos_game": {
+    "title": "descent2",
+    "role": "single"
+   },
+   "forbid": [
+    "^\\[dosvm\\] create refused ",
+    "^\\[launch\\] name=dosbox pid=\\d+ error=",
+    "^\\[dosvm\\] fullscreen_(?:refused|transport_fault) vm=\\d+ ",
+    "^\\[dosvm\\] lifecycle stage=stop vm=\\d+ generation=\\d+ reason=[234] "
+   ],
+   "steps": [
+    {
+     "template": "boot",
+     "prefix": "b1",
+     "check": "boot",
+     "settle": 15
+    },
+    {
+     "name": "menu-refresh",
+     "check": "menu",
+     "actions": [
+      {
+       "keys": [
+        "ctrl+esc",
+        "p"
+       ],
+       "pause": 1
+      },
+      {
+       "sleep": 5
+      },
+      {
+       "keys": [
+        "esc",
+        "esc"
+       ]
+      }
+     ]
+    },
+    {
+     "name": "launch",
+     "check": "menu",
+     "actions": [
+      {
+       "keys": [
+        "ctrl+esc",
+        "p",
+        "g",
+        "ret",
+        "t",
+        "ret"
+       ],
+       "pause": 1
+      }
+     ],
+     "note": "Start > Programs > Games > Trial Descent II demo; the only Trial entry in this private overlay"
+    },
+    {
+     "name": "vm",
+     "check": "menu",
+     "timeout": 240,
+     "wait": "^\\[launch-stage\\] name=dosbox pid=(?P<game_pid>\\d+) stage=vm-create window=Descent\\ II\\ demo$"
+    },
+    {
+     "name": "graphics",
+     "check": "fullscreen",
+     "timeout": 900,
+     "wait": "^\\[dosvm\\] fullscreen_request vm=(?P<game_vm>\\d+) generation=(?P<game_gen>\\d+) mode=\\d+$"
+    },
+    {
+     "name": "fullscreen",
+     "check": "fullscreen",
+     "timeout": 120,
+     "wait": "^\\[dosvm\\] fullscreen=1 vm=<<game_vm>> generation=<<game_gen>> mode=\\d+$"
+    },
+    {
+     "name": "enter-game",
+     "check": "gameplay",
+     "settle": 5,
+     "actions": [
+      {
+       "keys": [
+        "ret",
+        "ret",
+        "ret",
+        "ret"
+       ],
+       "pause": 1
+      }
+     ]
+    },
+    {
+     "name": "digital",
+     "check": "sound",
+     "since": "boot",
+     "timeout": 120,
+     "wait": "^\\[vm-audio\\] vm=<<game_vm>> play_dma=[15] hz=[1-9]\\d* units=[1-9]\\d*$"
+    },
+    {
+     "name": "opl",
+     "check": "sound",
+     "since": "boot",
+     "timeout": 120,
+     "wait": "^\\[vm-audio\\] vm=<<game_vm>> gen=<<game_gen>> opl_writes=[1-9]\\d* key_writes=[1-9]\\d*$"
+    },
+    {
+     "name": "midi",
+     "check": "sound",
+     "since": "boot",
+     "timeout": 120,
+     "wait": "^\\[vm-audio\\] vm=<<game_vm>> gen=<<game_gen>> midi_bytes=[1-9]\\d* note_ons=[1-9]\\d*$"
+    },
+    {
+     "name": "gameplay",
+     "check": "gameplay",
+     "settle": 10,
+     "screen": {
+      "desktop": false
+     },
+     "note": "precheck replaces this screen with the lead-reviewed gameplay region/hash for this image and role"
+    },
+    {
+     "name": "play",
+     "check": "gameplay",
+     "actions": [
+      {
+       "keys": [
+        "up",
+        "ctrl"
+       ],
+       "pause": 1
+      },
+      {
+       "mouse": {
+        "dx": 40,
+        "dy": -12,
+        "button": "left"
+       },
+       "pause": 1
+      },
+      {
+       "mouse": {
+        "dx": -40,
+        "dy": 12
+       },
+       "pause": 1
+      },
+      {
+       "sleep": 30
+      }
+     ]
+    },
+    {
+     "name": "quit",
+     "check": "exit",
+     "actions": [
+      {
+       "keys": [
+        "esc",
+        "esc",
+        "up",
+        "ret",
+        "ret"
+       ],
+       "pause": 1
+      }
+     ]
+    },
+    {
+     "name": "returned",
+     "check": "exit",
+     "timeout": 120,
+     "wait": "^\\[console\\] dosbox: program returned vm=<<game_vm>> generation=<<game_gen>> early=0$"
+    },
+    {
+     "name": "cleanup",
+     "check": "cleanup",
+     "timeout": 120,
+     "wait": "^\\[dosvm\\] lifecycle stage=cleanup vm=<<game_vm>> generation=<<game_gen>> result=0 data_loss=0 retained=0$"
+    },
+    {
+     "name": "desktop",
+     "check": "cleanup",
+     "settle": 3,
+     "screen": {
+      "geometry": [
+       1024,
+       768
+      ],
+      "desktop": true
+     }
+    }
+   ]
+  },
+  {
+   "id": "acc-dos-shadowwarrior",
+   "kind": "acceptance",
+   "probe": "acceptance",
+   "profile": "qemu-t23",
+   "item": 3,
+   "title": "Shadow Warrior full screen, sound and gameplay",
+   "timeout": 2400,
+   "expected": {
+    "evidence_kind": "acceptance"
+   },
+   "dos_game": {
+    "title": "shadowwarrior",
+    "role": "single"
+   },
+   "forbid": [
+    "^\\[dosvm\\] create refused ",
+    "^\\[launch\\] name=dosbox pid=\\d+ error=",
+    "^\\[dosvm\\] fullscreen_(?:refused|transport_fault) vm=\\d+ ",
+    "^\\[dosvm\\] lifecycle stage=stop vm=\\d+ generation=\\d+ reason=[234] "
+   ],
+   "steps": [
+    {
+     "template": "boot",
+     "prefix": "b1",
+     "check": "boot",
+     "settle": 15
+    },
+    {
+     "name": "menu-refresh",
+     "check": "menu",
+     "actions": [
+      {
+       "keys": [
+        "ctrl+esc",
+        "p"
+       ],
+       "pause": 1
+      },
+      {
+       "sleep": 5
+      },
+      {
+       "keys": [
+        "esc",
+        "esc"
+       ]
+      }
+     ]
+    },
+    {
+     "name": "launch",
+     "check": "menu",
+     "actions": [
+      {
+       "keys": [
+        "ctrl+esc",
+        "p",
+        "g",
+        "ret",
+        "t",
+        "ret"
+       ],
+       "pause": 1
+      }
+     ],
+     "note": "Start > Programs > Games > Trial Shadow Warrior; the only Trial entry in this private overlay"
+    },
+    {
+     "name": "vm",
+     "check": "menu",
+     "timeout": 240,
+     "wait": "^\\[launch-stage\\] name=dosbox pid=(?P<game_pid>\\d+) stage=vm-create window=Shadow\\ Warrior$"
+    },
+    {
+     "name": "graphics",
+     "check": "fullscreen",
+     "timeout": 900,
+     "wait": "^\\[dosvm\\] fullscreen_request vm=(?P<game_vm>\\d+) generation=(?P<game_gen>\\d+) mode=\\d+$"
+    },
+    {
+     "name": "fullscreen",
+     "check": "fullscreen",
+     "timeout": 120,
+     "wait": "^\\[dosvm\\] fullscreen=1 vm=<<game_vm>> generation=<<game_gen>> mode=\\d+$"
+    },
+    {
+     "name": "enter-game",
+     "check": "gameplay",
+     "settle": 5,
+     "actions": [
+      {
+       "keys": [
+        "esc",
+        "ret",
+        "ret",
+        "ret"
+       ],
+       "pause": 1
+      }
+     ]
+    },
+    {
+     "name": "digital",
+     "check": "sound",
+     "since": "boot",
+     "timeout": 120,
+     "wait": "^\\[vm-audio\\] vm=<<game_vm>> play_dma=[15] hz=[1-9]\\d* units=[1-9]\\d*$"
+    },
+    {
+     "name": "opl",
+     "check": "sound",
+     "since": "boot",
+     "timeout": 120,
+     "wait": "^\\[vm-audio\\] vm=<<game_vm>> gen=<<game_gen>> opl_writes=[1-9]\\d* key_writes=[1-9]\\d*$"
+    },
+    {
+     "name": "gameplay",
+     "check": "gameplay",
+     "settle": 10,
+     "screen": {
+      "desktop": false
+     },
+     "note": "precheck replaces this screen with the lead-reviewed gameplay region/hash for this image and role"
+    },
+    {
+     "name": "play",
+     "check": "gameplay",
+     "actions": [
+      {
+       "keys": [
+        "up",
+        "ctrl"
+       ],
+       "pause": 1
+      },
+      {
+       "mouse": {
+        "dx": 40,
+        "dy": -12,
+        "button": "left"
+       },
+       "pause": 1
+      },
+      {
+       "mouse": {
+        "dx": -40,
+        "dy": 12
+       },
+       "pause": 1
+      },
+      {
+       "sleep": 30
+      }
+     ]
+    },
+    {
+     "name": "quit",
+     "check": "exit",
+     "actions": [
+      {
+       "keys": [
+        "esc",
+        "up",
+        "ret",
+        "y"
+       ],
+       "pause": 1
+      }
+     ]
+    },
+    {
+     "name": "returned",
+     "check": "exit",
+     "timeout": 120,
+     "wait": "^\\[console\\] dosbox: program returned vm=<<game_vm>> generation=<<game_gen>> early=0$"
+    },
+    {
+     "name": "cleanup",
+     "check": "cleanup",
+     "timeout": 120,
+     "wait": "^\\[dosvm\\] lifecycle stage=cleanup vm=<<game_vm>> generation=<<game_gen>> result=0 data_loss=0 retained=0$"
+    },
+    {
+     "name": "desktop",
+     "check": "cleanup",
+     "settle": 3,
+     "screen": {
+      "geometry": [
+       1024,
+       768
+      ],
+      "desktop": true
+     }
+    }
+   ]
+  },
+  {
+   "id": "acc-dos-wacky",
+   "kind": "acceptance",
+   "probe": "acceptance",
+   "profile": "qemu-t23",
+   "item": 3,
+   "title": "Wacky Wheels full screen, sound and gameplay",
+   "timeout": 2400,
+   "expected": {
+    "evidence_kind": "acceptance"
+   },
+   "dos_game": {
+    "title": "wacky",
+    "role": "single"
+   },
+   "forbid": [
+    "^\\[dosvm\\] create refused ",
+    "^\\[launch\\] name=dosbox pid=\\d+ error=",
+    "^\\[dosvm\\] fullscreen_(?:refused|transport_fault) vm=\\d+ ",
+    "^\\[dosvm\\] lifecycle stage=stop vm=\\d+ generation=\\d+ reason=[234] "
+   ],
+   "steps": [
+    {
+     "template": "boot",
+     "prefix": "b1",
+     "check": "boot",
+     "settle": 15
+    },
+    {
+     "name": "menu-refresh",
+     "check": "menu",
+     "actions": [
+      {
+       "keys": [
+        "ctrl+esc",
+        "p"
+       ],
+       "pause": 1
+      },
+      {
+       "sleep": 5
+      },
+      {
+       "keys": [
+        "esc",
+        "esc"
+       ]
+      }
+     ]
+    },
+    {
+     "name": "launch",
+     "check": "menu",
+     "actions": [
+      {
+       "keys": [
+        "ctrl+esc",
+        "p",
+        "g",
+        "ret",
+        "t",
+        "ret"
+       ],
+       "pause": 1
+      }
+     ],
+     "note": "Start > Programs > Games > Trial Wacky Wheels; the only Trial entry in this private overlay"
+    },
+    {
+     "name": "vm",
+     "check": "menu",
+     "timeout": 240,
+     "wait": "^\\[launch-stage\\] name=dosbox pid=(?P<game_pid>\\d+) stage=vm-create window=Wacky\\ Wheels$"
+    },
+    {
+     "name": "graphics",
+     "check": "fullscreen",
+     "timeout": 900,
+     "wait": "^\\[dosvm\\] fullscreen_request vm=(?P<game_vm>\\d+) generation=(?P<game_gen>\\d+) mode=\\d+$"
+    },
+    {
+     "name": "fullscreen",
+     "check": "fullscreen",
+     "timeout": 120,
+     "wait": "^\\[dosvm\\] fullscreen=1 vm=<<game_vm>> generation=<<game_gen>> mode=\\d+$"
+    },
+    {
+     "name": "enter-game",
+     "check": "gameplay",
+     "settle": 5,
+     "actions": [
+      {
+       "keys": [
+        "esc",
+        "ret",
+        "ret",
+        "ret"
+       ],
+       "pause": 1
+      }
+     ]
+    },
+    {
+     "name": "digital",
+     "check": "sound",
+     "since": "boot",
+     "timeout": 120,
+     "wait": "^\\[vm-audio\\] vm=<<game_vm>> play_dma=[15] hz=[1-9]\\d* units=[1-9]\\d*$"
+    },
+    {
+     "name": "opl",
+     "check": "sound",
+     "since": "boot",
+     "timeout": 120,
+     "wait": "^\\[vm-audio\\] vm=<<game_vm>> gen=<<game_gen>> opl_writes=[1-9]\\d* key_writes=[1-9]\\d*$"
+    },
+    {
+     "name": "gameplay",
+     "check": "gameplay",
+     "settle": 10,
+     "screen": {
+      "desktop": false
+     },
+     "note": "precheck replaces this screen with the lead-reviewed gameplay region/hash for this image and role"
+    },
+    {
+     "name": "play",
+     "check": "gameplay",
+     "actions": [
+      {
+       "keys": [
+        "up",
+        "ctrl"
+       ],
+       "pause": 1
+      },
+      {
+       "sleep": 30
+      }
+     ]
+    },
+    {
+     "name": "quit",
+     "check": "exit",
+     "actions": [
+      {
+       "keys": [
+        "esc",
+        "up",
+        "ret",
+        "y"
+       ],
+       "pause": 1
+      }
+     ]
+    },
+    {
+     "name": "returned",
+     "check": "exit",
+     "timeout": 120,
+     "wait": "^\\[console\\] dosbox: program returned vm=<<game_vm>> generation=<<game_gen>> early=0$"
+    },
+    {
+     "name": "cleanup",
+     "check": "cleanup",
+     "timeout": 120,
+     "wait": "^\\[dosvm\\] lifecycle stage=cleanup vm=<<game_vm>> generation=<<game_gen>> result=0 data_loss=0 retained=0$"
+    },
+    {
+     "name": "desktop",
+     "check": "cleanup",
+     "settle": 3,
+     "screen": {
+      "geometry": [
+       1024,
+       768
+      ],
+      "desktop": true
+     }
+    }
+   ]
+  },
+  {
+   "id": "acc-dos-cosmo",
+   "kind": "acceptance",
+   "probe": "acceptance",
+   "profile": "qemu-t23",
+   "item": 3,
+   "title": "Cosmo full screen, sound and gameplay",
+   "timeout": 2400,
+   "expected": {
+    "evidence_kind": "acceptance"
+   },
+   "dos_game": {
+    "title": "cosmo",
+    "role": "single"
+   },
+   "forbid": [
+    "^\\[dosvm\\] create refused ",
+    "^\\[launch\\] name=dosbox pid=\\d+ error=",
+    "^\\[dosvm\\] fullscreen_(?:refused|transport_fault) vm=\\d+ ",
+    "^\\[dosvm\\] lifecycle stage=stop vm=\\d+ generation=\\d+ reason=[234] "
+   ],
+   "steps": [
+    {
+     "template": "boot",
+     "prefix": "b1",
+     "check": "boot",
+     "settle": 15
+    },
+    {
+     "name": "menu-refresh",
+     "check": "menu",
+     "actions": [
+      {
+       "keys": [
+        "ctrl+esc",
+        "p"
+       ],
+       "pause": 1
+      },
+      {
+       "sleep": 5
+      },
+      {
+       "keys": [
+        "esc",
+        "esc"
+       ]
+      }
+     ]
+    },
+    {
+     "name": "launch",
+     "check": "menu",
+     "actions": [
+      {
+       "keys": [
+        "ctrl+esc",
+        "p",
+        "g",
+        "ret",
+        "t",
+        "ret"
+       ],
+       "pause": 1
+      }
+     ],
+     "note": "Start > Programs > Games > Trial Cosmo; the only Trial entry in this private overlay"
+    },
+    {
+     "name": "vm",
+     "check": "menu",
+     "timeout": 240,
+     "wait": "^\\[launch-stage\\] name=dosbox pid=(?P<game_pid>\\d+) stage=vm-create window=Cosmo$"
+    },
+    {
+     "name": "graphics",
+     "check": "fullscreen",
+     "timeout": 900,
+     "wait": "^\\[dosvm\\] fullscreen_request vm=(?P<game_vm>\\d+) generation=(?P<game_gen>\\d+) mode=\\d+$"
+    },
+    {
+     "name": "fullscreen",
+     "check": "fullscreen",
+     "timeout": 120,
+     "wait": "^\\[dosvm\\] fullscreen=1 vm=<<game_vm>> generation=<<game_gen>> mode=\\d+$"
+    },
+    {
+     "name": "enter-game",
+     "check": "gameplay",
+     "settle": 5,
+     "actions": [
+      {
+       "keys": [
+        "ret",
+        "ret",
+        "ret"
+       ],
+       "pause": 1
+      }
+     ]
+    },
+    {
+     "name": "opl",
+     "check": "sound",
+     "since": "boot",
+     "timeout": 120,
+     "wait": "^\\[vm-audio\\] vm=<<game_vm>> gen=<<game_gen>> opl_writes=[1-9]\\d* key_writes=[1-9]\\d*$"
+    },
+    {
+     "name": "gameplay",
+     "check": "gameplay",
+     "settle": 10,
+     "screen": {
+      "desktop": false
+     },
+     "note": "precheck replaces this screen with the lead-reviewed gameplay region/hash for this image and role"
+    },
+    {
+     "name": "play",
+     "check": "gameplay",
+     "actions": [
+      {
+       "keys": [
+        "up",
+        "ctrl"
+       ],
+       "pause": 1
+      },
+      {
+       "sleep": 30
+      }
+     ]
+    },
+    {
+     "name": "quit",
+     "check": "exit",
+     "actions": [
+      {
+       "keys": [
+        "esc",
+        "q",
+        "y"
+       ],
+       "pause": 1
+      }
+     ]
+    },
+    {
+     "name": "returned",
+     "check": "exit",
+     "timeout": 120,
+     "wait": "^\\[console\\] dosbox: program returned vm=<<game_vm>> generation=<<game_gen>> early=0$"
+    },
+    {
+     "name": "cleanup",
+     "check": "cleanup",
+     "timeout": 120,
+     "wait": "^\\[dosvm\\] lifecycle stage=cleanup vm=<<game_vm>> generation=<<game_gen>> result=0 data_loss=0 retained=0$"
+    },
+    {
+     "name": "desktop",
+     "check": "cleanup",
+     "settle": 3,
+     "screen": {
+      "geometry": [
+       1024,
+       768
+      ],
+      "desktop": true
+     }
+    }
+   ]
+  },
+  {
+   "id": "acc-dos-duke2",
+   "kind": "acceptance",
+   "probe": "acceptance",
+   "profile": "qemu-t23",
+   "item": 3,
+   "title": "Duke Nukem II full screen, sound and gameplay",
+   "timeout": 2400,
+   "expected": {
+    "evidence_kind": "acceptance"
+   },
+   "dos_game": {
+    "title": "duke2",
+    "role": "single"
+   },
+   "forbid": [
+    "^\\[dosvm\\] create refused ",
+    "^\\[launch\\] name=dosbox pid=\\d+ error=",
+    "^\\[dosvm\\] fullscreen_(?:refused|transport_fault) vm=\\d+ ",
+    "^\\[dosvm\\] lifecycle stage=stop vm=\\d+ generation=\\d+ reason=[234] "
+   ],
+   "steps": [
+    {
+     "template": "boot",
+     "prefix": "b1",
+     "check": "boot",
+     "settle": 15
+    },
+    {
+     "name": "menu-refresh",
+     "check": "menu",
+     "actions": [
+      {
+       "keys": [
+        "ctrl+esc",
+        "p"
+       ],
+       "pause": 1
+      },
+      {
+       "sleep": 5
+      },
+      {
+       "keys": [
+        "esc",
+        "esc"
+       ]
+      }
+     ]
+    },
+    {
+     "name": "launch",
+     "check": "menu",
+     "actions": [
+      {
+       "keys": [
+        "ctrl+esc",
+        "p",
+        "g",
+        "ret",
+        "t",
+        "ret"
+       ],
+       "pause": 1
+      }
+     ],
+     "note": "Start > Programs > Games > Trial Duke Nukem II; the only Trial entry in this private overlay"
+    },
+    {
+     "name": "vm",
+     "check": "menu",
+     "timeout": 240,
+     "wait": "^\\[launch-stage\\] name=dosbox pid=(?P<game_pid>\\d+) stage=vm-create window=Duke\\ Nukem\\ II$"
+    },
+    {
+     "name": "graphics",
+     "check": "fullscreen",
+     "timeout": 900,
+     "wait": "^\\[dosvm\\] fullscreen_request vm=(?P<game_vm>\\d+) generation=(?P<game_gen>\\d+) mode=\\d+$"
+    },
+    {
+     "name": "fullscreen",
+     "check": "fullscreen",
+     "timeout": 120,
+     "wait": "^\\[dosvm\\] fullscreen=1 vm=<<game_vm>> generation=<<game_gen>> mode=\\d+$"
+    },
+    {
+     "name": "enter-game",
+     "check": "gameplay",
+     "settle": 5,
+     "actions": [
+      {
+       "keys": [
+        "ret",
+        "ret",
+        "ret"
+       ],
+       "pause": 1
+      }
+     ]
+    },
+    {
+     "name": "digital",
+     "check": "sound",
+     "since": "boot",
+     "timeout": 120,
+     "wait": "^\\[vm-audio\\] vm=<<game_vm>> play_dma=[15] hz=[1-9]\\d* units=[1-9]\\d*$"
+    },
+    {
+     "name": "opl",
+     "check": "sound",
+     "since": "boot",
+     "timeout": 120,
+     "wait": "^\\[vm-audio\\] vm=<<game_vm>> gen=<<game_gen>> opl_writes=[1-9]\\d* key_writes=[1-9]\\d*$"
+    },
+    {
+     "name": "gameplay",
+     "check": "gameplay",
+     "settle": 10,
+     "screen": {
+      "desktop": false
+     },
+     "note": "precheck replaces this screen with the lead-reviewed gameplay region/hash for this image and role"
+    },
+    {
+     "name": "play",
+     "check": "gameplay",
+     "actions": [
+      {
+       "keys": [
+        "up",
+        "ctrl"
+       ],
+       "pause": 1
+      },
+      {
+       "sleep": 30
+      }
+     ]
+    },
+    {
+     "name": "quit",
+     "check": "exit",
+     "actions": [
+      {
+       "keys": [
+        "esc",
+        "q",
+        "y"
+       ],
+       "pause": 1
+      }
+     ]
+    },
+    {
+     "name": "returned",
+     "check": "exit",
+     "timeout": 120,
+     "wait": "^\\[console\\] dosbox: program returned vm=<<game_vm>> generation=<<game_gen>> early=0$"
+    },
+    {
+     "name": "cleanup",
+     "check": "cleanup",
+     "timeout": 120,
+     "wait": "^\\[dosvm\\] lifecycle stage=cleanup vm=<<game_vm>> generation=<<game_gen>> result=0 data_loss=0 retained=0$"
+    },
+    {
+     "name": "desktop",
+     "check": "cleanup",
+     "settle": 3,
+     "screen": {
+      "geometry": [
+       1024,
+       768
+      ],
+      "desktop": true
+     }
+    }
+   ]
+  },
+  {
+   "id": "acc-dos-raptor",
+   "kind": "acceptance",
+   "probe": "acceptance",
+   "profile": "qemu-t23",
+   "item": 3,
+   "title": "Raptor full screen, sound and gameplay",
+   "timeout": 2400,
+   "expected": {
+    "evidence_kind": "acceptance"
+   },
+   "dos_game": {
+    "title": "raptor",
+    "role": "single"
+   },
+   "forbid": [
+    "^\\[dosvm\\] create refused ",
+    "^\\[launch\\] name=dosbox pid=\\d+ error=",
+    "^\\[dosvm\\] fullscreen_(?:refused|transport_fault) vm=\\d+ ",
+    "^\\[dosvm\\] lifecycle stage=stop vm=\\d+ generation=\\d+ reason=[234] "
+   ],
+   "steps": [
+    {
+     "template": "boot",
+     "prefix": "b1",
+     "check": "boot",
+     "settle": 15
+    },
+    {
+     "name": "menu-refresh",
+     "check": "menu",
+     "actions": [
+      {
+       "keys": [
+        "ctrl+esc",
+        "p"
+       ],
+       "pause": 1
+      },
+      {
+       "sleep": 5
+      },
+      {
+       "keys": [
+        "esc",
+        "esc"
+       ]
+      }
+     ]
+    },
+    {
+     "name": "launch",
+     "check": "menu",
+     "actions": [
+      {
+       "keys": [
+        "ctrl+esc",
+        "p",
+        "g",
+        "ret",
+        "t",
+        "ret"
+       ],
+       "pause": 1
+      }
+     ],
+     "note": "Start > Programs > Games > Trial Raptor; the only Trial entry in this private overlay"
+    },
+    {
+     "name": "vm",
+     "check": "menu",
+     "timeout": 240,
+     "wait": "^\\[launch-stage\\] name=dosbox pid=(?P<game_pid>\\d+) stage=vm-create window=Raptor$"
+    },
+    {
+     "name": "graphics",
+     "check": "fullscreen",
+     "timeout": 900,
+     "wait": "^\\[dosvm\\] fullscreen_request vm=(?P<game_vm>\\d+) generation=(?P<game_gen>\\d+) mode=\\d+$"
+    },
+    {
+     "name": "fullscreen",
+     "check": "fullscreen",
+     "timeout": 120,
+     "wait": "^\\[dosvm\\] fullscreen=1 vm=<<game_vm>> generation=<<game_gen>> mode=\\d+$"
+    },
+    {
+     "name": "enter-game",
+     "check": "gameplay",
+     "settle": 5,
+     "actions": [
+      {
+       "keys": [
+        "esc",
+        "ret",
+        "ret",
+        "ret"
+       ],
+       "pause": 1
+      }
+     ]
+    },
+    {
+     "name": "digital",
+     "check": "sound",
+     "since": "boot",
+     "timeout": 120,
+     "wait": "^\\[vm-audio\\] vm=<<game_vm>> play_dma=[15] hz=[1-9]\\d* units=[1-9]\\d*$"
+    },
+    {
+     "name": "opl",
+     "check": "sound",
+     "since": "boot",
+     "timeout": 120,
+     "wait": "^\\[vm-audio\\] vm=<<game_vm>> gen=<<game_gen>> opl_writes=[1-9]\\d* key_writes=[1-9]\\d*$"
+    },
+    {
+     "name": "gameplay",
+     "check": "gameplay",
+     "settle": 10,
+     "screen": {
+      "desktop": false
+     },
+     "note": "precheck replaces this screen with the lead-reviewed gameplay region/hash for this image and role"
+    },
+    {
+     "name": "play",
+     "check": "gameplay",
+     "actions": [
+      {
+       "keys": [
+        "up",
+        "ctrl"
+       ],
+       "pause": 1
+      },
+      {
+       "mouse": {
+        "dx": 40,
+        "dy": -12,
+        "button": "left"
+       },
+       "pause": 1
+      },
+      {
+       "mouse": {
+        "dx": -40,
+        "dy": 12
+       },
+       "pause": 1
+      },
+      {
+       "sleep": 30
+      }
+     ]
+    },
+    {
+     "name": "quit",
+     "check": "exit",
+     "actions": [
+      {
+       "keys": [
+        "esc",
+        "up",
+        "ret",
+        "y"
+       ],
+       "pause": 1
+      }
+     ]
+    },
+    {
+     "name": "returned",
+     "check": "exit",
+     "timeout": 120,
+     "wait": "^\\[console\\] dosbox: program returned vm=<<game_vm>> generation=<<game_gen>> early=0$"
+    },
+    {
+     "name": "cleanup",
+     "check": "cleanup",
+     "timeout": 120,
+     "wait": "^\\[dosvm\\] lifecycle stage=cleanup vm=<<game_vm>> generation=<<game_gen>> result=0 data_loss=0 retained=0$"
+    },
+    {
+     "name": "desktop",
+     "check": "cleanup",
+     "settle": 3,
+     "screen": {
+      "geometry": [
+       1024,
+       768
+      ],
+      "desktop": true
+     }
+    }
+   ]
+  },
+  {
+   "id": "acc-dos-hocus",
+   "kind": "acceptance",
+   "probe": "acceptance",
+   "profile": "qemu-t23",
+   "item": 3,
+   "title": "Hocus Pocus full screen, sound and gameplay",
+   "timeout": 2400,
+   "expected": {
+    "evidence_kind": "acceptance"
+   },
+   "dos_game": {
+    "title": "hocus",
+    "role": "single"
+   },
+   "forbid": [
+    "^\\[dosvm\\] create refused ",
+    "^\\[launch\\] name=dosbox pid=\\d+ error=",
+    "^\\[dosvm\\] fullscreen_(?:refused|transport_fault) vm=\\d+ ",
+    "^\\[dosvm\\] lifecycle stage=stop vm=\\d+ generation=\\d+ reason=[234] "
+   ],
+   "steps": [
+    {
+     "template": "boot",
+     "prefix": "b1",
+     "check": "boot",
+     "settle": 15
+    },
+    {
+     "name": "menu-refresh",
+     "check": "menu",
+     "actions": [
+      {
+       "keys": [
+        "ctrl+esc",
+        "p"
+       ],
+       "pause": 1
+      },
+      {
+       "sleep": 5
+      },
+      {
+       "keys": [
+        "esc",
+        "esc"
+       ]
+      }
+     ]
+    },
+    {
+     "name": "launch",
+     "check": "menu",
+     "actions": [
+      {
+       "keys": [
+        "ctrl+esc",
+        "p",
+        "g",
+        "ret",
+        "t",
+        "ret"
+       ],
+       "pause": 1
+      }
+     ],
+     "note": "Start > Programs > Games > Trial Hocus Pocus; the only Trial entry in this private overlay"
+    },
+    {
+     "name": "vm",
+     "check": "menu",
+     "timeout": 240,
+     "wait": "^\\[launch-stage\\] name=dosbox pid=(?P<game_pid>\\d+) stage=vm-create window=Hocus\\ Pocus$"
+    },
+    {
+     "name": "graphics",
+     "check": "fullscreen",
+     "timeout": 900,
+     "wait": "^\\[dosvm\\] fullscreen_request vm=(?P<game_vm>\\d+) generation=(?P<game_gen>\\d+) mode=\\d+$"
+    },
+    {
+     "name": "fullscreen",
+     "check": "fullscreen",
+     "timeout": 120,
+     "wait": "^\\[dosvm\\] fullscreen=1 vm=<<game_vm>> generation=<<game_gen>> mode=\\d+$"
+    },
+    {
+     "name": "enter-game",
+     "check": "gameplay",
+     "settle": 5,
+     "actions": [
+      {
+       "keys": [
+        "ret",
+        "ret",
+        "ret"
+       ],
+       "pause": 1
+      }
+     ]
+    },
+    {
+     "name": "digital",
+     "check": "sound",
+     "since": "boot",
+     "timeout": 120,
+     "wait": "^\\[vm-audio\\] vm=<<game_vm>> play_dma=[15] hz=[1-9]\\d* units=[1-9]\\d*$"
+    },
+    {
+     "name": "opl",
+     "check": "sound",
+     "since": "boot",
+     "timeout": 120,
+     "wait": "^\\[vm-audio\\] vm=<<game_vm>> gen=<<game_gen>> opl_writes=[1-9]\\d* key_writes=[1-9]\\d*$"
+    },
+    {
+     "name": "gameplay",
+     "check": "gameplay",
+     "settle": 10,
+     "screen": {
+      "desktop": false
+     },
+     "note": "precheck replaces this screen with the lead-reviewed gameplay region/hash for this image and role"
+    },
+    {
+     "name": "play",
+     "check": "gameplay",
+     "actions": [
+      {
+       "keys": [
+        "up",
+        "ctrl"
+       ],
+       "pause": 1
+      },
+      {
+       "sleep": 30
+      }
+     ]
+    },
+    {
+     "name": "quit",
+     "check": "exit",
+     "actions": [
+      {
+       "keys": [
+        "esc",
+        "q",
+        "y"
+       ],
+       "pause": 1
+      }
+     ]
+    },
+    {
+     "name": "returned",
+     "check": "exit",
+     "timeout": 120,
+     "wait": "^\\[console\\] dosbox: program returned vm=<<game_vm>> generation=<<game_gen>> early=0$"
+    },
+    {
+     "name": "cleanup",
+     "check": "cleanup",
+     "timeout": 120,
+     "wait": "^\\[dosvm\\] lifecycle stage=cleanup vm=<<game_vm>> generation=<<game_gen>> result=0 data_loss=0 retained=0$"
+    },
+    {
+     "name": "desktop",
+     "check": "cleanup",
+     "settle": 3,
+     "screen": {
+      "geometry": [
+       1024,
+       768
+      ],
+      "desktop": true
+     }
+    }
+   ]
+  },
+  {
+   "id": "acc-dos-biomenace",
+   "kind": "acceptance",
+   "probe": "acceptance",
+   "profile": "qemu-t23",
+   "item": 3,
+   "title": "Bio Menace full screen, sound and gameplay",
+   "timeout": 2400,
+   "expected": {
+    "evidence_kind": "acceptance"
+   },
+   "dos_game": {
+    "title": "biomenace",
+    "role": "single"
+   },
+   "forbid": [
+    "^\\[dosvm\\] create refused ",
+    "^\\[launch\\] name=dosbox pid=\\d+ error=",
+    "^\\[dosvm\\] fullscreen_(?:refused|transport_fault) vm=\\d+ ",
+    "^\\[dosvm\\] lifecycle stage=stop vm=\\d+ generation=\\d+ reason=[234] "
+   ],
+   "steps": [
+    {
+     "template": "boot",
+     "prefix": "b1",
+     "check": "boot",
+     "settle": 15
+    },
+    {
+     "name": "menu-refresh",
+     "check": "menu",
+     "actions": [
+      {
+       "keys": [
+        "ctrl+esc",
+        "p"
+       ],
+       "pause": 1
+      },
+      {
+       "sleep": 5
+      },
+      {
+       "keys": [
+        "esc",
+        "esc"
+       ]
+      }
+     ]
+    },
+    {
+     "name": "launch",
+     "check": "menu",
+     "actions": [
+      {
+       "keys": [
+        "ctrl+esc",
+        "p",
+        "g",
+        "ret",
+        "t",
+        "ret"
+       ],
+       "pause": 1
+      }
+     ],
+     "note": "Start > Programs > Games > Trial Bio Menace; the only Trial entry in this private overlay"
+    },
+    {
+     "name": "vm",
+     "check": "menu",
+     "timeout": 240,
+     "wait": "^\\[launch-stage\\] name=dosbox pid=(?P<game_pid>\\d+) stage=vm-create window=Bio\\ Menace$"
+    },
+    {
+     "name": "graphics",
+     "check": "fullscreen",
+     "timeout": 900,
+     "wait": "^\\[dosvm\\] fullscreen_request vm=(?P<game_vm>\\d+) generation=(?P<game_gen>\\d+) mode=\\d+$"
+    },
+    {
+     "name": "fullscreen",
+     "check": "fullscreen",
+     "timeout": 120,
+     "wait": "^\\[dosvm\\] fullscreen=1 vm=<<game_vm>> generation=<<game_gen>> mode=\\d+$"
+    },
+    {
+     "name": "enter-game",
+     "check": "gameplay",
+     "settle": 5,
+     "actions": [
+      {
+       "keys": [
+        "ret",
+        "ret",
+        "ret"
+       ],
+       "pause": 1
+      }
+     ]
+    },
+    {
+     "name": "opl",
+     "check": "sound",
+     "since": "boot",
+     "timeout": 120,
+     "wait": "^\\[vm-audio\\] vm=<<game_vm>> gen=<<game_gen>> opl_writes=[1-9]\\d* key_writes=[1-9]\\d*$"
+    },
+    {
+     "name": "gameplay",
+     "check": "gameplay",
+     "settle": 10,
+     "screen": {
+      "desktop": false
+     },
+     "note": "precheck replaces this screen with the lead-reviewed gameplay region/hash for this image and role"
+    },
+    {
+     "name": "play",
+     "check": "gameplay",
+     "actions": [
+      {
+       "keys": [
+        "up",
+        "ctrl"
+       ],
+       "pause": 1
+      },
+      {
+       "sleep": 30
+      }
+     ]
+    },
+    {
+     "name": "quit",
+     "check": "exit",
+     "actions": [
+      {
+       "keys": [
+        "esc",
+        "q",
+        "y"
+       ],
+       "pause": 1
+      }
+     ]
+    },
+    {
+     "name": "returned",
+     "check": "exit",
+     "timeout": 120,
+     "wait": "^\\[console\\] dosbox: program returned vm=<<game_vm>> generation=<<game_gen>> early=0$"
+    },
+    {
+     "name": "cleanup",
+     "check": "cleanup",
+     "timeout": 120,
+     "wait": "^\\[dosvm\\] lifecycle stage=cleanup vm=<<game_vm>> generation=<<game_gen>> result=0 data_loss=0 retained=0$"
+    },
+    {
+     "name": "desktop",
+     "check": "cleanup",
+     "settle": 3,
+     "screen": {
+      "geometry": [
+       1024,
+       768
+      ],
+      "desktop": true
+     }
+    }
+   ]
+  },
+  {
+   "id": "acc-dos-blakestone",
+   "kind": "acceptance",
+   "probe": "acceptance",
+   "profile": "qemu-t23",
+   "item": 3,
+   "title": "Blake Stone full screen, sound and gameplay",
+   "timeout": 2400,
+   "expected": {
+    "evidence_kind": "acceptance"
+   },
+   "dos_game": {
+    "title": "blakestone",
+    "role": "single"
+   },
+   "forbid": [
+    "^\\[dosvm\\] create refused ",
+    "^\\[launch\\] name=dosbox pid=\\d+ error=",
+    "^\\[dosvm\\] fullscreen_(?:refused|transport_fault) vm=\\d+ ",
+    "^\\[dosvm\\] lifecycle stage=stop vm=\\d+ generation=\\d+ reason=[234] "
+   ],
+   "steps": [
+    {
+     "template": "boot",
+     "prefix": "b1",
+     "check": "boot",
+     "settle": 15
+    },
+    {
+     "name": "menu-refresh",
+     "check": "menu",
+     "actions": [
+      {
+       "keys": [
+        "ctrl+esc",
+        "p"
+       ],
+       "pause": 1
+      },
+      {
+       "sleep": 5
+      },
+      {
+       "keys": [
+        "esc",
+        "esc"
+       ]
+      }
+     ]
+    },
+    {
+     "name": "launch",
+     "check": "menu",
+     "actions": [
+      {
+       "keys": [
+        "ctrl+esc",
+        "p",
+        "g",
+        "ret",
+        "t",
+        "ret"
+       ],
+       "pause": 1
+      }
+     ],
+     "note": "Start > Programs > Games > Trial Blake Stone; the only Trial entry in this private overlay"
+    },
+    {
+     "name": "vm",
+     "check": "menu",
+     "timeout": 240,
+     "wait": "^\\[launch-stage\\] name=dosbox pid=(?P<game_pid>\\d+) stage=vm-create window=Blake\\ Stone$"
+    },
+    {
+     "name": "graphics",
+     "check": "fullscreen",
+     "timeout": 900,
+     "wait": "^\\[dosvm\\] fullscreen_request vm=(?P<game_vm>\\d+) generation=(?P<game_gen>\\d+) mode=\\d+$"
+    },
+    {
+     "name": "fullscreen",
+     "check": "fullscreen",
+     "timeout": 120,
+     "wait": "^\\[dosvm\\] fullscreen=1 vm=<<game_vm>> generation=<<game_gen>> mode=\\d+$"
+    },
+    {
+     "name": "enter-game",
+     "check": "gameplay",
+     "settle": 5,
+     "actions": [
+      {
+       "keys": [
+        "esc",
+        "ret",
+        "ret",
+        "ret"
+       ],
+       "pause": 1
+      }
+     ]
+    },
+    {
+     "name": "digital",
+     "check": "sound",
+     "since": "boot",
+     "timeout": 120,
+     "wait": "^\\[vm-audio\\] vm=<<game_vm>> play_dma=[15] hz=[1-9]\\d* units=[1-9]\\d*$"
+    },
+    {
+     "name": "opl",
+     "check": "sound",
+     "since": "boot",
+     "timeout": 120,
+     "wait": "^\\[vm-audio\\] vm=<<game_vm>> gen=<<game_gen>> opl_writes=[1-9]\\d* key_writes=[1-9]\\d*$"
+    },
+    {
+     "name": "gameplay",
+     "check": "gameplay",
+     "settle": 10,
+     "screen": {
+      "desktop": false
+     },
+     "note": "precheck replaces this screen with the lead-reviewed gameplay region/hash for this image and role"
+    },
+    {
+     "name": "play",
+     "check": "gameplay",
+     "actions": [
+      {
+       "keys": [
+        "up",
+        "ctrl"
+       ],
+       "pause": 1
+      },
+      {
+       "mouse": {
+        "dx": 40,
+        "dy": -12,
+        "button": "left"
+       },
+       "pause": 1
+      },
+      {
+       "mouse": {
+        "dx": -40,
+        "dy": 12
+       },
+       "pause": 1
+      },
+      {
+       "sleep": 30
+      }
+     ]
+    },
+    {
+     "name": "quit",
+     "check": "exit",
+     "actions": [
+      {
+       "keys": [
+        "f10",
+        "y"
+       ],
+       "pause": 1
+      }
+     ]
+    },
+    {
+     "name": "returned",
+     "check": "exit",
+     "timeout": 120,
+     "wait": "^\\[console\\] dosbox: program returned vm=<<game_vm>> generation=<<game_gen>> early=0$"
+    },
+    {
+     "name": "cleanup",
+     "check": "cleanup",
+     "timeout": 120,
+     "wait": "^\\[dosvm\\] lifecycle stage=cleanup vm=<<game_vm>> generation=<<game_gen>> result=0 data_loss=0 retained=0$"
+    },
+    {
+     "name": "desktop",
+     "check": "cleanup",
+     "settle": 3,
+     "screen": {
+      "geometry": [
+       1024,
+       768
+      ],
+      "desktop": true
+     }
+    }
+   ]
+  },
+  {
+   "id": "acc-dos-terminal",
+   "kind": "acceptance",
+   "probe": "acceptance",
+   "profile": "qemu-t23",
+   "item": 3,
+   "title": "Terminal Velocity full screen, sound and gameplay",
+   "timeout": 2400,
+   "expected": {
+    "evidence_kind": "acceptance"
+   },
+   "dos_game": {
+    "title": "terminal",
+    "role": "single"
+   },
+   "forbid": [
+    "^\\[dosvm\\] create refused ",
+    "^\\[launch\\] name=dosbox pid=\\d+ error=",
+    "^\\[dosvm\\] fullscreen_(?:refused|transport_fault) vm=\\d+ ",
+    "^\\[dosvm\\] lifecycle stage=stop vm=\\d+ generation=\\d+ reason=[234] "
+   ],
+   "steps": [
+    {
+     "template": "boot",
+     "prefix": "b1",
+     "check": "boot",
+     "settle": 15
+    },
+    {
+     "name": "menu-refresh",
+     "check": "menu",
+     "actions": [
+      {
+       "keys": [
+        "ctrl+esc",
+        "p"
+       ],
+       "pause": 1
+      },
+      {
+       "sleep": 5
+      },
+      {
+       "keys": [
+        "esc",
+        "esc"
+       ]
+      }
+     ]
+    },
+    {
+     "name": "launch",
+     "check": "menu",
+     "actions": [
+      {
+       "keys": [
+        "ctrl+esc",
+        "p",
+        "g",
+        "ret",
+        "t",
+        "ret"
+       ],
+       "pause": 1
+      }
+     ],
+     "note": "Start > Programs > Games > Trial Terminal Velocity; the only Trial entry in this private overlay"
+    },
+    {
+     "name": "vm",
+     "check": "menu",
+     "timeout": 240,
+     "wait": "^\\[launch-stage\\] name=dosbox pid=(?P<game_pid>\\d+) stage=vm-create window=Terminal\\ Velocity$"
+    },
+    {
+     "name": "graphics",
+     "check": "fullscreen",
+     "timeout": 900,
+     "wait": "^\\[dosvm\\] fullscreen_request vm=(?P<game_vm>\\d+) generation=(?P<game_gen>\\d+) mode=\\d+$"
+    },
+    {
+     "name": "fullscreen",
+     "check": "fullscreen",
+     "timeout": 120,
+     "wait": "^\\[dosvm\\] fullscreen=1 vm=<<game_vm>> generation=<<game_gen>> mode=\\d+$"
+    },
+    {
+     "name": "enter-game",
+     "check": "gameplay",
+     "settle": 5,
+     "actions": [
+      {
+       "keys": [
+        "esc",
+        "ret",
+        "ret",
+        "ret"
+       ],
+       "pause": 1
+      }
+     ]
+    },
+    {
+     "name": "digital",
+     "check": "sound",
+     "since": "boot",
+     "timeout": 120,
+     "wait": "^\\[vm-audio\\] vm=<<game_vm>> play_dma=[15] hz=[1-9]\\d* units=[1-9]\\d*$"
+    },
+    {
+     "name": "opl",
+     "check": "sound",
+     "since": "boot",
+     "timeout": 120,
+     "wait": "^\\[vm-audio\\] vm=<<game_vm>> gen=<<game_gen>> opl_writes=[1-9]\\d* key_writes=[1-9]\\d*$"
+    },
+    {
+     "name": "gameplay",
+     "check": "gameplay",
+     "settle": 10,
+     "screen": {
+      "desktop": false
+     },
+     "note": "precheck replaces this screen with the lead-reviewed gameplay region/hash for this image and role"
+    },
+    {
+     "name": "play",
+     "check": "gameplay",
+     "actions": [
+      {
+       "keys": [
+        "up",
+        "ctrl"
+       ],
+       "pause": 1
+      },
+      {
+       "mouse": {
+        "dx": 40,
+        "dy": -12,
+        "button": "left"
+       },
+       "pause": 1
+      },
+      {
+       "mouse": {
+        "dx": -40,
+        "dy": 12
+       },
+       "pause": 1
+      },
+      {
+       "sleep": 30
+      }
+     ]
+    },
+    {
+     "name": "quit",
+     "check": "exit",
+     "actions": [
+      {
+       "keys": [
+        "esc",
+        "q",
+        "y"
+       ],
+       "pause": 1
+      }
+     ]
+    },
+    {
+     "name": "returned",
+     "check": "exit",
+     "timeout": 120,
+     "wait": "^\\[console\\] dosbox: program returned vm=<<game_vm>> generation=<<game_gen>> early=0$"
+    },
+    {
+     "name": "cleanup",
+     "check": "cleanup",
+     "timeout": 120,
+     "wait": "^\\[dosvm\\] lifecycle stage=cleanup vm=<<game_vm>> generation=<<game_gen>> result=0 data_loss=0 retained=0$"
+    },
+    {
+     "name": "desktop",
+     "check": "cleanup",
+     "settle": 3,
+     "screen": {
+      "geometry": [
+       1024,
+       768
+      ],
+      "desktop": true
+     }
+    }
+   ]
+  },
+  {
+   "id": "acc-dos-jazz",
+   "kind": "acceptance",
+   "probe": "acceptance",
+   "profile": "qemu-t23",
+   "item": 3,
+   "title": "Jazz Jackrabbit full screen, sound and gameplay",
+   "timeout": 2400,
+   "expected": {
+    "evidence_kind": "acceptance"
+   },
+   "dos_game": {
+    "title": "jazz",
+    "role": "single"
+   },
+   "forbid": [
+    "^\\[dosvm\\] create refused ",
+    "^\\[launch\\] name=dosbox pid=\\d+ error=",
+    "^\\[dosvm\\] fullscreen_(?:refused|transport_fault) vm=\\d+ ",
+    "^\\[dosvm\\] lifecycle stage=stop vm=\\d+ generation=\\d+ reason=[234] "
+   ],
+   "steps": [
+    {
+     "template": "boot",
+     "prefix": "b1",
+     "check": "boot",
+     "settle": 15
+    },
+    {
+     "name": "menu-refresh",
+     "check": "menu",
+     "actions": [
+      {
+       "keys": [
+        "ctrl+esc",
+        "p"
+       ],
+       "pause": 1
+      },
+      {
+       "sleep": 5
+      },
+      {
+       "keys": [
+        "esc",
+        "esc"
+       ]
+      }
+     ]
+    },
+    {
+     "name": "launch",
+     "check": "menu",
+     "actions": [
+      {
+       "keys": [
+        "ctrl+esc",
+        "p",
+        "g",
+        "ret",
+        "t",
+        "ret"
+       ],
+       "pause": 1
+      }
+     ],
+     "note": "Start > Programs > Games > Trial Jazz Jackrabbit; the only Trial entry in this private overlay"
+    },
+    {
+     "name": "vm",
+     "check": "menu",
+     "timeout": 240,
+     "wait": "^\\[launch-stage\\] name=dosbox pid=(?P<game_pid>\\d+) stage=vm-create window=Jazz\\ Jackrabbit$"
+    },
+    {
+     "name": "graphics",
+     "check": "fullscreen",
+     "timeout": 900,
+     "wait": "^\\[dosvm\\] fullscreen_request vm=(?P<game_vm>\\d+) generation=(?P<game_gen>\\d+) mode=\\d+$"
+    },
+    {
+     "name": "fullscreen",
+     "check": "fullscreen",
+     "timeout": 120,
+     "wait": "^\\[dosvm\\] fullscreen=1 vm=<<game_vm>> generation=<<game_gen>> mode=\\d+$"
+    },
+    {
+     "name": "enter-game",
+     "check": "gameplay",
+     "settle": 5,
+     "actions": [
+      {
+       "keys": [
+        "ret",
+        "ret",
+        "ret"
+       ],
+       "pause": 1
+      }
+     ]
+    },
+    {
+     "name": "digital",
+     "check": "sound",
+     "since": "boot",
+     "timeout": 120,
+     "wait": "^\\[vm-audio\\] vm=<<game_vm>> play_dma=[15] hz=[1-9]\\d* units=[1-9]\\d*$"
+    },
+    {
+     "name": "gameplay",
+     "check": "gameplay",
+     "settle": 10,
+     "screen": {
+      "desktop": false
+     },
+     "note": "precheck replaces this screen with the lead-reviewed gameplay region/hash for this image and role"
+    },
+    {
+     "name": "play",
+     "check": "gameplay",
+     "actions": [
+      {
+       "keys": [
+        "up",
+        "ctrl"
+       ],
+       "pause": 1
+      },
+      {
+       "sleep": 30
+      }
+     ]
+    },
+    {
+     "name": "quit",
+     "check": "exit",
+     "actions": [
+      {
+       "keys": [
+        "esc",
+        "q",
+        "y"
+       ],
+       "pause": 1
+      }
+     ]
+    },
+    {
+     "name": "returned",
+     "check": "exit",
+     "timeout": 120,
+     "wait": "^\\[console\\] dosbox: program returned vm=<<game_vm>> generation=<<game_gen>> early=0$"
+    },
+    {
+     "name": "cleanup",
+     "check": "cleanup",
+     "timeout": 120,
+     "wait": "^\\[dosvm\\] lifecycle stage=cleanup vm=<<game_vm>> generation=<<game_gen>> result=0 data_loss=0 retained=0$"
+    },
+    {
+     "name": "desktop",
+     "check": "cleanup",
+     "settle": 3,
+     "screen": {
+      "geometry": [
+       1024,
+       768
+      ],
+      "desktop": true
+     }
+    }
+   ]
+  },
+  {
+   "id": "acc-ipx-doom",
+   "kind": "acceptance",
+   "probe": "acceptance",
+   "profile": "qemu-t23",
+   "item": 3,
+   "timeout": 2400,
+   "title": "DOOM two-guest IPX host/join",
+   "expected": {
+    "evidence_kind": "acceptance"
+   },
+   "guests": [
+    {
+     "id": "acc-dos-doom-host",
+     "kind": "acceptance",
+     "probe": "acceptance",
+     "profile": "qemu-t23",
+     "item": 3,
+     "title": "DOOM IPX host",
+     "timeout": 2400,
+     "expected": {
+      "evidence_kind": "acceptance"
+     },
+     "dos_game": {
+      "title": "doom",
+      "role": "host"
+     },
+     "devices": {
+      "network": "i82559er"
+     },
+     "forbid": [
+      "^\\[dosvm\\] create refused ",
+      "^\\[launch\\] name=dosbox pid=\\d+ error=",
+      "^\\[dosvm\\] fullscreen_(?:refused|transport_fault) vm=\\d+ ",
+      "^\\[dosvm\\] lifecycle stage=stop vm=\\d+ generation=\\d+ reason=[234] "
+     ],
+     "steps": [
+      {
+       "template": "boot",
+       "prefix": "b1",
+       "check": "boot",
+       "settle": 15
+      },
+      {
+       "name": "menu-refresh",
+       "check": "menu",
+       "actions": [
+        {
+         "keys": [
+          "ctrl+esc",
+          "p"
+         ],
+         "pause": 1
+        },
+        {
+         "sleep": 5
+        },
+        {
+         "keys": [
+          "esc",
+          "esc"
+         ]
+        }
+       ]
+      },
+      {
+       "name": "launch",
+       "check": "menu",
+       "actions": [
+        {
+         "keys": [
+          "ctrl+esc",
+          "p",
+          "g",
+          "ret",
+          "t",
+          "ret"
+         ],
+         "pause": 1
+        }
+       ],
+       "note": "Start > Programs > Games > Trial DOOM; the only Trial entry in this private overlay"
+      },
+      {
+       "name": "vm",
+       "check": "menu",
+       "timeout": 240,
+       "wait": "^\\[launch-stage\\] name=dosbox pid=(?P<game_pid>\\d+) stage=vm-create window=DOOM$"
+      },
+      {
+       "name": "graphics",
+       "check": "fullscreen",
+       "timeout": 900,
+       "wait": "^\\[dosvm\\] fullscreen_request vm=(?P<game_vm>\\d+) generation=(?P<game_gen>\\d+) mode=\\d+$"
+      },
+      {
+       "name": "fullscreen",
+       "check": "fullscreen",
+       "timeout": 120,
+       "wait": "^\\[dosvm\\] fullscreen=1 vm=<<game_vm>> generation=<<game_gen>> mode=\\d+$"
+      },
+      {
+       "name": "enter-game",
+       "check": "gameplay",
+       "settle": 5,
+       "actions": [
+        {
+         "keys": [
+          "esc",
+          "ret",
+          "ret",
+          "ret"
+         ],
+         "pause": 1
+        }
+       ]
+      },
+      {
+       "name": "digital",
+       "check": "sound",
+       "since": "boot",
+       "timeout": 120,
+       "wait": "^\\[vm-audio\\] vm=<<game_vm>> play_dma=[15] hz=[1-9]\\d* units=[1-9]\\d*$"
+      },
+      {
+       "name": "opl",
+       "check": "sound",
+       "since": "boot",
+       "timeout": 120,
+       "wait": "^\\[vm-audio\\] vm=<<game_vm>> gen=<<game_gen>> opl_writes=[1-9]\\d* key_writes=[1-9]\\d*$"
+      },
+      {
+       "name": "ipx-tx",
+       "check": "lan",
+       "since": "boot",
+       "timeout": 180,
+       "wait": "^\\[dos-ipx\\] vm=<<game_vm>> gen=<<game_gen>> event=tx count=[1-4] (?:bytes=\\d+ )?src=[0-9a-f]{12} dst=[0-9a-f]{12}$"
+      },
+      {
+       "name": "ipx-rx",
+       "check": "lan",
+       "since": "boot",
+       "timeout": 180,
+       "wait": "^\\[dos-ipx\\] vm=<<game_vm>> gen=<<game_gen>> event=rx count=[1-4] (?:bytes=\\d+ )?src=[0-9a-f]{12} dst=[0-9a-f]{12}$"
+      },
+      {
+       "name": "gameplay",
+       "check": "gameplay",
+       "settle": 10,
+       "screen": {
+        "desktop": false
+       },
+       "note": "precheck replaces this screen with the lead-reviewed gameplay region/hash for this image and role"
+      },
+      {
+       "name": "play",
+       "check": "gameplay",
+       "actions": [
+        {
+         "keys": [
+          "up",
+          "ctrl"
+         ],
+         "pause": 1
+        },
+        {
+         "mouse": {
+          "dx": 40,
+          "dy": -12,
+          "button": "left"
+         },
+         "pause": 1
+        },
+        {
+         "mouse": {
+          "dx": -40,
+          "dy": 12
+         },
+         "pause": 1
+        },
+        {
+         "sleep": 30
+        }
+       ]
+      },
+      {
+       "name": "quit",
+       "check": "exit",
+       "actions": [
+        {
+         "keys": [
+          "f10",
+          "y"
+         ],
+         "pause": 1
+        }
+       ]
+      },
+      {
+       "name": "returned",
+       "check": "exit",
+       "timeout": 120,
+       "wait": "^\\[console\\] dosbox: program returned vm=<<game_vm>> generation=<<game_gen>> early=0$"
+      },
+      {
+       "name": "cleanup",
+       "check": "cleanup",
+       "timeout": 120,
+       "wait": "^\\[dosvm\\] lifecycle stage=cleanup vm=<<game_vm>> generation=<<game_gen>> result=0 data_loss=0 retained=0$"
+      },
+      {
+       "name": "desktop",
+       "check": "cleanup",
+       "settle": 3,
+       "screen": {
+        "geometry": [
+         1024,
+         768
+        ],
+        "desktop": true
+       }
+      }
+     ]
+    },
+    {
+     "id": "acc-dos-doom-join",
+     "kind": "acceptance",
+     "probe": "acceptance",
+     "profile": "qemu-t23",
+     "item": 3,
+     "title": "DOOM IPX join",
+     "timeout": 2400,
+     "expected": {
+      "evidence_kind": "acceptance"
+     },
+     "dos_game": {
+      "title": "doom",
+      "role": "join"
+     },
+     "devices": {
+      "network": "i82559er"
+     },
+     "forbid": [
+      "^\\[dosvm\\] create refused ",
+      "^\\[launch\\] name=dosbox pid=\\d+ error=",
+      "^\\[dosvm\\] fullscreen_(?:refused|transport_fault) vm=\\d+ ",
+      "^\\[dosvm\\] lifecycle stage=stop vm=\\d+ generation=\\d+ reason=[234] "
+     ],
+     "steps": [
+      {
+       "template": "boot",
+       "prefix": "b1",
+       "check": "boot",
+       "settle": 15
+      },
+      {
+       "name": "menu-refresh",
+       "check": "menu",
+       "actions": [
+        {
+         "keys": [
+          "ctrl+esc",
+          "p"
+         ],
+         "pause": 1
+        },
+        {
+         "sleep": 5
+        },
+        {
+         "keys": [
+          "esc",
+          "esc"
+         ]
+        }
+       ]
+      },
+      {
+       "name": "launch",
+       "check": "menu",
+       "actions": [
+        {
+         "keys": [
+          "ctrl+esc",
+          "p",
+          "g",
+          "ret",
+          "t",
+          "ret"
+         ],
+         "pause": 1
+        }
+       ],
+       "note": "Start > Programs > Games > Trial DOOM; the only Trial entry in this private overlay"
+      },
+      {
+       "name": "vm",
+       "check": "menu",
+       "timeout": 240,
+       "wait": "^\\[launch-stage\\] name=dosbox pid=(?P<game_pid>\\d+) stage=vm-create window=DOOM$"
+      },
+      {
+       "name": "graphics",
+       "check": "fullscreen",
+       "timeout": 900,
+       "wait": "^\\[dosvm\\] fullscreen_request vm=(?P<game_vm>\\d+) generation=(?P<game_gen>\\d+) mode=\\d+$"
+      },
+      {
+       "name": "fullscreen",
+       "check": "fullscreen",
+       "timeout": 120,
+       "wait": "^\\[dosvm\\] fullscreen=1 vm=<<game_vm>> generation=<<game_gen>> mode=\\d+$"
+      },
+      {
+       "name": "enter-game",
+       "check": "gameplay",
+       "settle": 5,
+       "actions": [
+        {
+         "keys": [
+          "esc",
+          "ret",
+          "ret",
+          "ret"
+         ],
+         "pause": 1
+        }
+       ]
+      },
+      {
+       "name": "digital",
+       "check": "sound",
+       "since": "boot",
+       "timeout": 120,
+       "wait": "^\\[vm-audio\\] vm=<<game_vm>> play_dma=[15] hz=[1-9]\\d* units=[1-9]\\d*$"
+      },
+      {
+       "name": "opl",
+       "check": "sound",
+       "since": "boot",
+       "timeout": 120,
+       "wait": "^\\[vm-audio\\] vm=<<game_vm>> gen=<<game_gen>> opl_writes=[1-9]\\d* key_writes=[1-9]\\d*$"
+      },
+      {
+       "name": "ipx-tx",
+       "check": "lan",
+       "since": "boot",
+       "timeout": 180,
+       "wait": "^\\[dos-ipx\\] vm=<<game_vm>> gen=<<game_gen>> event=tx count=[1-4] (?:bytes=\\d+ )?src=[0-9a-f]{12} dst=[0-9a-f]{12}$"
+      },
+      {
+       "name": "ipx-rx",
+       "check": "lan",
+       "since": "boot",
+       "timeout": 180,
+       "wait": "^\\[dos-ipx\\] vm=<<game_vm>> gen=<<game_gen>> event=rx count=[1-4] (?:bytes=\\d+ )?src=[0-9a-f]{12} dst=[0-9a-f]{12}$"
+      },
+      {
+       "name": "gameplay",
+       "check": "gameplay",
+       "settle": 10,
+       "screen": {
+        "desktop": false
+       },
+       "note": "precheck replaces this screen with the lead-reviewed gameplay region/hash for this image and role"
+      },
+      {
+       "name": "play",
+       "check": "gameplay",
+       "actions": [
+        {
+         "keys": [
+          "up",
+          "ctrl"
+         ],
+         "pause": 1
+        },
+        {
+         "mouse": {
+          "dx": 40,
+          "dy": -12,
+          "button": "left"
+         },
+         "pause": 1
+        },
+        {
+         "mouse": {
+          "dx": -40,
+          "dy": 12
+         },
+         "pause": 1
+        },
+        {
+         "sleep": 30
+        }
+       ]
+      },
+      {
+       "name": "quit",
+       "check": "exit",
+       "actions": [
+        {
+         "keys": [
+          "f10",
+          "y"
+         ],
+         "pause": 1
+        }
+       ]
+      },
+      {
+       "name": "returned",
+       "check": "exit",
+       "timeout": 120,
+       "wait": "^\\[console\\] dosbox: program returned vm=<<game_vm>> generation=<<game_gen>> early=0$"
+      },
+      {
+       "name": "cleanup",
+       "check": "cleanup",
+       "timeout": 120,
+       "wait": "^\\[dosvm\\] lifecycle stage=cleanup vm=<<game_vm>> generation=<<game_gen>> result=0 data_loss=0 retained=0$"
+      },
+      {
+       "name": "desktop",
+       "check": "cleanup",
+       "settle": 3,
+       "screen": {
+        "geometry": [
+         1024,
+         768
+        ],
+        "desktop": true
+       }
+      }
+     ]
+    }
+   ]
+  },
+  {
+   "id": "acc-ipx-quake",
+   "kind": "acceptance",
+   "probe": "acceptance",
+   "profile": "qemu-t23",
+   "item": 3,
+   "timeout": 2400,
+   "title": "Quake two-guest IPX host/join",
+   "expected": {
+    "evidence_kind": "acceptance"
+   },
+   "guests": [
+    {
+     "id": "acc-dos-quake-host",
+     "kind": "acceptance",
+     "probe": "acceptance",
+     "profile": "qemu-t23",
+     "item": 3,
+     "title": "Quake IPX host",
+     "timeout": 2400,
+     "expected": {
+      "evidence_kind": "acceptance"
+     },
+     "dos_game": {
+      "title": "quake",
+      "role": "host"
+     },
+     "devices": {
+      "network": "i82559er"
+     },
+     "forbid": [
+      "^\\[dosvm\\] create refused ",
+      "^\\[launch\\] name=dosbox pid=\\d+ error=",
+      "^\\[dosvm\\] fullscreen_(?:refused|transport_fault) vm=\\d+ ",
+      "^\\[dosvm\\] lifecycle stage=stop vm=\\d+ generation=\\d+ reason=[234] "
+     ],
+     "steps": [
+      {
+       "template": "boot",
+       "prefix": "b1",
+       "check": "boot",
+       "settle": 15
+      },
+      {
+       "name": "menu-refresh",
+       "check": "menu",
+       "actions": [
+        {
+         "keys": [
+          "ctrl+esc",
+          "p"
+         ],
+         "pause": 1
+        },
+        {
+         "sleep": 5
+        },
+        {
+         "keys": [
+          "esc",
+          "esc"
+         ]
+        }
+       ]
+      },
+      {
+       "name": "launch",
+       "check": "menu",
+       "actions": [
+        {
+         "keys": [
+          "ctrl+esc",
+          "p",
+          "g",
+          "ret",
+          "t",
+          "ret"
+         ],
+         "pause": 1
+        }
+       ],
+       "note": "Start > Programs > Games > Trial Quake; the only Trial entry in this private overlay"
+      },
+      {
+       "name": "vm",
+       "check": "menu",
+       "timeout": 240,
+       "wait": "^\\[launch-stage\\] name=dosbox pid=(?P<game_pid>\\d+) stage=vm-create window=Quake$"
+      },
+      {
+       "name": "graphics",
+       "check": "fullscreen",
+       "timeout": 900,
+       "wait": "^\\[dosvm\\] fullscreen_request vm=(?P<game_vm>\\d+) generation=(?P<game_gen>\\d+) mode=\\d+$"
+      },
+      {
+       "name": "fullscreen",
+       "check": "fullscreen",
+       "timeout": 120,
+       "wait": "^\\[dosvm\\] fullscreen=1 vm=<<game_vm>> generation=<<game_gen>> mode=\\d+$"
+      },
+      {
+       "name": "enter-game",
+       "check": "gameplay",
+       "settle": 5,
+       "actions": [
+        {
+         "keys": [
+          "esc",
+          "ret",
+          "ret",
+          "ret"
+         ],
+         "pause": 1
+        }
+       ]
+      },
+      {
+       "name": "digital",
+       "check": "sound",
+       "since": "boot",
+       "timeout": 120,
+       "wait": "^\\[vm-audio\\] vm=<<game_vm>> play_dma=[15] hz=[1-9]\\d* units=[1-9]\\d*$"
+      },
+      {
+       "name": "ipx-tx",
+       "check": "lan",
+       "since": "boot",
+       "timeout": 180,
+       "wait": "^\\[dos-ipx\\] vm=<<game_vm>> gen=<<game_gen>> event=tx count=[1-4] (?:bytes=\\d+ )?src=[0-9a-f]{12} dst=[0-9a-f]{12}$"
+      },
+      {
+       "name": "ipx-rx",
+       "check": "lan",
+       "since": "boot",
+       "timeout": 180,
+       "wait": "^\\[dos-ipx\\] vm=<<game_vm>> gen=<<game_gen>> event=rx count=[1-4] (?:bytes=\\d+ )?src=[0-9a-f]{12} dst=[0-9a-f]{12}$"
+      },
+      {
+       "name": "gameplay",
+       "check": "gameplay",
+       "settle": 10,
+       "screen": {
+        "desktop": false
+       },
+       "note": "precheck replaces this screen with the lead-reviewed gameplay region/hash for this image and role"
+      },
+      {
+       "name": "play",
+       "check": "gameplay",
+       "actions": [
+        {
+         "keys": [
+          "up",
+          "ctrl"
+         ],
+         "pause": 1
+        },
+        {
+         "mouse": {
+          "dx": 40,
+          "dy": -12,
+          "button": "left"
+         },
+         "pause": 1
+        },
+        {
+         "mouse": {
+          "dx": -40,
+          "dy": 12
+         },
+         "pause": 1
+        },
+        {
+         "sleep": 30
+        }
+       ]
+      },
+      {
+       "name": "quit",
+       "check": "exit",
+       "actions": [
+        {
+         "keys": [
+          "grave_accent",
+          "q",
+          "u",
+          "i",
+          "t",
+          "ret"
+         ],
+         "pause": 1
+        }
+       ]
+      },
+      {
+       "name": "returned",
+       "check": "exit",
+       "timeout": 120,
+       "wait": "^\\[console\\] dosbox: program returned vm=<<game_vm>> generation=<<game_gen>> early=0$"
+      },
+      {
+       "name": "cleanup",
+       "check": "cleanup",
+       "timeout": 120,
+       "wait": "^\\[dosvm\\] lifecycle stage=cleanup vm=<<game_vm>> generation=<<game_gen>> result=0 data_loss=0 retained=0$"
+      },
+      {
+       "name": "desktop",
+       "check": "cleanup",
+       "settle": 3,
+       "screen": {
+        "geometry": [
+         1024,
+         768
+        ],
+        "desktop": true
+       }
+      }
+     ]
+    },
+    {
+     "id": "acc-dos-quake-join",
+     "kind": "acceptance",
+     "probe": "acceptance",
+     "profile": "qemu-t23",
+     "item": 3,
+     "title": "Quake IPX join",
+     "timeout": 2400,
+     "expected": {
+      "evidence_kind": "acceptance"
+     },
+     "dos_game": {
+      "title": "quake",
+      "role": "join"
+     },
+     "devices": {
+      "network": "i82559er"
+     },
+     "forbid": [
+      "^\\[dosvm\\] create refused ",
+      "^\\[launch\\] name=dosbox pid=\\d+ error=",
+      "^\\[dosvm\\] fullscreen_(?:refused|transport_fault) vm=\\d+ ",
+      "^\\[dosvm\\] lifecycle stage=stop vm=\\d+ generation=\\d+ reason=[234] "
+     ],
+     "steps": [
+      {
+       "template": "boot",
+       "prefix": "b1",
+       "check": "boot",
+       "settle": 15
+      },
+      {
+       "name": "menu-refresh",
+       "check": "menu",
+       "actions": [
+        {
+         "keys": [
+          "ctrl+esc",
+          "p"
+         ],
+         "pause": 1
+        },
+        {
+         "sleep": 5
+        },
+        {
+         "keys": [
+          "esc",
+          "esc"
+         ]
+        }
+       ]
+      },
+      {
+       "name": "launch",
+       "check": "menu",
+       "actions": [
+        {
+         "keys": [
+          "ctrl+esc",
+          "p",
+          "g",
+          "ret",
+          "t",
+          "ret"
+         ],
+         "pause": 1
+        }
+       ],
+       "note": "Start > Programs > Games > Trial Quake; the only Trial entry in this private overlay"
+      },
+      {
+       "name": "vm",
+       "check": "menu",
+       "timeout": 240,
+       "wait": "^\\[launch-stage\\] name=dosbox pid=(?P<game_pid>\\d+) stage=vm-create window=Quake$"
+      },
+      {
+       "name": "graphics",
+       "check": "fullscreen",
+       "timeout": 900,
+       "wait": "^\\[dosvm\\] fullscreen_request vm=(?P<game_vm>\\d+) generation=(?P<game_gen>\\d+) mode=\\d+$"
+      },
+      {
+       "name": "fullscreen",
+       "check": "fullscreen",
+       "timeout": 120,
+       "wait": "^\\[dosvm\\] fullscreen=1 vm=<<game_vm>> generation=<<game_gen>> mode=\\d+$"
+      },
+      {
+       "name": "enter-game",
+       "check": "gameplay",
+       "settle": 5,
+       "actions": [
+        {
+         "keys": [
+          "esc",
+          "ret",
+          "ret",
+          "ret"
+         ],
+         "pause": 1
+        }
+       ]
+      },
+      {
+       "name": "digital",
+       "check": "sound",
+       "since": "boot",
+       "timeout": 120,
+       "wait": "^\\[vm-audio\\] vm=<<game_vm>> play_dma=[15] hz=[1-9]\\d* units=[1-9]\\d*$"
+      },
+      {
+       "name": "ipx-tx",
+       "check": "lan",
+       "since": "boot",
+       "timeout": 180,
+       "wait": "^\\[dos-ipx\\] vm=<<game_vm>> gen=<<game_gen>> event=tx count=[1-4] (?:bytes=\\d+ )?src=[0-9a-f]{12} dst=[0-9a-f]{12}$"
+      },
+      {
+       "name": "ipx-rx",
+       "check": "lan",
+       "since": "boot",
+       "timeout": 180,
+       "wait": "^\\[dos-ipx\\] vm=<<game_vm>> gen=<<game_gen>> event=rx count=[1-4] (?:bytes=\\d+ )?src=[0-9a-f]{12} dst=[0-9a-f]{12}$"
+      },
+      {
+       "name": "gameplay",
+       "check": "gameplay",
+       "settle": 10,
+       "screen": {
+        "desktop": false
+       },
+       "note": "precheck replaces this screen with the lead-reviewed gameplay region/hash for this image and role"
+      },
+      {
+       "name": "play",
+       "check": "gameplay",
+       "actions": [
+        {
+         "keys": [
+          "up",
+          "ctrl"
+         ],
+         "pause": 1
+        },
+        {
+         "mouse": {
+          "dx": 40,
+          "dy": -12,
+          "button": "left"
+         },
+         "pause": 1
+        },
+        {
+         "mouse": {
+          "dx": -40,
+          "dy": 12
+         },
+         "pause": 1
+        },
+        {
+         "sleep": 30
+        }
+       ]
+      },
+      {
+       "name": "quit",
+       "check": "exit",
+       "actions": [
+        {
+         "keys": [
+          "grave_accent",
+          "q",
+          "u",
+          "i",
+          "t",
+          "ret"
+         ],
+         "pause": 1
+        }
+       ]
+      },
+      {
+       "name": "returned",
+       "check": "exit",
+       "timeout": 120,
+       "wait": "^\\[console\\] dosbox: program returned vm=<<game_vm>> generation=<<game_gen>> early=0$"
+      },
+      {
+       "name": "cleanup",
+       "check": "cleanup",
+       "timeout": 120,
+       "wait": "^\\[dosvm\\] lifecycle stage=cleanup vm=<<game_vm>> generation=<<game_gen>> result=0 data_loss=0 retained=0$"
+      },
+      {
+       "name": "desktop",
+       "check": "cleanup",
+       "settle": 3,
+       "screen": {
+        "geometry": [
+         1024,
+         768
+        ],
+        "desktop": true
+       }
+      }
+     ]
+    }
+   ]
+  },
+  {
+   "id": "acc-ipx-rott",
+   "kind": "acceptance",
+   "probe": "acceptance",
+   "profile": "qemu-t23",
+   "item": 3,
+   "timeout": 2400,
+   "title": "Rise of the Triad two-guest IPX host/join",
+   "expected": {
+    "evidence_kind": "acceptance"
+   },
+   "guests": [
+    {
+     "id": "acc-dos-rott-host",
+     "kind": "acceptance",
+     "probe": "acceptance",
+     "profile": "qemu-t23",
+     "item": 3,
+     "title": "Rise of the Triad IPX host",
+     "timeout": 2400,
+     "expected": {
+      "evidence_kind": "acceptance"
+     },
+     "dos_game": {
+      "title": "rott",
+      "role": "host"
+     },
+     "devices": {
+      "network": "i82559er"
+     },
+     "forbid": [
+      "^\\[dosvm\\] create refused ",
+      "^\\[launch\\] name=dosbox pid=\\d+ error=",
+      "^\\[dosvm\\] fullscreen_(?:refused|transport_fault) vm=\\d+ ",
+      "^\\[dosvm\\] lifecycle stage=stop vm=\\d+ generation=\\d+ reason=[234] "
+     ],
+     "steps": [
+      {
+       "template": "boot",
+       "prefix": "b1",
+       "check": "boot",
+       "settle": 15
+      },
+      {
+       "name": "menu-refresh",
+       "check": "menu",
+       "actions": [
+        {
+         "keys": [
+          "ctrl+esc",
+          "p"
+         ],
+         "pause": 1
+        },
+        {
+         "sleep": 5
+        },
+        {
+         "keys": [
+          "esc",
+          "esc"
+         ]
+        }
+       ]
+      },
+      {
+       "name": "launch",
+       "check": "menu",
+       "actions": [
+        {
+         "keys": [
+          "ctrl+esc",
+          "p",
+          "g",
+          "ret",
+          "t",
+          "ret"
+         ],
+         "pause": 1
+        }
+       ],
+       "note": "Start > Programs > Games > Trial Rise of the Triad; the only Trial entry in this private overlay"
+      },
+      {
+       "name": "vm",
+       "check": "menu",
+       "timeout": 240,
+       "wait": "^\\[launch-stage\\] name=dosbox pid=(?P<game_pid>\\d+) stage=vm-create window=Rise\\ of\\ the\\ Triad$"
+      },
+      {
+       "name": "graphics",
+       "check": "fullscreen",
+       "timeout": 900,
+       "wait": "^\\[dosvm\\] fullscreen_request vm=(?P<game_vm>\\d+) generation=(?P<game_gen>\\d+) mode=\\d+$"
+      },
+      {
+       "name": "fullscreen",
+       "check": "fullscreen",
+       "timeout": 120,
+       "wait": "^\\[dosvm\\] fullscreen=1 vm=<<game_vm>> generation=<<game_gen>> mode=\\d+$"
+      },
+      {
+       "name": "enter-game",
+       "check": "gameplay",
+       "settle": 5,
+       "actions": [
+        {
+         "keys": [
+          "esc",
+          "ret",
+          "ret",
+          "ret"
+         ],
+         "pause": 1
+        }
+       ]
+      },
+      {
+       "name": "digital",
+       "check": "sound",
+       "since": "boot",
+       "timeout": 120,
+       "wait": "^\\[vm-audio\\] vm=<<game_vm>> play_dma=[15] hz=[1-9]\\d* units=[1-9]\\d*$"
+      },
+      {
+       "name": "opl",
+       "check": "sound",
+       "since": "boot",
+       "timeout": 120,
+       "wait": "^\\[vm-audio\\] vm=<<game_vm>> gen=<<game_gen>> opl_writes=[1-9]\\d* key_writes=[1-9]\\d*$"
+      },
+      {
+       "name": "ipx-tx",
+       "check": "lan",
+       "since": "boot",
+       "timeout": 180,
+       "wait": "^\\[dos-ipx\\] vm=<<game_vm>> gen=<<game_gen>> event=tx count=[1-4] (?:bytes=\\d+ )?src=[0-9a-f]{12} dst=[0-9a-f]{12}$"
+      },
+      {
+       "name": "ipx-rx",
+       "check": "lan",
+       "since": "boot",
+       "timeout": 180,
+       "wait": "^\\[dos-ipx\\] vm=<<game_vm>> gen=<<game_gen>> event=rx count=[1-4] (?:bytes=\\d+ )?src=[0-9a-f]{12} dst=[0-9a-f]{12}$"
+      },
+      {
+       "name": "gameplay",
+       "check": "gameplay",
+       "settle": 10,
+       "screen": {
+        "desktop": false
+       },
+       "note": "precheck replaces this screen with the lead-reviewed gameplay region/hash for this image and role"
+      },
+      {
+       "name": "play",
+       "check": "gameplay",
+       "actions": [
+        {
+         "keys": [
+          "up",
+          "ctrl"
+         ],
+         "pause": 1
+        },
+        {
+         "mouse": {
+          "dx": 40,
+          "dy": -12,
+          "button": "left"
+         },
+         "pause": 1
+        },
+        {
+         "mouse": {
+          "dx": -40,
+          "dy": 12
+         },
+         "pause": 1
+        },
+        {
+         "sleep": 30
+        }
+       ]
+      },
+      {
+       "name": "quit",
+       "check": "exit",
+       "actions": [
+        {
+         "keys": [
+          "esc",
+          "up",
+          "ret",
+          "y"
+         ],
+         "pause": 1
+        }
+       ]
+      },
+      {
+       "name": "returned",
+       "check": "exit",
+       "timeout": 120,
+       "wait": "^\\[console\\] dosbox: program returned vm=<<game_vm>> generation=<<game_gen>> early=0$"
+      },
+      {
+       "name": "cleanup",
+       "check": "cleanup",
+       "timeout": 120,
+       "wait": "^\\[dosvm\\] lifecycle stage=cleanup vm=<<game_vm>> generation=<<game_gen>> result=0 data_loss=0 retained=0$"
+      },
+      {
+       "name": "desktop",
+       "check": "cleanup",
+       "settle": 3,
+       "screen": {
+        "geometry": [
+         1024,
+         768
+        ],
+        "desktop": true
+       }
+      }
+     ]
+    },
+    {
+     "id": "acc-dos-rott-join",
+     "kind": "acceptance",
+     "probe": "acceptance",
+     "profile": "qemu-t23",
+     "item": 3,
+     "title": "Rise of the Triad IPX join",
+     "timeout": 2400,
+     "expected": {
+      "evidence_kind": "acceptance"
+     },
+     "dos_game": {
+      "title": "rott",
+      "role": "join"
+     },
+     "devices": {
+      "network": "i82559er"
+     },
+     "forbid": [
+      "^\\[dosvm\\] create refused ",
+      "^\\[launch\\] name=dosbox pid=\\d+ error=",
+      "^\\[dosvm\\] fullscreen_(?:refused|transport_fault) vm=\\d+ ",
+      "^\\[dosvm\\] lifecycle stage=stop vm=\\d+ generation=\\d+ reason=[234] "
+     ],
+     "steps": [
+      {
+       "template": "boot",
+       "prefix": "b1",
+       "check": "boot",
+       "settle": 15
+      },
+      {
+       "name": "menu-refresh",
+       "check": "menu",
+       "actions": [
+        {
+         "keys": [
+          "ctrl+esc",
+          "p"
+         ],
+         "pause": 1
+        },
+        {
+         "sleep": 5
+        },
+        {
+         "keys": [
+          "esc",
+          "esc"
+         ]
+        }
+       ]
+      },
+      {
+       "name": "launch",
+       "check": "menu",
+       "actions": [
+        {
+         "keys": [
+          "ctrl+esc",
+          "p",
+          "g",
+          "ret",
+          "t",
+          "ret"
+         ],
+         "pause": 1
+        }
+       ],
+       "note": "Start > Programs > Games > Trial Rise of the Triad; the only Trial entry in this private overlay"
+      },
+      {
+       "name": "vm",
+       "check": "menu",
+       "timeout": 240,
+       "wait": "^\\[launch-stage\\] name=dosbox pid=(?P<game_pid>\\d+) stage=vm-create window=Rise\\ of\\ the\\ Triad$"
+      },
+      {
+       "name": "graphics",
+       "check": "fullscreen",
+       "timeout": 900,
+       "wait": "^\\[dosvm\\] fullscreen_request vm=(?P<game_vm>\\d+) generation=(?P<game_gen>\\d+) mode=\\d+$"
+      },
+      {
+       "name": "fullscreen",
+       "check": "fullscreen",
+       "timeout": 120,
+       "wait": "^\\[dosvm\\] fullscreen=1 vm=<<game_vm>> generation=<<game_gen>> mode=\\d+$"
+      },
+      {
+       "name": "enter-game",
+       "check": "gameplay",
+       "settle": 5,
+       "actions": [
+        {
+         "keys": [
+          "esc",
+          "ret",
+          "ret",
+          "ret"
+         ],
+         "pause": 1
+        }
+       ]
+      },
+      {
+       "name": "digital",
+       "check": "sound",
+       "since": "boot",
+       "timeout": 120,
+       "wait": "^\\[vm-audio\\] vm=<<game_vm>> play_dma=[15] hz=[1-9]\\d* units=[1-9]\\d*$"
+      },
+      {
+       "name": "opl",
+       "check": "sound",
+       "since": "boot",
+       "timeout": 120,
+       "wait": "^\\[vm-audio\\] vm=<<game_vm>> gen=<<game_gen>> opl_writes=[1-9]\\d* key_writes=[1-9]\\d*$"
+      },
+      {
+       "name": "ipx-tx",
+       "check": "lan",
+       "since": "boot",
+       "timeout": 180,
+       "wait": "^\\[dos-ipx\\] vm=<<game_vm>> gen=<<game_gen>> event=tx count=[1-4] (?:bytes=\\d+ )?src=[0-9a-f]{12} dst=[0-9a-f]{12}$"
+      },
+      {
+       "name": "ipx-rx",
+       "check": "lan",
+       "since": "boot",
+       "timeout": 180,
+       "wait": "^\\[dos-ipx\\] vm=<<game_vm>> gen=<<game_gen>> event=rx count=[1-4] (?:bytes=\\d+ )?src=[0-9a-f]{12} dst=[0-9a-f]{12}$"
+      },
+      {
+       "name": "gameplay",
+       "check": "gameplay",
+       "settle": 10,
+       "screen": {
+        "desktop": false
+       },
+       "note": "precheck replaces this screen with the lead-reviewed gameplay region/hash for this image and role"
+      },
+      {
+       "name": "play",
+       "check": "gameplay",
+       "actions": [
+        {
+         "keys": [
+          "up",
+          "ctrl"
+         ],
+         "pause": 1
+        },
+        {
+         "mouse": {
+          "dx": 40,
+          "dy": -12,
+          "button": "left"
+         },
+         "pause": 1
+        },
+        {
+         "mouse": {
+          "dx": -40,
+          "dy": 12
+         },
+         "pause": 1
+        },
+        {
+         "sleep": 30
+        }
+       ]
+      },
+      {
+       "name": "quit",
+       "check": "exit",
+       "actions": [
+        {
+         "keys": [
+          "esc",
+          "up",
+          "ret",
+          "y"
+         ],
+         "pause": 1
+        }
+       ]
+      },
+      {
+       "name": "returned",
+       "check": "exit",
+       "timeout": 120,
+       "wait": "^\\[console\\] dosbox: program returned vm=<<game_vm>> generation=<<game_gen>> early=0$"
+      },
+      {
+       "name": "cleanup",
+       "check": "cleanup",
+       "timeout": 120,
+       "wait": "^\\[dosvm\\] lifecycle stage=cleanup vm=<<game_vm>> generation=<<game_gen>> result=0 data_loss=0 retained=0$"
+      },
+      {
+       "name": "desktop",
+       "check": "cleanup",
+       "settle": 3,
+       "screen": {
+        "geometry": [
+         1024,
+         768
+        ],
+        "desktop": true
+       }
+      }
+     ]
+    }
+   ]
+  },
+  {
+   "id": "acc-ipx-duke3d",
+   "kind": "acceptance",
+   "probe": "acceptance",
+   "profile": "qemu-t23",
+   "item": 3,
+   "timeout": 2400,
+   "title": "Duke Nukem 3D two-guest IPX host/join",
+   "expected": {
+    "evidence_kind": "acceptance"
+   },
+   "guests": [
+    {
+     "id": "acc-dos-duke3d-host",
+     "kind": "acceptance",
+     "probe": "acceptance",
+     "profile": "qemu-t23",
+     "item": 3,
+     "title": "Duke Nukem 3D IPX host",
+     "timeout": 2400,
+     "expected": {
+      "evidence_kind": "acceptance"
+     },
+     "dos_game": {
+      "title": "duke3d",
+      "role": "host"
+     },
+     "devices": {
+      "network": "i82559er"
+     },
+     "forbid": [
+      "^\\[dosvm\\] create refused ",
+      "^\\[launch\\] name=dosbox pid=\\d+ error=",
+      "^\\[dosvm\\] fullscreen_(?:refused|transport_fault) vm=\\d+ ",
+      "^\\[dosvm\\] lifecycle stage=stop vm=\\d+ generation=\\d+ reason=[234] "
+     ],
+     "steps": [
+      {
+       "template": "boot",
+       "prefix": "b1",
+       "check": "boot",
+       "settle": 15
+      },
+      {
+       "name": "menu-refresh",
+       "check": "menu",
+       "actions": [
+        {
+         "keys": [
+          "ctrl+esc",
+          "p"
+         ],
+         "pause": 1
+        },
+        {
+         "sleep": 5
+        },
+        {
+         "keys": [
+          "esc",
+          "esc"
+         ]
+        }
+       ]
+      },
+      {
+       "name": "launch",
+       "check": "menu",
+       "actions": [
+        {
+         "keys": [
+          "ctrl+esc",
+          "p",
+          "g",
+          "ret",
+          "t",
+          "ret"
+         ],
+         "pause": 1
+        }
+       ],
+       "note": "Start > Programs > Games > Trial Duke Nukem 3D; the only Trial entry in this private overlay"
+      },
+      {
+       "name": "vm",
+       "check": "menu",
+       "timeout": 240,
+       "wait": "^\\[launch-stage\\] name=dosbox pid=(?P<game_pid>\\d+) stage=vm-create window=Duke\\ Nukem\\ 3D$"
+      },
+      {
+       "name": "graphics",
+       "check": "fullscreen",
+       "timeout": 900,
+       "wait": "^\\[dosvm\\] fullscreen_request vm=(?P<game_vm>\\d+) generation=(?P<game_gen>\\d+) mode=\\d+$"
+      },
+      {
+       "name": "fullscreen",
+       "check": "fullscreen",
+       "timeout": 120,
+       "wait": "^\\[dosvm\\] fullscreen=1 vm=<<game_vm>> generation=<<game_gen>> mode=\\d+$"
+      },
+      {
+       "name": "enter-game",
+       "check": "gameplay",
+       "settle": 5,
+       "actions": [
+        {
+         "keys": [
+          "esc",
+          "ret",
+          "ret",
+          "ret"
+         ],
+         "pause": 1
+        }
+       ]
+      },
+      {
+       "name": "digital",
+       "check": "sound",
+       "since": "boot",
+       "timeout": 120,
+       "wait": "^\\[vm-audio\\] vm=<<game_vm>> play_dma=[15] hz=[1-9]\\d* units=[1-9]\\d*$"
+      },
+      {
+       "name": "opl",
+       "check": "sound",
+       "since": "boot",
+       "timeout": 120,
+       "wait": "^\\[vm-audio\\] vm=<<game_vm>> gen=<<game_gen>> opl_writes=[1-9]\\d* key_writes=[1-9]\\d*$"
+      },
+      {
+       "name": "ipx-tx",
+       "check": "lan",
+       "since": "boot",
+       "timeout": 180,
+       "wait": "^\\[dos-ipx\\] vm=<<game_vm>> gen=<<game_gen>> event=tx count=[1-4] (?:bytes=\\d+ )?src=[0-9a-f]{12} dst=[0-9a-f]{12}$"
+      },
+      {
+       "name": "ipx-rx",
+       "check": "lan",
+       "since": "boot",
+       "timeout": 180,
+       "wait": "^\\[dos-ipx\\] vm=<<game_vm>> gen=<<game_gen>> event=rx count=[1-4] (?:bytes=\\d+ )?src=[0-9a-f]{12} dst=[0-9a-f]{12}$"
+      },
+      {
+       "name": "gameplay",
+       "check": "gameplay",
+       "settle": 10,
+       "screen": {
+        "desktop": false
+       },
+       "note": "precheck replaces this screen with the lead-reviewed gameplay region/hash for this image and role"
+      },
+      {
+       "name": "play",
+       "check": "gameplay",
+       "actions": [
+        {
+         "keys": [
+          "up",
+          "ctrl"
+         ],
+         "pause": 1
+        },
+        {
+         "mouse": {
+          "dx": 40,
+          "dy": -12,
+          "button": "left"
+         },
+         "pause": 1
+        },
+        {
+         "mouse": {
+          "dx": -40,
+          "dy": 12
+         },
+         "pause": 1
+        },
+        {
+         "sleep": 30
+        }
+       ]
+      },
+      {
+       "name": "quit",
+       "check": "exit",
+       "actions": [
+        {
+         "keys": [
+          "esc",
+          "up",
+          "ret",
+          "y"
+         ],
+         "pause": 1
+        }
+       ]
+      },
+      {
+       "name": "returned",
+       "check": "exit",
+       "timeout": 120,
+       "wait": "^\\[console\\] dosbox: program returned vm=<<game_vm>> generation=<<game_gen>> early=0$"
+      },
+      {
+       "name": "cleanup",
+       "check": "cleanup",
+       "timeout": 120,
+       "wait": "^\\[dosvm\\] lifecycle stage=cleanup vm=<<game_vm>> generation=<<game_gen>> result=0 data_loss=0 retained=0$"
+      },
+      {
+       "name": "desktop",
+       "check": "cleanup",
+       "settle": 3,
+       "screen": {
+        "geometry": [
+         1024,
+         768
+        ],
+        "desktop": true
+       }
+      }
+     ]
+    },
+    {
+     "id": "acc-dos-duke3d-join",
+     "kind": "acceptance",
+     "probe": "acceptance",
+     "profile": "qemu-t23",
+     "item": 3,
+     "title": "Duke Nukem 3D IPX join",
+     "timeout": 2400,
+     "expected": {
+      "evidence_kind": "acceptance"
+     },
+     "dos_game": {
+      "title": "duke3d",
+      "role": "join"
+     },
+     "devices": {
+      "network": "i82559er"
+     },
+     "forbid": [
+      "^\\[dosvm\\] create refused ",
+      "^\\[launch\\] name=dosbox pid=\\d+ error=",
+      "^\\[dosvm\\] fullscreen_(?:refused|transport_fault) vm=\\d+ ",
+      "^\\[dosvm\\] lifecycle stage=stop vm=\\d+ generation=\\d+ reason=[234] "
+     ],
+     "steps": [
+      {
+       "template": "boot",
+       "prefix": "b1",
+       "check": "boot",
+       "settle": 15
+      },
+      {
+       "name": "menu-refresh",
+       "check": "menu",
+       "actions": [
+        {
+         "keys": [
+          "ctrl+esc",
+          "p"
+         ],
+         "pause": 1
+        },
+        {
+         "sleep": 5
+        },
+        {
+         "keys": [
+          "esc",
+          "esc"
+         ]
+        }
+       ]
+      },
+      {
+       "name": "launch",
+       "check": "menu",
+       "actions": [
+        {
+         "keys": [
+          "ctrl+esc",
+          "p",
+          "g",
+          "ret",
+          "t",
+          "ret"
+         ],
+         "pause": 1
+        }
+       ],
+       "note": "Start > Programs > Games > Trial Duke Nukem 3D; the only Trial entry in this private overlay"
+      },
+      {
+       "name": "vm",
+       "check": "menu",
+       "timeout": 240,
+       "wait": "^\\[launch-stage\\] name=dosbox pid=(?P<game_pid>\\d+) stage=vm-create window=Duke\\ Nukem\\ 3D$"
+      },
+      {
+       "name": "graphics",
+       "check": "fullscreen",
+       "timeout": 900,
+       "wait": "^\\[dosvm\\] fullscreen_request vm=(?P<game_vm>\\d+) generation=(?P<game_gen>\\d+) mode=\\d+$"
+      },
+      {
+       "name": "fullscreen",
+       "check": "fullscreen",
+       "timeout": 120,
+       "wait": "^\\[dosvm\\] fullscreen=1 vm=<<game_vm>> generation=<<game_gen>> mode=\\d+$"
+      },
+      {
+       "name": "enter-game",
+       "check": "gameplay",
+       "settle": 5,
+       "actions": [
+        {
+         "keys": [
+          "esc",
+          "ret",
+          "ret",
+          "ret"
+         ],
+         "pause": 1
+        }
+       ]
+      },
+      {
+       "name": "digital",
+       "check": "sound",
+       "since": "boot",
+       "timeout": 120,
+       "wait": "^\\[vm-audio\\] vm=<<game_vm>> play_dma=[15] hz=[1-9]\\d* units=[1-9]\\d*$"
+      },
+      {
+       "name": "opl",
+       "check": "sound",
+       "since": "boot",
+       "timeout": 120,
+       "wait": "^\\[vm-audio\\] vm=<<game_vm>> gen=<<game_gen>> opl_writes=[1-9]\\d* key_writes=[1-9]\\d*$"
+      },
+      {
+       "name": "ipx-tx",
+       "check": "lan",
+       "since": "boot",
+       "timeout": 180,
+       "wait": "^\\[dos-ipx\\] vm=<<game_vm>> gen=<<game_gen>> event=tx count=[1-4] (?:bytes=\\d+ )?src=[0-9a-f]{12} dst=[0-9a-f]{12}$"
+      },
+      {
+       "name": "ipx-rx",
+       "check": "lan",
+       "since": "boot",
+       "timeout": 180,
+       "wait": "^\\[dos-ipx\\] vm=<<game_vm>> gen=<<game_gen>> event=rx count=[1-4] (?:bytes=\\d+ )?src=[0-9a-f]{12} dst=[0-9a-f]{12}$"
+      },
+      {
+       "name": "gameplay",
+       "check": "gameplay",
+       "settle": 10,
+       "screen": {
+        "desktop": false
+       },
+       "note": "precheck replaces this screen with the lead-reviewed gameplay region/hash for this image and role"
+      },
+      {
+       "name": "play",
+       "check": "gameplay",
+       "actions": [
+        {
+         "keys": [
+          "up",
+          "ctrl"
+         ],
+         "pause": 1
+        },
+        {
+         "mouse": {
+          "dx": 40,
+          "dy": -12,
+          "button": "left"
+         },
+         "pause": 1
+        },
+        {
+         "mouse": {
+          "dx": -40,
+          "dy": 12
+         },
+         "pause": 1
+        },
+        {
+         "sleep": 30
+        }
+       ]
+      },
+      {
+       "name": "quit",
+       "check": "exit",
+       "actions": [
+        {
+         "keys": [
+          "esc",
+          "up",
+          "ret",
+          "y"
+         ],
+         "pause": 1
+        }
+       ]
+      },
+      {
+       "name": "returned",
+       "check": "exit",
+       "timeout": 120,
+       "wait": "^\\[console\\] dosbox: program returned vm=<<game_vm>> generation=<<game_gen>> early=0$"
+      },
+      {
+       "name": "cleanup",
+       "check": "cleanup",
+       "timeout": 120,
+       "wait": "^\\[dosvm\\] lifecycle stage=cleanup vm=<<game_vm>> generation=<<game_gen>> result=0 data_loss=0 retained=0$"
+      },
+      {
+       "name": "desktop",
+       "check": "cleanup",
+       "settle": 3,
+       "screen": {
+        "geometry": [
+         1024,
+         768
+        ],
+        "desktop": true
+       }
+      }
+     ]
+    }
+   ]
+  },
+  {
+   "id": "acc-ipx-heretic",
+   "kind": "acceptance",
+   "probe": "acceptance",
+   "profile": "qemu-t23",
+   "item": 3,
+   "timeout": 2400,
+   "title": "Heretic two-guest IPX host/join",
+   "expected": {
+    "evidence_kind": "acceptance"
+   },
+   "guests": [
+    {
+     "id": "acc-dos-heretic-host",
+     "kind": "acceptance",
+     "probe": "acceptance",
+     "profile": "qemu-t23",
+     "item": 3,
+     "title": "Heretic IPX host",
+     "timeout": 2400,
+     "expected": {
+      "evidence_kind": "acceptance"
+     },
+     "dos_game": {
+      "title": "heretic",
+      "role": "host"
+     },
+     "devices": {
+      "network": "i82559er"
+     },
+     "forbid": [
+      "^\\[dosvm\\] create refused ",
+      "^\\[launch\\] name=dosbox pid=\\d+ error=",
+      "^\\[dosvm\\] fullscreen_(?:refused|transport_fault) vm=\\d+ ",
+      "^\\[dosvm\\] lifecycle stage=stop vm=\\d+ generation=\\d+ reason=[234] "
+     ],
+     "steps": [
+      {
+       "template": "boot",
+       "prefix": "b1",
+       "check": "boot",
+       "settle": 15
+      },
+      {
+       "name": "menu-refresh",
+       "check": "menu",
+       "actions": [
+        {
+         "keys": [
+          "ctrl+esc",
+          "p"
+         ],
+         "pause": 1
+        },
+        {
+         "sleep": 5
+        },
+        {
+         "keys": [
+          "esc",
+          "esc"
+         ]
+        }
+       ]
+      },
+      {
+       "name": "launch",
+       "check": "menu",
+       "actions": [
+        {
+         "keys": [
+          "ctrl+esc",
+          "p",
+          "g",
+          "ret",
+          "t",
+          "ret"
+         ],
+         "pause": 1
+        }
+       ],
+       "note": "Start > Programs > Games > Trial Heretic; the only Trial entry in this private overlay"
+      },
+      {
+       "name": "vm",
+       "check": "menu",
+       "timeout": 240,
+       "wait": "^\\[launch-stage\\] name=dosbox pid=(?P<game_pid>\\d+) stage=vm-create window=Heretic$"
+      },
+      {
+       "name": "graphics",
+       "check": "fullscreen",
+       "timeout": 900,
+       "wait": "^\\[dosvm\\] fullscreen_request vm=(?P<game_vm>\\d+) generation=(?P<game_gen>\\d+) mode=\\d+$"
+      },
+      {
+       "name": "fullscreen",
+       "check": "fullscreen",
+       "timeout": 120,
+       "wait": "^\\[dosvm\\] fullscreen=1 vm=<<game_vm>> generation=<<game_gen>> mode=\\d+$"
+      },
+      {
+       "name": "enter-game",
+       "check": "gameplay",
+       "settle": 5,
+       "actions": [
+        {
+         "keys": [
+          "esc",
+          "ret",
+          "ret",
+          "ret"
+         ],
+         "pause": 1
+        }
+       ]
+      },
+      {
+       "name": "digital",
+       "check": "sound",
+       "since": "boot",
+       "timeout": 120,
+       "wait": "^\\[vm-audio\\] vm=<<game_vm>> play_dma=[15] hz=[1-9]\\d* units=[1-9]\\d*$"
+      },
+      {
+       "name": "opl",
+       "check": "sound",
+       "since": "boot",
+       "timeout": 120,
+       "wait": "^\\[vm-audio\\] vm=<<game_vm>> gen=<<game_gen>> opl_writes=[1-9]\\d* key_writes=[1-9]\\d*$"
+      },
+      {
+       "name": "ipx-tx",
+       "check": "lan",
+       "since": "boot",
+       "timeout": 180,
+       "wait": "^\\[dos-ipx\\] vm=<<game_vm>> gen=<<game_gen>> event=tx count=[1-4] (?:bytes=\\d+ )?src=[0-9a-f]{12} dst=[0-9a-f]{12}$"
+      },
+      {
+       "name": "ipx-rx",
+       "check": "lan",
+       "since": "boot",
+       "timeout": 180,
+       "wait": "^\\[dos-ipx\\] vm=<<game_vm>> gen=<<game_gen>> event=rx count=[1-4] (?:bytes=\\d+ )?src=[0-9a-f]{12} dst=[0-9a-f]{12}$"
+      },
+      {
+       "name": "gameplay",
+       "check": "gameplay",
+       "settle": 10,
+       "screen": {
+        "desktop": false
+       },
+       "note": "precheck replaces this screen with the lead-reviewed gameplay region/hash for this image and role"
+      },
+      {
+       "name": "play",
+       "check": "gameplay",
+       "actions": [
+        {
+         "keys": [
+          "up",
+          "ctrl"
+         ],
+         "pause": 1
+        },
+        {
+         "mouse": {
+          "dx": 40,
+          "dy": -12,
+          "button": "left"
+         },
+         "pause": 1
+        },
+        {
+         "mouse": {
+          "dx": -40,
+          "dy": 12
+         },
+         "pause": 1
+        },
+        {
+         "sleep": 30
+        }
+       ]
+      },
+      {
+       "name": "quit",
+       "check": "exit",
+       "actions": [
+        {
+         "keys": [
+          "f10",
+          "y"
+         ],
+         "pause": 1
+        }
+       ]
+      },
+      {
+       "name": "returned",
+       "check": "exit",
+       "timeout": 120,
+       "wait": "^\\[console\\] dosbox: program returned vm=<<game_vm>> generation=<<game_gen>> early=0$"
+      },
+      {
+       "name": "cleanup",
+       "check": "cleanup",
+       "timeout": 120,
+       "wait": "^\\[dosvm\\] lifecycle stage=cleanup vm=<<game_vm>> generation=<<game_gen>> result=0 data_loss=0 retained=0$"
+      },
+      {
+       "name": "desktop",
+       "check": "cleanup",
+       "settle": 3,
+       "screen": {
+        "geometry": [
+         1024,
+         768
+        ],
+        "desktop": true
+       }
+      }
+     ]
+    },
+    {
+     "id": "acc-dos-heretic-join",
+     "kind": "acceptance",
+     "probe": "acceptance",
+     "profile": "qemu-t23",
+     "item": 3,
+     "title": "Heretic IPX join",
+     "timeout": 2400,
+     "expected": {
+      "evidence_kind": "acceptance"
+     },
+     "dos_game": {
+      "title": "heretic",
+      "role": "join"
+     },
+     "devices": {
+      "network": "i82559er"
+     },
+     "forbid": [
+      "^\\[dosvm\\] create refused ",
+      "^\\[launch\\] name=dosbox pid=\\d+ error=",
+      "^\\[dosvm\\] fullscreen_(?:refused|transport_fault) vm=\\d+ ",
+      "^\\[dosvm\\] lifecycle stage=stop vm=\\d+ generation=\\d+ reason=[234] "
+     ],
+     "steps": [
+      {
+       "template": "boot",
+       "prefix": "b1",
+       "check": "boot",
+       "settle": 15
+      },
+      {
+       "name": "menu-refresh",
+       "check": "menu",
+       "actions": [
+        {
+         "keys": [
+          "ctrl+esc",
+          "p"
+         ],
+         "pause": 1
+        },
+        {
+         "sleep": 5
+        },
+        {
+         "keys": [
+          "esc",
+          "esc"
+         ]
+        }
+       ]
+      },
+      {
+       "name": "launch",
+       "check": "menu",
+       "actions": [
+        {
+         "keys": [
+          "ctrl+esc",
+          "p",
+          "g",
+          "ret",
+          "t",
+          "ret"
+         ],
+         "pause": 1
+        }
+       ],
+       "note": "Start > Programs > Games > Trial Heretic; the only Trial entry in this private overlay"
+      },
+      {
+       "name": "vm",
+       "check": "menu",
+       "timeout": 240,
+       "wait": "^\\[launch-stage\\] name=dosbox pid=(?P<game_pid>\\d+) stage=vm-create window=Heretic$"
+      },
+      {
+       "name": "graphics",
+       "check": "fullscreen",
+       "timeout": 900,
+       "wait": "^\\[dosvm\\] fullscreen_request vm=(?P<game_vm>\\d+) generation=(?P<game_gen>\\d+) mode=\\d+$"
+      },
+      {
+       "name": "fullscreen",
+       "check": "fullscreen",
+       "timeout": 120,
+       "wait": "^\\[dosvm\\] fullscreen=1 vm=<<game_vm>> generation=<<game_gen>> mode=\\d+$"
+      },
+      {
+       "name": "enter-game",
+       "check": "gameplay",
+       "settle": 5,
+       "actions": [
+        {
+         "keys": [
+          "esc",
+          "ret",
+          "ret",
+          "ret"
+         ],
+         "pause": 1
+        }
+       ]
+      },
+      {
+       "name": "digital",
+       "check": "sound",
+       "since": "boot",
+       "timeout": 120,
+       "wait": "^\\[vm-audio\\] vm=<<game_vm>> play_dma=[15] hz=[1-9]\\d* units=[1-9]\\d*$"
+      },
+      {
+       "name": "opl",
+       "check": "sound",
+       "since": "boot",
+       "timeout": 120,
+       "wait": "^\\[vm-audio\\] vm=<<game_vm>> gen=<<game_gen>> opl_writes=[1-9]\\d* key_writes=[1-9]\\d*$"
+      },
+      {
+       "name": "ipx-tx",
+       "check": "lan",
+       "since": "boot",
+       "timeout": 180,
+       "wait": "^\\[dos-ipx\\] vm=<<game_vm>> gen=<<game_gen>> event=tx count=[1-4] (?:bytes=\\d+ )?src=[0-9a-f]{12} dst=[0-9a-f]{12}$"
+      },
+      {
+       "name": "ipx-rx",
+       "check": "lan",
+       "since": "boot",
+       "timeout": 180,
+       "wait": "^\\[dos-ipx\\] vm=<<game_vm>> gen=<<game_gen>> event=rx count=[1-4] (?:bytes=\\d+ )?src=[0-9a-f]{12} dst=[0-9a-f]{12}$"
+      },
+      {
+       "name": "gameplay",
+       "check": "gameplay",
+       "settle": 10,
+       "screen": {
+        "desktop": false
+       },
+       "note": "precheck replaces this screen with the lead-reviewed gameplay region/hash for this image and role"
+      },
+      {
+       "name": "play",
+       "check": "gameplay",
+       "actions": [
+        {
+         "keys": [
+          "up",
+          "ctrl"
+         ],
+         "pause": 1
+        },
+        {
+         "mouse": {
+          "dx": 40,
+          "dy": -12,
+          "button": "left"
+         },
+         "pause": 1
+        },
+        {
+         "mouse": {
+          "dx": -40,
+          "dy": 12
+         },
+         "pause": 1
+        },
+        {
+         "sleep": 30
+        }
+       ]
+      },
+      {
+       "name": "quit",
+       "check": "exit",
+       "actions": [
+        {
+         "keys": [
+          "f10",
+          "y"
+         ],
+         "pause": 1
+        }
+       ]
+      },
+      {
+       "name": "returned",
+       "check": "exit",
+       "timeout": 120,
+       "wait": "^\\[console\\] dosbox: program returned vm=<<game_vm>> generation=<<game_gen>> early=0$"
+      },
+      {
+       "name": "cleanup",
+       "check": "cleanup",
+       "timeout": 120,
+       "wait": "^\\[dosvm\\] lifecycle stage=cleanup vm=<<game_vm>> generation=<<game_gen>> result=0 data_loss=0 retained=0$"
+      },
+      {
+       "name": "desktop",
+       "check": "cleanup",
+       "settle": 3,
+       "screen": {
+        "geometry": [
+         1024,
+         768
+        ],
+        "desktop": true
+       }
+      }
+     ]
+    }
+   ]
+  },
+  {
+   "id": "acc-ipx-hexen",
+   "kind": "acceptance",
+   "probe": "acceptance",
+   "profile": "qemu-t23",
+   "item": 3,
+   "timeout": 2400,
+   "title": "Hexen demo two-guest IPX host/join",
+   "expected": {
+    "evidence_kind": "acceptance"
+   },
+   "guests": [
+    {
+     "id": "acc-dos-hexen-host",
+     "kind": "acceptance",
+     "probe": "acceptance",
+     "profile": "qemu-t23",
+     "item": 3,
+     "title": "Hexen demo IPX host",
+     "timeout": 2400,
+     "expected": {
+      "evidence_kind": "acceptance"
+     },
+     "dos_game": {
+      "title": "hexen",
+      "role": "host"
+     },
+     "devices": {
+      "network": "i82559er"
+     },
+     "forbid": [
+      "^\\[dosvm\\] create refused ",
+      "^\\[launch\\] name=dosbox pid=\\d+ error=",
+      "^\\[dosvm\\] fullscreen_(?:refused|transport_fault) vm=\\d+ ",
+      "^\\[dosvm\\] lifecycle stage=stop vm=\\d+ generation=\\d+ reason=[234] "
+     ],
+     "steps": [
+      {
+       "template": "boot",
+       "prefix": "b1",
+       "check": "boot",
+       "settle": 15
+      },
+      {
+       "name": "menu-refresh",
+       "check": "menu",
+       "actions": [
+        {
+         "keys": [
+          "ctrl+esc",
+          "p"
+         ],
+         "pause": 1
+        },
+        {
+         "sleep": 5
+        },
+        {
+         "keys": [
+          "esc",
+          "esc"
+         ]
+        }
+       ]
+      },
+      {
+       "name": "launch",
+       "check": "menu",
+       "actions": [
+        {
+         "keys": [
+          "ctrl+esc",
+          "p",
+          "g",
+          "ret",
+          "t",
+          "ret"
+         ],
+         "pause": 1
+        }
+       ],
+       "note": "Start > Programs > Games > Trial Hexen demo; the only Trial entry in this private overlay"
+      },
+      {
+       "name": "vm",
+       "check": "menu",
+       "timeout": 240,
+       "wait": "^\\[launch-stage\\] name=dosbox pid=(?P<game_pid>\\d+) stage=vm-create window=Hexen\\ demo$"
+      },
+      {
+       "name": "graphics",
+       "check": "fullscreen",
+       "timeout": 900,
+       "wait": "^\\[dosvm\\] fullscreen_request vm=(?P<game_vm>\\d+) generation=(?P<game_gen>\\d+) mode=\\d+$"
+      },
+      {
+       "name": "fullscreen",
+       "check": "fullscreen",
+       "timeout": 120,
+       "wait": "^\\[dosvm\\] fullscreen=1 vm=<<game_vm>> generation=<<game_gen>> mode=\\d+$"
+      },
+      {
+       "name": "enter-game",
+       "check": "gameplay",
+       "settle": 5,
+       "actions": [
+        {
+         "keys": [
+          "esc",
+          "ret",
+          "ret",
+          "ret"
+         ],
+         "pause": 1
+        }
+       ]
+      },
+      {
+       "name": "digital",
+       "check": "sound",
+       "since": "boot",
+       "timeout": 120,
+       "wait": "^\\[vm-audio\\] vm=<<game_vm>> play_dma=[15] hz=[1-9]\\d* units=[1-9]\\d*$"
+      },
+      {
+       "name": "opl",
+       "check": "sound",
+       "since": "boot",
+       "timeout": 120,
+       "wait": "^\\[vm-audio\\] vm=<<game_vm>> gen=<<game_gen>> opl_writes=[1-9]\\d* key_writes=[1-9]\\d*$"
+      },
+      {
+       "name": "ipx-tx",
+       "check": "lan",
+       "since": "boot",
+       "timeout": 180,
+       "wait": "^\\[dos-ipx\\] vm=<<game_vm>> gen=<<game_gen>> event=tx count=[1-4] (?:bytes=\\d+ )?src=[0-9a-f]{12} dst=[0-9a-f]{12}$"
+      },
+      {
+       "name": "ipx-rx",
+       "check": "lan",
+       "since": "boot",
+       "timeout": 180,
+       "wait": "^\\[dos-ipx\\] vm=<<game_vm>> gen=<<game_gen>> event=rx count=[1-4] (?:bytes=\\d+ )?src=[0-9a-f]{12} dst=[0-9a-f]{12}$"
+      },
+      {
+       "name": "gameplay",
+       "check": "gameplay",
+       "settle": 10,
+       "screen": {
+        "desktop": false
+       },
+       "note": "precheck replaces this screen with the lead-reviewed gameplay region/hash for this image and role"
+      },
+      {
+       "name": "play",
+       "check": "gameplay",
+       "actions": [
+        {
+         "keys": [
+          "up",
+          "ctrl"
+         ],
+         "pause": 1
+        },
+        {
+         "mouse": {
+          "dx": 40,
+          "dy": -12,
+          "button": "left"
+         },
+         "pause": 1
+        },
+        {
+         "mouse": {
+          "dx": -40,
+          "dy": 12
+         },
+         "pause": 1
+        },
+        {
+         "sleep": 30
+        }
+       ]
+      },
+      {
+       "name": "quit",
+       "check": "exit",
+       "actions": [
+        {
+         "keys": [
+          "f10",
+          "y"
+         ],
+         "pause": 1
+        }
+       ]
+      },
+      {
+       "name": "returned",
+       "check": "exit",
+       "timeout": 120,
+       "wait": "^\\[console\\] dosbox: program returned vm=<<game_vm>> generation=<<game_gen>> early=0$"
+      },
+      {
+       "name": "cleanup",
+       "check": "cleanup",
+       "timeout": 120,
+       "wait": "^\\[dosvm\\] lifecycle stage=cleanup vm=<<game_vm>> generation=<<game_gen>> result=0 data_loss=0 retained=0$"
+      },
+      {
+       "name": "desktop",
+       "check": "cleanup",
+       "settle": 3,
+       "screen": {
+        "geometry": [
+         1024,
+         768
+        ],
+        "desktop": true
+       }
+      }
+     ]
+    },
+    {
+     "id": "acc-dos-hexen-join",
+     "kind": "acceptance",
+     "probe": "acceptance",
+     "profile": "qemu-t23",
+     "item": 3,
+     "title": "Hexen demo IPX join",
+     "timeout": 2400,
+     "expected": {
+      "evidence_kind": "acceptance"
+     },
+     "dos_game": {
+      "title": "hexen",
+      "role": "join"
+     },
+     "devices": {
+      "network": "i82559er"
+     },
+     "forbid": [
+      "^\\[dosvm\\] create refused ",
+      "^\\[launch\\] name=dosbox pid=\\d+ error=",
+      "^\\[dosvm\\] fullscreen_(?:refused|transport_fault) vm=\\d+ ",
+      "^\\[dosvm\\] lifecycle stage=stop vm=\\d+ generation=\\d+ reason=[234] "
+     ],
+     "steps": [
+      {
+       "template": "boot",
+       "prefix": "b1",
+       "check": "boot",
+       "settle": 15
+      },
+      {
+       "name": "menu-refresh",
+       "check": "menu",
+       "actions": [
+        {
+         "keys": [
+          "ctrl+esc",
+          "p"
+         ],
+         "pause": 1
+        },
+        {
+         "sleep": 5
+        },
+        {
+         "keys": [
+          "esc",
+          "esc"
+         ]
+        }
+       ]
+      },
+      {
+       "name": "launch",
+       "check": "menu",
+       "actions": [
+        {
+         "keys": [
+          "ctrl+esc",
+          "p",
+          "g",
+          "ret",
+          "t",
+          "ret"
+         ],
+         "pause": 1
+        }
+       ],
+       "note": "Start > Programs > Games > Trial Hexen demo; the only Trial entry in this private overlay"
+      },
+      {
+       "name": "vm",
+       "check": "menu",
+       "timeout": 240,
+       "wait": "^\\[launch-stage\\] name=dosbox pid=(?P<game_pid>\\d+) stage=vm-create window=Hexen\\ demo$"
+      },
+      {
+       "name": "graphics",
+       "check": "fullscreen",
+       "timeout": 900,
+       "wait": "^\\[dosvm\\] fullscreen_request vm=(?P<game_vm>\\d+) generation=(?P<game_gen>\\d+) mode=\\d+$"
+      },
+      {
+       "name": "fullscreen",
+       "check": "fullscreen",
+       "timeout": 120,
+       "wait": "^\\[dosvm\\] fullscreen=1 vm=<<game_vm>> generation=<<game_gen>> mode=\\d+$"
+      },
+      {
+       "name": "enter-game",
+       "check": "gameplay",
+       "settle": 5,
+       "actions": [
+        {
+         "keys": [
+          "esc",
+          "ret",
+          "ret",
+          "ret"
+         ],
+         "pause": 1
+        }
+       ]
+      },
+      {
+       "name": "digital",
+       "check": "sound",
+       "since": "boot",
+       "timeout": 120,
+       "wait": "^\\[vm-audio\\] vm=<<game_vm>> play_dma=[15] hz=[1-9]\\d* units=[1-9]\\d*$"
+      },
+      {
+       "name": "opl",
+       "check": "sound",
+       "since": "boot",
+       "timeout": 120,
+       "wait": "^\\[vm-audio\\] vm=<<game_vm>> gen=<<game_gen>> opl_writes=[1-9]\\d* key_writes=[1-9]\\d*$"
+      },
+      {
+       "name": "ipx-tx",
+       "check": "lan",
+       "since": "boot",
+       "timeout": 180,
+       "wait": "^\\[dos-ipx\\] vm=<<game_vm>> gen=<<game_gen>> event=tx count=[1-4] (?:bytes=\\d+ )?src=[0-9a-f]{12} dst=[0-9a-f]{12}$"
+      },
+      {
+       "name": "ipx-rx",
+       "check": "lan",
+       "since": "boot",
+       "timeout": 180,
+       "wait": "^\\[dos-ipx\\] vm=<<game_vm>> gen=<<game_gen>> event=rx count=[1-4] (?:bytes=\\d+ )?src=[0-9a-f]{12} dst=[0-9a-f]{12}$"
+      },
+      {
+       "name": "gameplay",
+       "check": "gameplay",
+       "settle": 10,
+       "screen": {
+        "desktop": false
+       },
+       "note": "precheck replaces this screen with the lead-reviewed gameplay region/hash for this image and role"
+      },
+      {
+       "name": "play",
+       "check": "gameplay",
+       "actions": [
+        {
+         "keys": [
+          "up",
+          "ctrl"
+         ],
+         "pause": 1
+        },
+        {
+         "mouse": {
+          "dx": 40,
+          "dy": -12,
+          "button": "left"
+         },
+         "pause": 1
+        },
+        {
+         "mouse": {
+          "dx": -40,
+          "dy": 12
+         },
+         "pause": 1
+        },
+        {
+         "sleep": 30
+        }
+       ]
+      },
+      {
+       "name": "quit",
+       "check": "exit",
+       "actions": [
+        {
+         "keys": [
+          "f10",
+          "y"
+         ],
+         "pause": 1
+        }
+       ]
+      },
+      {
+       "name": "returned",
+       "check": "exit",
+       "timeout": 120,
+       "wait": "^\\[console\\] dosbox: program returned vm=<<game_vm>> generation=<<game_gen>> early=0$"
+      },
+      {
+       "name": "cleanup",
+       "check": "cleanup",
+       "timeout": 120,
+       "wait": "^\\[dosvm\\] lifecycle stage=cleanup vm=<<game_vm>> generation=<<game_gen>> result=0 data_loss=0 retained=0$"
+      },
+      {
+       "name": "desktop",
+       "check": "cleanup",
+       "settle": 3,
+       "screen": {
+        "geometry": [
+         1024,
+         768
+        ],
+        "desktop": true
+       }
+      }
+     ]
+    }
+   ]
+  },
+  {
+   "id": "acc-ipx-descent",
+   "kind": "acceptance",
+   "probe": "acceptance",
+   "profile": "qemu-t23",
+   "item": 3,
+   "timeout": 2400,
+   "title": "Descent two-guest IPX host/join",
+   "expected": {
+    "evidence_kind": "acceptance"
+   },
+   "guests": [
+    {
+     "id": "acc-dos-descent-host",
+     "kind": "acceptance",
+     "probe": "acceptance",
+     "profile": "qemu-t23",
+     "item": 3,
+     "title": "Descent IPX host",
+     "timeout": 2400,
+     "expected": {
+      "evidence_kind": "acceptance"
+     },
+     "dos_game": {
+      "title": "descent",
+      "role": "host"
+     },
+     "devices": {
+      "network": "i82559er"
+     },
+     "forbid": [
+      "^\\[dosvm\\] create refused ",
+      "^\\[launch\\] name=dosbox pid=\\d+ error=",
+      "^\\[dosvm\\] fullscreen_(?:refused|transport_fault) vm=\\d+ ",
+      "^\\[dosvm\\] lifecycle stage=stop vm=\\d+ generation=\\d+ reason=[234] "
+     ],
+     "steps": [
+      {
+       "template": "boot",
+       "prefix": "b1",
+       "check": "boot",
+       "settle": 15
+      },
+      {
+       "name": "menu-refresh",
+       "check": "menu",
+       "actions": [
+        {
+         "keys": [
+          "ctrl+esc",
+          "p"
+         ],
+         "pause": 1
+        },
+        {
+         "sleep": 5
+        },
+        {
+         "keys": [
+          "esc",
+          "esc"
+         ]
+        }
+       ]
+      },
+      {
+       "name": "launch",
+       "check": "menu",
+       "actions": [
+        {
+         "keys": [
+          "ctrl+esc",
+          "p",
+          "g",
+          "ret",
+          "t",
+          "ret"
+         ],
+         "pause": 1
+        }
+       ],
+       "note": "Start > Programs > Games > Trial Descent; the only Trial entry in this private overlay"
+      },
+      {
+       "name": "vm",
+       "check": "menu",
+       "timeout": 240,
+       "wait": "^\\[launch-stage\\] name=dosbox pid=(?P<game_pid>\\d+) stage=vm-create window=Descent$"
+      },
+      {
+       "name": "graphics",
+       "check": "fullscreen",
+       "timeout": 900,
+       "wait": "^\\[dosvm\\] fullscreen_request vm=(?P<game_vm>\\d+) generation=(?P<game_gen>\\d+) mode=\\d+$"
+      },
+      {
+       "name": "fullscreen",
+       "check": "fullscreen",
+       "timeout": 120,
+       "wait": "^\\[dosvm\\] fullscreen=1 vm=<<game_vm>> generation=<<game_gen>> mode=\\d+$"
+      },
+      {
+       "name": "enter-game",
+       "check": "gameplay",
+       "settle": 5,
+       "actions": [
+        {
+         "keys": [
+          "ret",
+          "ret",
+          "ret",
+          "ret"
+         ],
+         "pause": 1
+        }
+       ]
+      },
+      {
+       "name": "digital",
+       "check": "sound",
+       "since": "boot",
+       "timeout": 120,
+       "wait": "^\\[vm-audio\\] vm=<<game_vm>> play_dma=[15] hz=[1-9]\\d* units=[1-9]\\d*$"
+      },
+      {
+       "name": "opl",
+       "check": "sound",
+       "since": "boot",
+       "timeout": 120,
+       "wait": "^\\[vm-audio\\] vm=<<game_vm>> gen=<<game_gen>> opl_writes=[1-9]\\d* key_writes=[1-9]\\d*$"
+      },
+      {
+       "name": "ipx-tx",
+       "check": "lan",
+       "since": "boot",
+       "timeout": 180,
+       "wait": "^\\[dos-ipx\\] vm=<<game_vm>> gen=<<game_gen>> event=tx count=[1-4] (?:bytes=\\d+ )?src=[0-9a-f]{12} dst=[0-9a-f]{12}$"
+      },
+      {
+       "name": "ipx-rx",
+       "check": "lan",
+       "since": "boot",
+       "timeout": 180,
+       "wait": "^\\[dos-ipx\\] vm=<<game_vm>> gen=<<game_gen>> event=rx count=[1-4] (?:bytes=\\d+ )?src=[0-9a-f]{12} dst=[0-9a-f]{12}$"
+      },
+      {
+       "name": "gameplay",
+       "check": "gameplay",
+       "settle": 10,
+       "screen": {
+        "desktop": false
+       },
+       "note": "precheck replaces this screen with the lead-reviewed gameplay region/hash for this image and role"
+      },
+      {
+       "name": "play",
+       "check": "gameplay",
+       "actions": [
+        {
+         "keys": [
+          "up",
+          "ctrl"
+         ],
+         "pause": 1
+        },
+        {
+         "mouse": {
+          "dx": 40,
+          "dy": -12,
+          "button": "left"
+         },
+         "pause": 1
+        },
+        {
+         "mouse": {
+          "dx": -40,
+          "dy": 12
+         },
+         "pause": 1
+        },
+        {
+         "sleep": 30
+        }
+       ]
+      },
+      {
+       "name": "quit",
+       "check": "exit",
+       "actions": [
+        {
+         "keys": [
+          "esc",
+          "esc",
+          "up",
+          "ret",
+          "ret"
+         ],
+         "pause": 1
+        }
+       ]
+      },
+      {
+       "name": "returned",
+       "check": "exit",
+       "timeout": 120,
+       "wait": "^\\[console\\] dosbox: program returned vm=<<game_vm>> generation=<<game_gen>> early=0$"
+      },
+      {
+       "name": "cleanup",
+       "check": "cleanup",
+       "timeout": 120,
+       "wait": "^\\[dosvm\\] lifecycle stage=cleanup vm=<<game_vm>> generation=<<game_gen>> result=0 data_loss=0 retained=0$"
+      },
+      {
+       "name": "desktop",
+       "check": "cleanup",
+       "settle": 3,
+       "screen": {
+        "geometry": [
+         1024,
+         768
+        ],
+        "desktop": true
+       }
+      }
+     ]
+    },
+    {
+     "id": "acc-dos-descent-join",
+     "kind": "acceptance",
+     "probe": "acceptance",
+     "profile": "qemu-t23",
+     "item": 3,
+     "title": "Descent IPX join",
+     "timeout": 2400,
+     "expected": {
+      "evidence_kind": "acceptance"
+     },
+     "dos_game": {
+      "title": "descent",
+      "role": "join"
+     },
+     "devices": {
+      "network": "i82559er"
+     },
+     "forbid": [
+      "^\\[dosvm\\] create refused ",
+      "^\\[launch\\] name=dosbox pid=\\d+ error=",
+      "^\\[dosvm\\] fullscreen_(?:refused|transport_fault) vm=\\d+ ",
+      "^\\[dosvm\\] lifecycle stage=stop vm=\\d+ generation=\\d+ reason=[234] "
+     ],
+     "steps": [
+      {
+       "template": "boot",
+       "prefix": "b1",
+       "check": "boot",
+       "settle": 15
+      },
+      {
+       "name": "menu-refresh",
+       "check": "menu",
+       "actions": [
+        {
+         "keys": [
+          "ctrl+esc",
+          "p"
+         ],
+         "pause": 1
+        },
+        {
+         "sleep": 5
+        },
+        {
+         "keys": [
+          "esc",
+          "esc"
+         ]
+        }
+       ]
+      },
+      {
+       "name": "launch",
+       "check": "menu",
+       "actions": [
+        {
+         "keys": [
+          "ctrl+esc",
+          "p",
+          "g",
+          "ret",
+          "t",
+          "ret"
+         ],
+         "pause": 1
+        }
+       ],
+       "note": "Start > Programs > Games > Trial Descent; the only Trial entry in this private overlay"
+      },
+      {
+       "name": "vm",
+       "check": "menu",
+       "timeout": 240,
+       "wait": "^\\[launch-stage\\] name=dosbox pid=(?P<game_pid>\\d+) stage=vm-create window=Descent$"
+      },
+      {
+       "name": "graphics",
+       "check": "fullscreen",
+       "timeout": 900,
+       "wait": "^\\[dosvm\\] fullscreen_request vm=(?P<game_vm>\\d+) generation=(?P<game_gen>\\d+) mode=\\d+$"
+      },
+      {
+       "name": "fullscreen",
+       "check": "fullscreen",
+       "timeout": 120,
+       "wait": "^\\[dosvm\\] fullscreen=1 vm=<<game_vm>> generation=<<game_gen>> mode=\\d+$"
+      },
+      {
+       "name": "enter-game",
+       "check": "gameplay",
+       "settle": 5,
+       "actions": [
+        {
+         "keys": [
+          "ret",
+          "ret",
+          "ret",
+          "ret"
+         ],
+         "pause": 1
+        }
+       ]
+      },
+      {
+       "name": "digital",
+       "check": "sound",
+       "since": "boot",
+       "timeout": 120,
+       "wait": "^\\[vm-audio\\] vm=<<game_vm>> play_dma=[15] hz=[1-9]\\d* units=[1-9]\\d*$"
+      },
+      {
+       "name": "opl",
+       "check": "sound",
+       "since": "boot",
+       "timeout": 120,
+       "wait": "^\\[vm-audio\\] vm=<<game_vm>> gen=<<game_gen>> opl_writes=[1-9]\\d* key_writes=[1-9]\\d*$"
+      },
+      {
+       "name": "ipx-tx",
+       "check": "lan",
+       "since": "boot",
+       "timeout": 180,
+       "wait": "^\\[dos-ipx\\] vm=<<game_vm>> gen=<<game_gen>> event=tx count=[1-4] (?:bytes=\\d+ )?src=[0-9a-f]{12} dst=[0-9a-f]{12}$"
+      },
+      {
+       "name": "ipx-rx",
+       "check": "lan",
+       "since": "boot",
+       "timeout": 180,
+       "wait": "^\\[dos-ipx\\] vm=<<game_vm>> gen=<<game_gen>> event=rx count=[1-4] (?:bytes=\\d+ )?src=[0-9a-f]{12} dst=[0-9a-f]{12}$"
+      },
+      {
+       "name": "gameplay",
+       "check": "gameplay",
+       "settle": 10,
+       "screen": {
+        "desktop": false
+       },
+       "note": "precheck replaces this screen with the lead-reviewed gameplay region/hash for this image and role"
+      },
+      {
+       "name": "play",
+       "check": "gameplay",
+       "actions": [
+        {
+         "keys": [
+          "up",
+          "ctrl"
+         ],
+         "pause": 1
+        },
+        {
+         "mouse": {
+          "dx": 40,
+          "dy": -12,
+          "button": "left"
+         },
+         "pause": 1
+        },
+        {
+         "mouse": {
+          "dx": -40,
+          "dy": 12
+         },
+         "pause": 1
+        },
+        {
+         "sleep": 30
+        }
+       ]
+      },
+      {
+       "name": "quit",
+       "check": "exit",
+       "actions": [
+        {
+         "keys": [
+          "esc",
+          "esc",
+          "up",
+          "ret",
+          "ret"
+         ],
+         "pause": 1
+        }
+       ]
+      },
+      {
+       "name": "returned",
+       "check": "exit",
+       "timeout": 120,
+       "wait": "^\\[console\\] dosbox: program returned vm=<<game_vm>> generation=<<game_gen>> early=0$"
+      },
+      {
+       "name": "cleanup",
+       "check": "cleanup",
+       "timeout": 120,
+       "wait": "^\\[dosvm\\] lifecycle stage=cleanup vm=<<game_vm>> generation=<<game_gen>> result=0 data_loss=0 retained=0$"
+      },
+      {
+       "name": "desktop",
+       "check": "cleanup",
+       "settle": 3,
+       "screen": {
+        "geometry": [
+         1024,
+         768
+        ],
+        "desktop": true
+       }
+      }
+     ]
+    }
+   ]
+  },
+  {
+   "id": "acc-ipx-descent2",
+   "kind": "acceptance",
+   "probe": "acceptance",
+   "profile": "qemu-t23",
+   "item": 3,
+   "timeout": 2400,
+   "title": "Descent II demo two-guest IPX host/join",
+   "expected": {
+    "evidence_kind": "acceptance"
+   },
+   "guests": [
+    {
+     "id": "acc-dos-descent2-host",
+     "kind": "acceptance",
+     "probe": "acceptance",
+     "profile": "qemu-t23",
+     "item": 3,
+     "title": "Descent II demo IPX host",
+     "timeout": 2400,
+     "expected": {
+      "evidence_kind": "acceptance"
+     },
+     "dos_game": {
+      "title": "descent2",
+      "role": "host"
+     },
+     "devices": {
+      "network": "i82559er"
+     },
+     "forbid": [
+      "^\\[dosvm\\] create refused ",
+      "^\\[launch\\] name=dosbox pid=\\d+ error=",
+      "^\\[dosvm\\] fullscreen_(?:refused|transport_fault) vm=\\d+ ",
+      "^\\[dosvm\\] lifecycle stage=stop vm=\\d+ generation=\\d+ reason=[234] "
+     ],
+     "steps": [
+      {
+       "template": "boot",
+       "prefix": "b1",
+       "check": "boot",
+       "settle": 15
+      },
+      {
+       "name": "menu-refresh",
+       "check": "menu",
+       "actions": [
+        {
+         "keys": [
+          "ctrl+esc",
+          "p"
+         ],
+         "pause": 1
+        },
+        {
+         "sleep": 5
+        },
+        {
+         "keys": [
+          "esc",
+          "esc"
+         ]
+        }
+       ]
+      },
+      {
+       "name": "launch",
+       "check": "menu",
+       "actions": [
+        {
+         "keys": [
+          "ctrl+esc",
+          "p",
+          "g",
+          "ret",
+          "t",
+          "ret"
+         ],
+         "pause": 1
+        }
+       ],
+       "note": "Start > Programs > Games > Trial Descent II demo; the only Trial entry in this private overlay"
+      },
+      {
+       "name": "vm",
+       "check": "menu",
+       "timeout": 240,
+       "wait": "^\\[launch-stage\\] name=dosbox pid=(?P<game_pid>\\d+) stage=vm-create window=Descent\\ II\\ demo$"
+      },
+      {
+       "name": "graphics",
+       "check": "fullscreen",
+       "timeout": 900,
+       "wait": "^\\[dosvm\\] fullscreen_request vm=(?P<game_vm>\\d+) generation=(?P<game_gen>\\d+) mode=\\d+$"
+      },
+      {
+       "name": "fullscreen",
+       "check": "fullscreen",
+       "timeout": 120,
+       "wait": "^\\[dosvm\\] fullscreen=1 vm=<<game_vm>> generation=<<game_gen>> mode=\\d+$"
+      },
+      {
+       "name": "enter-game",
+       "check": "gameplay",
+       "settle": 5,
+       "actions": [
+        {
+         "keys": [
+          "ret",
+          "ret",
+          "ret",
+          "ret"
+         ],
+         "pause": 1
+        }
+       ]
+      },
+      {
+       "name": "digital",
+       "check": "sound",
+       "since": "boot",
+       "timeout": 120,
+       "wait": "^\\[vm-audio\\] vm=<<game_vm>> play_dma=[15] hz=[1-9]\\d* units=[1-9]\\d*$"
+      },
+      {
+       "name": "opl",
+       "check": "sound",
+       "since": "boot",
+       "timeout": 120,
+       "wait": "^\\[vm-audio\\] vm=<<game_vm>> gen=<<game_gen>> opl_writes=[1-9]\\d* key_writes=[1-9]\\d*$"
+      },
+      {
+       "name": "midi",
+       "check": "sound",
+       "since": "boot",
+       "timeout": 120,
+       "wait": "^\\[vm-audio\\] vm=<<game_vm>> gen=<<game_gen>> midi_bytes=[1-9]\\d* note_ons=[1-9]\\d*$"
+      },
+      {
+       "name": "ipx-tx",
+       "check": "lan",
+       "since": "boot",
+       "timeout": 180,
+       "wait": "^\\[dos-ipx\\] vm=<<game_vm>> gen=<<game_gen>> event=tx count=[1-4] (?:bytes=\\d+ )?src=[0-9a-f]{12} dst=[0-9a-f]{12}$"
+      },
+      {
+       "name": "ipx-rx",
+       "check": "lan",
+       "since": "boot",
+       "timeout": 180,
+       "wait": "^\\[dos-ipx\\] vm=<<game_vm>> gen=<<game_gen>> event=rx count=[1-4] (?:bytes=\\d+ )?src=[0-9a-f]{12} dst=[0-9a-f]{12}$"
+      },
+      {
+       "name": "gameplay",
+       "check": "gameplay",
+       "settle": 10,
+       "screen": {
+        "desktop": false
+       },
+       "note": "precheck replaces this screen with the lead-reviewed gameplay region/hash for this image and role"
+      },
+      {
+       "name": "play",
+       "check": "gameplay",
+       "actions": [
+        {
+         "keys": [
+          "up",
+          "ctrl"
+         ],
+         "pause": 1
+        },
+        {
+         "mouse": {
+          "dx": 40,
+          "dy": -12,
+          "button": "left"
+         },
+         "pause": 1
+        },
+        {
+         "mouse": {
+          "dx": -40,
+          "dy": 12
+         },
+         "pause": 1
+        },
+        {
+         "sleep": 30
+        }
+       ]
+      },
+      {
+       "name": "quit",
+       "check": "exit",
+       "actions": [
+        {
+         "keys": [
+          "esc",
+          "esc",
+          "up",
+          "ret",
+          "ret"
+         ],
+         "pause": 1
+        }
+       ]
+      },
+      {
+       "name": "returned",
+       "check": "exit",
+       "timeout": 120,
+       "wait": "^\\[console\\] dosbox: program returned vm=<<game_vm>> generation=<<game_gen>> early=0$"
+      },
+      {
+       "name": "cleanup",
+       "check": "cleanup",
+       "timeout": 120,
+       "wait": "^\\[dosvm\\] lifecycle stage=cleanup vm=<<game_vm>> generation=<<game_gen>> result=0 data_loss=0 retained=0$"
+      },
+      {
+       "name": "desktop",
+       "check": "cleanup",
+       "settle": 3,
+       "screen": {
+        "geometry": [
+         1024,
+         768
+        ],
+        "desktop": true
+       }
+      }
+     ]
+    },
+    {
+     "id": "acc-dos-descent2-join",
+     "kind": "acceptance",
+     "probe": "acceptance",
+     "profile": "qemu-t23",
+     "item": 3,
+     "title": "Descent II demo IPX join",
+     "timeout": 2400,
+     "expected": {
+      "evidence_kind": "acceptance"
+     },
+     "dos_game": {
+      "title": "descent2",
+      "role": "join"
+     },
+     "devices": {
+      "network": "i82559er"
+     },
+     "forbid": [
+      "^\\[dosvm\\] create refused ",
+      "^\\[launch\\] name=dosbox pid=\\d+ error=",
+      "^\\[dosvm\\] fullscreen_(?:refused|transport_fault) vm=\\d+ ",
+      "^\\[dosvm\\] lifecycle stage=stop vm=\\d+ generation=\\d+ reason=[234] "
+     ],
+     "steps": [
+      {
+       "template": "boot",
+       "prefix": "b1",
+       "check": "boot",
+       "settle": 15
+      },
+      {
+       "name": "menu-refresh",
+       "check": "menu",
+       "actions": [
+        {
+         "keys": [
+          "ctrl+esc",
+          "p"
+         ],
+         "pause": 1
+        },
+        {
+         "sleep": 5
+        },
+        {
+         "keys": [
+          "esc",
+          "esc"
+         ]
+        }
+       ]
+      },
+      {
+       "name": "launch",
+       "check": "menu",
+       "actions": [
+        {
+         "keys": [
+          "ctrl+esc",
+          "p",
+          "g",
+          "ret",
+          "t",
+          "ret"
+         ],
+         "pause": 1
+        }
+       ],
+       "note": "Start > Programs > Games > Trial Descent II demo; the only Trial entry in this private overlay"
+      },
+      {
+       "name": "vm",
+       "check": "menu",
+       "timeout": 240,
+       "wait": "^\\[launch-stage\\] name=dosbox pid=(?P<game_pid>\\d+) stage=vm-create window=Descent\\ II\\ demo$"
+      },
+      {
+       "name": "graphics",
+       "check": "fullscreen",
+       "timeout": 900,
+       "wait": "^\\[dosvm\\] fullscreen_request vm=(?P<game_vm>\\d+) generation=(?P<game_gen>\\d+) mode=\\d+$"
+      },
+      {
+       "name": "fullscreen",
+       "check": "fullscreen",
+       "timeout": 120,
+       "wait": "^\\[dosvm\\] fullscreen=1 vm=<<game_vm>> generation=<<game_gen>> mode=\\d+$"
+      },
+      {
+       "name": "enter-game",
+       "check": "gameplay",
+       "settle": 5,
+       "actions": [
+        {
+         "keys": [
+          "ret",
+          "ret",
+          "ret",
+          "ret"
+         ],
+         "pause": 1
+        }
+       ]
+      },
+      {
+       "name": "digital",
+       "check": "sound",
+       "since": "boot",
+       "timeout": 120,
+       "wait": "^\\[vm-audio\\] vm=<<game_vm>> play_dma=[15] hz=[1-9]\\d* units=[1-9]\\d*$"
+      },
+      {
+       "name": "opl",
+       "check": "sound",
+       "since": "boot",
+       "timeout": 120,
+       "wait": "^\\[vm-audio\\] vm=<<game_vm>> gen=<<game_gen>> opl_writes=[1-9]\\d* key_writes=[1-9]\\d*$"
+      },
+      {
+       "name": "midi",
+       "check": "sound",
+       "since": "boot",
+       "timeout": 120,
+       "wait": "^\\[vm-audio\\] vm=<<game_vm>> gen=<<game_gen>> midi_bytes=[1-9]\\d* note_ons=[1-9]\\d*$"
+      },
+      {
+       "name": "ipx-tx",
+       "check": "lan",
+       "since": "boot",
+       "timeout": 180,
+       "wait": "^\\[dos-ipx\\] vm=<<game_vm>> gen=<<game_gen>> event=tx count=[1-4] (?:bytes=\\d+ )?src=[0-9a-f]{12} dst=[0-9a-f]{12}$"
+      },
+      {
+       "name": "ipx-rx",
+       "check": "lan",
+       "since": "boot",
+       "timeout": 180,
+       "wait": "^\\[dos-ipx\\] vm=<<game_vm>> gen=<<game_gen>> event=rx count=[1-4] (?:bytes=\\d+ )?src=[0-9a-f]{12} dst=[0-9a-f]{12}$"
+      },
+      {
+       "name": "gameplay",
+       "check": "gameplay",
+       "settle": 10,
+       "screen": {
+        "desktop": false
+       },
+       "note": "precheck replaces this screen with the lead-reviewed gameplay region/hash for this image and role"
+      },
+      {
+       "name": "play",
+       "check": "gameplay",
+       "actions": [
+        {
+         "keys": [
+          "up",
+          "ctrl"
+         ],
+         "pause": 1
+        },
+        {
+         "mouse": {
+          "dx": 40,
+          "dy": -12,
+          "button": "left"
+         },
+         "pause": 1
+        },
+        {
+         "mouse": {
+          "dx": -40,
+          "dy": 12
+         },
+         "pause": 1
+        },
+        {
+         "sleep": 30
+        }
+       ]
+      },
+      {
+       "name": "quit",
+       "check": "exit",
+       "actions": [
+        {
+         "keys": [
+          "esc",
+          "esc",
+          "up",
+          "ret",
+          "ret"
+         ],
+         "pause": 1
+        }
+       ]
+      },
+      {
+       "name": "returned",
+       "check": "exit",
+       "timeout": 120,
+       "wait": "^\\[console\\] dosbox: program returned vm=<<game_vm>> generation=<<game_gen>> early=0$"
+      },
+      {
+       "name": "cleanup",
+       "check": "cleanup",
+       "timeout": 120,
+       "wait": "^\\[dosvm\\] lifecycle stage=cleanup vm=<<game_vm>> generation=<<game_gen>> result=0 data_loss=0 retained=0$"
+      },
+      {
+       "name": "desktop",
+       "check": "cleanup",
+       "settle": 3,
+       "screen": {
+        "geometry": [
+         1024,
+         768
+        ],
+        "desktop": true
+       }
+      }
+     ]
+    }
+   ]
+  },
+  {
+   "id": "acc-ipx-shadowwarrior",
+   "kind": "acceptance",
+   "probe": "acceptance",
+   "profile": "qemu-t23",
+   "item": 3,
+   "timeout": 2400,
+   "title": "Shadow Warrior two-guest IPX host/join",
+   "expected": {
+    "evidence_kind": "acceptance"
+   },
+   "guests": [
+    {
+     "id": "acc-dos-shadowwarrior-host",
+     "kind": "acceptance",
+     "probe": "acceptance",
+     "profile": "qemu-t23",
+     "item": 3,
+     "title": "Shadow Warrior IPX host",
+     "timeout": 2400,
+     "expected": {
+      "evidence_kind": "acceptance"
+     },
+     "dos_game": {
+      "title": "shadowwarrior",
+      "role": "host"
+     },
+     "devices": {
+      "network": "i82559er"
+     },
+     "forbid": [
+      "^\\[dosvm\\] create refused ",
+      "^\\[launch\\] name=dosbox pid=\\d+ error=",
+      "^\\[dosvm\\] fullscreen_(?:refused|transport_fault) vm=\\d+ ",
+      "^\\[dosvm\\] lifecycle stage=stop vm=\\d+ generation=\\d+ reason=[234] "
+     ],
+     "steps": [
+      {
+       "template": "boot",
+       "prefix": "b1",
+       "check": "boot",
+       "settle": 15
+      },
+      {
+       "name": "menu-refresh",
+       "check": "menu",
+       "actions": [
+        {
+         "keys": [
+          "ctrl+esc",
+          "p"
+         ],
+         "pause": 1
+        },
+        {
+         "sleep": 5
+        },
+        {
+         "keys": [
+          "esc",
+          "esc"
+         ]
+        }
+       ]
+      },
+      {
+       "name": "launch",
+       "check": "menu",
+       "actions": [
+        {
+         "keys": [
+          "ctrl+esc",
+          "p",
+          "g",
+          "ret",
+          "t",
+          "ret"
+         ],
+         "pause": 1
+        }
+       ],
+       "note": "Start > Programs > Games > Trial Shadow Warrior; the only Trial entry in this private overlay"
+      },
+      {
+       "name": "vm",
+       "check": "menu",
+       "timeout": 240,
+       "wait": "^\\[launch-stage\\] name=dosbox pid=(?P<game_pid>\\d+) stage=vm-create window=Shadow\\ Warrior$"
+      },
+      {
+       "name": "graphics",
+       "check": "fullscreen",
+       "timeout": 900,
+       "wait": "^\\[dosvm\\] fullscreen_request vm=(?P<game_vm>\\d+) generation=(?P<game_gen>\\d+) mode=\\d+$"
+      },
+      {
+       "name": "fullscreen",
+       "check": "fullscreen",
+       "timeout": 120,
+       "wait": "^\\[dosvm\\] fullscreen=1 vm=<<game_vm>> generation=<<game_gen>> mode=\\d+$"
+      },
+      {
+       "name": "enter-game",
+       "check": "gameplay",
+       "settle": 5,
+       "actions": [
+        {
+         "keys": [
+          "esc",
+          "ret",
+          "ret",
+          "ret"
+         ],
+         "pause": 1
+        }
+       ]
+      },
+      {
+       "name": "digital",
+       "check": "sound",
+       "since": "boot",
+       "timeout": 120,
+       "wait": "^\\[vm-audio\\] vm=<<game_vm>> play_dma=[15] hz=[1-9]\\d* units=[1-9]\\d*$"
+      },
+      {
+       "name": "opl",
+       "check": "sound",
+       "since": "boot",
+       "timeout": 120,
+       "wait": "^\\[vm-audio\\] vm=<<game_vm>> gen=<<game_gen>> opl_writes=[1-9]\\d* key_writes=[1-9]\\d*$"
+      },
+      {
+       "name": "ipx-tx",
+       "check": "lan",
+       "since": "boot",
+       "timeout": 180,
+       "wait": "^\\[dos-ipx\\] vm=<<game_vm>> gen=<<game_gen>> event=tx count=[1-4] (?:bytes=\\d+ )?src=[0-9a-f]{12} dst=[0-9a-f]{12}$"
+      },
+      {
+       "name": "ipx-rx",
+       "check": "lan",
+       "since": "boot",
+       "timeout": 180,
+       "wait": "^\\[dos-ipx\\] vm=<<game_vm>> gen=<<game_gen>> event=rx count=[1-4] (?:bytes=\\d+ )?src=[0-9a-f]{12} dst=[0-9a-f]{12}$"
+      },
+      {
+       "name": "gameplay",
+       "check": "gameplay",
+       "settle": 10,
+       "screen": {
+        "desktop": false
+       },
+       "note": "precheck replaces this screen with the lead-reviewed gameplay region/hash for this image and role"
+      },
+      {
+       "name": "play",
+       "check": "gameplay",
+       "actions": [
+        {
+         "keys": [
+          "up",
+          "ctrl"
+         ],
+         "pause": 1
+        },
+        {
+         "mouse": {
+          "dx": 40,
+          "dy": -12,
+          "button": "left"
+         },
+         "pause": 1
+        },
+        {
+         "mouse": {
+          "dx": -40,
+          "dy": 12
+         },
+         "pause": 1
+        },
+        {
+         "sleep": 30
+        }
+       ]
+      },
+      {
+       "name": "quit",
+       "check": "exit",
+       "actions": [
+        {
+         "keys": [
+          "esc",
+          "up",
+          "ret",
+          "y"
+         ],
+         "pause": 1
+        }
+       ]
+      },
+      {
+       "name": "returned",
+       "check": "exit",
+       "timeout": 120,
+       "wait": "^\\[console\\] dosbox: program returned vm=<<game_vm>> generation=<<game_gen>> early=0$"
+      },
+      {
+       "name": "cleanup",
+       "check": "cleanup",
+       "timeout": 120,
+       "wait": "^\\[dosvm\\] lifecycle stage=cleanup vm=<<game_vm>> generation=<<game_gen>> result=0 data_loss=0 retained=0$"
+      },
+      {
+       "name": "desktop",
+       "check": "cleanup",
+       "settle": 3,
+       "screen": {
+        "geometry": [
+         1024,
+         768
+        ],
+        "desktop": true
+       }
+      }
+     ]
+    },
+    {
+     "id": "acc-dos-shadowwarrior-join",
+     "kind": "acceptance",
+     "probe": "acceptance",
+     "profile": "qemu-t23",
+     "item": 3,
+     "title": "Shadow Warrior IPX join",
+     "timeout": 2400,
+     "expected": {
+      "evidence_kind": "acceptance"
+     },
+     "dos_game": {
+      "title": "shadowwarrior",
+      "role": "join"
+     },
+     "devices": {
+      "network": "i82559er"
+     },
+     "forbid": [
+      "^\\[dosvm\\] create refused ",
+      "^\\[launch\\] name=dosbox pid=\\d+ error=",
+      "^\\[dosvm\\] fullscreen_(?:refused|transport_fault) vm=\\d+ ",
+      "^\\[dosvm\\] lifecycle stage=stop vm=\\d+ generation=\\d+ reason=[234] "
+     ],
+     "steps": [
+      {
+       "template": "boot",
+       "prefix": "b1",
+       "check": "boot",
+       "settle": 15
+      },
+      {
+       "name": "menu-refresh",
+       "check": "menu",
+       "actions": [
+        {
+         "keys": [
+          "ctrl+esc",
+          "p"
+         ],
+         "pause": 1
+        },
+        {
+         "sleep": 5
+        },
+        {
+         "keys": [
+          "esc",
+          "esc"
+         ]
+        }
+       ]
+      },
+      {
+       "name": "launch",
+       "check": "menu",
+       "actions": [
+        {
+         "keys": [
+          "ctrl+esc",
+          "p",
+          "g",
+          "ret",
+          "t",
+          "ret"
+         ],
+         "pause": 1
+        }
+       ],
+       "note": "Start > Programs > Games > Trial Shadow Warrior; the only Trial entry in this private overlay"
+      },
+      {
+       "name": "vm",
+       "check": "menu",
+       "timeout": 240,
+       "wait": "^\\[launch-stage\\] name=dosbox pid=(?P<game_pid>\\d+) stage=vm-create window=Shadow\\ Warrior$"
+      },
+      {
+       "name": "graphics",
+       "check": "fullscreen",
+       "timeout": 900,
+       "wait": "^\\[dosvm\\] fullscreen_request vm=(?P<game_vm>\\d+) generation=(?P<game_gen>\\d+) mode=\\d+$"
+      },
+      {
+       "name": "fullscreen",
+       "check": "fullscreen",
+       "timeout": 120,
+       "wait": "^\\[dosvm\\] fullscreen=1 vm=<<game_vm>> generation=<<game_gen>> mode=\\d+$"
+      },
+      {
+       "name": "enter-game",
+       "check": "gameplay",
+       "settle": 5,
+       "actions": [
+        {
+         "keys": [
+          "esc",
+          "ret",
+          "ret",
+          "ret"
+         ],
+         "pause": 1
+        }
+       ]
+      },
+      {
+       "name": "digital",
+       "check": "sound",
+       "since": "boot",
+       "timeout": 120,
+       "wait": "^\\[vm-audio\\] vm=<<game_vm>> play_dma=[15] hz=[1-9]\\d* units=[1-9]\\d*$"
+      },
+      {
+       "name": "opl",
+       "check": "sound",
+       "since": "boot",
+       "timeout": 120,
+       "wait": "^\\[vm-audio\\] vm=<<game_vm>> gen=<<game_gen>> opl_writes=[1-9]\\d* key_writes=[1-9]\\d*$"
+      },
+      {
+       "name": "ipx-tx",
+       "check": "lan",
+       "since": "boot",
+       "timeout": 180,
+       "wait": "^\\[dos-ipx\\] vm=<<game_vm>> gen=<<game_gen>> event=tx count=[1-4] (?:bytes=\\d+ )?src=[0-9a-f]{12} dst=[0-9a-f]{12}$"
+      },
+      {
+       "name": "ipx-rx",
+       "check": "lan",
+       "since": "boot",
+       "timeout": 180,
+       "wait": "^\\[dos-ipx\\] vm=<<game_vm>> gen=<<game_gen>> event=rx count=[1-4] (?:bytes=\\d+ )?src=[0-9a-f]{12} dst=[0-9a-f]{12}$"
+      },
+      {
+       "name": "gameplay",
+       "check": "gameplay",
+       "settle": 10,
+       "screen": {
+        "desktop": false
+       },
+       "note": "precheck replaces this screen with the lead-reviewed gameplay region/hash for this image and role"
+      },
+      {
+       "name": "play",
+       "check": "gameplay",
+       "actions": [
+        {
+         "keys": [
+          "up",
+          "ctrl"
+         ],
+         "pause": 1
+        },
+        {
+         "mouse": {
+          "dx": 40,
+          "dy": -12,
+          "button": "left"
+         },
+         "pause": 1
+        },
+        {
+         "mouse": {
+          "dx": -40,
+          "dy": 12
+         },
+         "pause": 1
+        },
+        {
+         "sleep": 30
+        }
+       ]
+      },
+      {
+       "name": "quit",
+       "check": "exit",
+       "actions": [
+        {
+         "keys": [
+          "esc",
+          "up",
+          "ret",
+          "y"
+         ],
+         "pause": 1
+        }
+       ]
+      },
+      {
+       "name": "returned",
+       "check": "exit",
+       "timeout": 120,
+       "wait": "^\\[console\\] dosbox: program returned vm=<<game_vm>> generation=<<game_gen>> early=0$"
+      },
+      {
+       "name": "cleanup",
+       "check": "cleanup",
+       "timeout": 120,
+       "wait": "^\\[dosvm\\] lifecycle stage=cleanup vm=<<game_vm>> generation=<<game_gen>> result=0 data_loss=0 retained=0$"
+      },
+      {
+       "name": "desktop",
+       "check": "cleanup",
+       "settle": 3,
+       "screen": {
+        "geometry": [
+         1024,
+         768
+        ],
+        "desktop": true
+       }
+      }
+     ]
+    }
+   ]
+  },
+  {
+   "id": "acc-ipx-terminal",
+   "kind": "acceptance",
+   "probe": "acceptance",
+   "profile": "qemu-t23",
+   "item": 3,
+   "timeout": 2400,
+   "title": "Terminal Velocity two-guest IPX host/join",
+   "expected": {
+    "evidence_kind": "acceptance"
+   },
+   "guests": [
+    {
+     "id": "acc-dos-terminal-host",
+     "kind": "acceptance",
+     "probe": "acceptance",
+     "profile": "qemu-t23",
+     "item": 3,
+     "title": "Terminal Velocity IPX host",
+     "timeout": 2400,
+     "expected": {
+      "evidence_kind": "acceptance"
+     },
+     "dos_game": {
+      "title": "terminal",
+      "role": "host"
+     },
+     "devices": {
+      "network": "i82559er"
+     },
+     "forbid": [
+      "^\\[dosvm\\] create refused ",
+      "^\\[launch\\] name=dosbox pid=\\d+ error=",
+      "^\\[dosvm\\] fullscreen_(?:refused|transport_fault) vm=\\d+ ",
+      "^\\[dosvm\\] lifecycle stage=stop vm=\\d+ generation=\\d+ reason=[234] "
+     ],
+     "steps": [
+      {
+       "template": "boot",
+       "prefix": "b1",
+       "check": "boot",
+       "settle": 15
+      },
+      {
+       "name": "menu-refresh",
+       "check": "menu",
+       "actions": [
+        {
+         "keys": [
+          "ctrl+esc",
+          "p"
+         ],
+         "pause": 1
+        },
+        {
+         "sleep": 5
+        },
+        {
+         "keys": [
+          "esc",
+          "esc"
+         ]
+        }
+       ]
+      },
+      {
+       "name": "launch",
+       "check": "menu",
+       "actions": [
+        {
+         "keys": [
+          "ctrl+esc",
+          "p",
+          "g",
+          "ret",
+          "t",
+          "ret"
+         ],
+         "pause": 1
+        }
+       ],
+       "note": "Start > Programs > Games > Trial Terminal Velocity; the only Trial entry in this private overlay"
+      },
+      {
+       "name": "vm",
+       "check": "menu",
+       "timeout": 240,
+       "wait": "^\\[launch-stage\\] name=dosbox pid=(?P<game_pid>\\d+) stage=vm-create window=Terminal\\ Velocity$"
+      },
+      {
+       "name": "graphics",
+       "check": "fullscreen",
+       "timeout": 900,
+       "wait": "^\\[dosvm\\] fullscreen_request vm=(?P<game_vm>\\d+) generation=(?P<game_gen>\\d+) mode=\\d+$"
+      },
+      {
+       "name": "fullscreen",
+       "check": "fullscreen",
+       "timeout": 120,
+       "wait": "^\\[dosvm\\] fullscreen=1 vm=<<game_vm>> generation=<<game_gen>> mode=\\d+$"
+      },
+      {
+       "name": "enter-game",
+       "check": "gameplay",
+       "settle": 5,
+       "actions": [
+        {
+         "keys": [
+          "esc",
+          "ret",
+          "ret",
+          "ret"
+         ],
+         "pause": 1
+        }
+       ]
+      },
+      {
+       "name": "digital",
+       "check": "sound",
+       "since": "boot",
+       "timeout": 120,
+       "wait": "^\\[vm-audio\\] vm=<<game_vm>> play_dma=[15] hz=[1-9]\\d* units=[1-9]\\d*$"
+      },
+      {
+       "name": "opl",
+       "check": "sound",
+       "since": "boot",
+       "timeout": 120,
+       "wait": "^\\[vm-audio\\] vm=<<game_vm>> gen=<<game_gen>> opl_writes=[1-9]\\d* key_writes=[1-9]\\d*$"
+      },
+      {
+       "name": "ipx-tx",
+       "check": "lan",
+       "since": "boot",
+       "timeout": 180,
+       "wait": "^\\[dos-ipx\\] vm=<<game_vm>> gen=<<game_gen>> event=tx count=[1-4] (?:bytes=\\d+ )?src=[0-9a-f]{12} dst=[0-9a-f]{12}$"
+      },
+      {
+       "name": "ipx-rx",
+       "check": "lan",
+       "since": "boot",
+       "timeout": 180,
+       "wait": "^\\[dos-ipx\\] vm=<<game_vm>> gen=<<game_gen>> event=rx count=[1-4] (?:bytes=\\d+ )?src=[0-9a-f]{12} dst=[0-9a-f]{12}$"
+      },
+      {
+       "name": "gameplay",
+       "check": "gameplay",
+       "settle": 10,
+       "screen": {
+        "desktop": false
+       },
+       "note": "precheck replaces this screen with the lead-reviewed gameplay region/hash for this image and role"
+      },
+      {
+       "name": "play",
+       "check": "gameplay",
+       "actions": [
+        {
+         "keys": [
+          "up",
+          "ctrl"
+         ],
+         "pause": 1
+        },
+        {
+         "mouse": {
+          "dx": 40,
+          "dy": -12,
+          "button": "left"
+         },
+         "pause": 1
+        },
+        {
+         "mouse": {
+          "dx": -40,
+          "dy": 12
+         },
+         "pause": 1
+        },
+        {
+         "sleep": 30
+        }
+       ]
+      },
+      {
+       "name": "quit",
+       "check": "exit",
+       "actions": [
+        {
+         "keys": [
+          "esc",
+          "q",
+          "y"
+         ],
+         "pause": 1
+        }
+       ]
+      },
+      {
+       "name": "returned",
+       "check": "exit",
+       "timeout": 120,
+       "wait": "^\\[console\\] dosbox: program returned vm=<<game_vm>> generation=<<game_gen>> early=0$"
+      },
+      {
+       "name": "cleanup",
+       "check": "cleanup",
+       "timeout": 120,
+       "wait": "^\\[dosvm\\] lifecycle stage=cleanup vm=<<game_vm>> generation=<<game_gen>> result=0 data_loss=0 retained=0$"
+      },
+      {
+       "name": "desktop",
+       "check": "cleanup",
+       "settle": 3,
+       "screen": {
+        "geometry": [
+         1024,
+         768
+        ],
+        "desktop": true
+       }
+      }
+     ]
+    },
+    {
+     "id": "acc-dos-terminal-join",
+     "kind": "acceptance",
+     "probe": "acceptance",
+     "profile": "qemu-t23",
+     "item": 3,
+     "title": "Terminal Velocity IPX join",
+     "timeout": 2400,
+     "expected": {
+      "evidence_kind": "acceptance"
+     },
+     "dos_game": {
+      "title": "terminal",
+      "role": "join"
+     },
+     "devices": {
+      "network": "i82559er"
+     },
+     "forbid": [
+      "^\\[dosvm\\] create refused ",
+      "^\\[launch\\] name=dosbox pid=\\d+ error=",
+      "^\\[dosvm\\] fullscreen_(?:refused|transport_fault) vm=\\d+ ",
+      "^\\[dosvm\\] lifecycle stage=stop vm=\\d+ generation=\\d+ reason=[234] "
+     ],
+     "steps": [
+      {
+       "template": "boot",
+       "prefix": "b1",
+       "check": "boot",
+       "settle": 15
+      },
+      {
+       "name": "menu-refresh",
+       "check": "menu",
+       "actions": [
+        {
+         "keys": [
+          "ctrl+esc",
+          "p"
+         ],
+         "pause": 1
+        },
+        {
+         "sleep": 5
+        },
+        {
+         "keys": [
+          "esc",
+          "esc"
+         ]
+        }
+       ]
+      },
+      {
+       "name": "launch",
+       "check": "menu",
+       "actions": [
+        {
+         "keys": [
+          "ctrl+esc",
+          "p",
+          "g",
+          "ret",
+          "t",
+          "ret"
+         ],
+         "pause": 1
+        }
+       ],
+       "note": "Start > Programs > Games > Trial Terminal Velocity; the only Trial entry in this private overlay"
+      },
+      {
+       "name": "vm",
+       "check": "menu",
+       "timeout": 240,
+       "wait": "^\\[launch-stage\\] name=dosbox pid=(?P<game_pid>\\d+) stage=vm-create window=Terminal\\ Velocity$"
+      },
+      {
+       "name": "graphics",
+       "check": "fullscreen",
+       "timeout": 900,
+       "wait": "^\\[dosvm\\] fullscreen_request vm=(?P<game_vm>\\d+) generation=(?P<game_gen>\\d+) mode=\\d+$"
+      },
+      {
+       "name": "fullscreen",
+       "check": "fullscreen",
+       "timeout": 120,
+       "wait": "^\\[dosvm\\] fullscreen=1 vm=<<game_vm>> generation=<<game_gen>> mode=\\d+$"
+      },
+      {
+       "name": "enter-game",
+       "check": "gameplay",
+       "settle": 5,
+       "actions": [
+        {
+         "keys": [
+          "esc",
+          "ret",
+          "ret",
+          "ret"
+         ],
+         "pause": 1
+        }
+       ]
+      },
+      {
+       "name": "digital",
+       "check": "sound",
+       "since": "boot",
+       "timeout": 120,
+       "wait": "^\\[vm-audio\\] vm=<<game_vm>> play_dma=[15] hz=[1-9]\\d* units=[1-9]\\d*$"
+      },
+      {
+       "name": "opl",
+       "check": "sound",
+       "since": "boot",
+       "timeout": 120,
+       "wait": "^\\[vm-audio\\] vm=<<game_vm>> gen=<<game_gen>> opl_writes=[1-9]\\d* key_writes=[1-9]\\d*$"
+      },
+      {
+       "name": "ipx-tx",
+       "check": "lan",
+       "since": "boot",
+       "timeout": 180,
+       "wait": "^\\[dos-ipx\\] vm=<<game_vm>> gen=<<game_gen>> event=tx count=[1-4] (?:bytes=\\d+ )?src=[0-9a-f]{12} dst=[0-9a-f]{12}$"
+      },
+      {
+       "name": "ipx-rx",
+       "check": "lan",
+       "since": "boot",
+       "timeout": 180,
+       "wait": "^\\[dos-ipx\\] vm=<<game_vm>> gen=<<game_gen>> event=rx count=[1-4] (?:bytes=\\d+ )?src=[0-9a-f]{12} dst=[0-9a-f]{12}$"
+      },
+      {
+       "name": "gameplay",
+       "check": "gameplay",
+       "settle": 10,
+       "screen": {
+        "desktop": false
+       },
+       "note": "precheck replaces this screen with the lead-reviewed gameplay region/hash for this image and role"
+      },
+      {
+       "name": "play",
+       "check": "gameplay",
+       "actions": [
+        {
+         "keys": [
+          "up",
+          "ctrl"
+         ],
+         "pause": 1
+        },
+        {
+         "mouse": {
+          "dx": 40,
+          "dy": -12,
+          "button": "left"
+         },
+         "pause": 1
+        },
+        {
+         "mouse": {
+          "dx": -40,
+          "dy": 12
+         },
+         "pause": 1
+        },
+        {
+         "sleep": 30
+        }
+       ]
+      },
+      {
+       "name": "quit",
+       "check": "exit",
+       "actions": [
+        {
+         "keys": [
+          "esc",
+          "q",
+          "y"
+         ],
+         "pause": 1
+        }
+       ]
+      },
+      {
+       "name": "returned",
+       "check": "exit",
+       "timeout": 120,
+       "wait": "^\\[console\\] dosbox: program returned vm=<<game_vm>> generation=<<game_gen>> early=0$"
+      },
+      {
+       "name": "cleanup",
+       "check": "cleanup",
+       "timeout": 120,
+       "wait": "^\\[dosvm\\] lifecycle stage=cleanup vm=<<game_vm>> generation=<<game_gen>> result=0 data_loss=0 retained=0$"
+      },
+      {
+       "name": "desktop",
+       "check": "cleanup",
+       "settle": 3,
+       "screen": {
+        "geometry": [
+         1024,
+         768
+        ],
+        "desktop": true
+       }
+      }
+     ]
+    }
+   ]
   }
  ]
 }

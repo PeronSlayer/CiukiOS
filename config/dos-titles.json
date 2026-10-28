@@ -324,6 +324,216 @@
           "sha256": "1e872508f1abaa9f5e0504292e275de73a86bc57b29bce35f210c61d29b7255f"
         }
       ]
+    },
+    {
+      "id": "heretic",
+      "archive": "htic_v12.zip",
+      "url": "https://www.gamers.org/pub/idgames/idstuff/heretic/htic_v12.zip",
+      "sha256": "lead-pins",
+      "size": null,
+      "status": "lead-pins",
+      "licence": {
+        "source": "third_party/games/heretic-shareware/UPSTREAM.json",
+        "terms": "Original shareware package only. Exact package terms and licence member hashes await lead download/read-back; no bundling grant asserted.",
+        "verification": "lead-pins",
+        "distribution": "Local acceptance test media only; never included in images or releases.",
+        "class": "test-media"
+      }
+    },
+    {
+      "id": "hexen",
+      "archive": "hexndemo.zip",
+      "url": "https://www.gamers.org/pub/idgames/idstuff/hexen/hexndemo.zip",
+      "sha256": "lead-pins",
+      "size": null,
+      "status": "lead-pins",
+      "licence": {
+        "source": "third_party/games/hexen-demo/UPSTREAM.json",
+        "terms": "Original demo package only. Exact package terms and licence member hashes await lead download/read-back; no bundling grant asserted.",
+        "verification": "lead-pins",
+        "distribution": "Local acceptance test media only; never included in images or releases.",
+        "class": "test-media"
+      }
+    },
+    {
+      "id": "descent",
+      "archive": "desc14sw.zip",
+      "url": "https://image.dosgamesarchive.com/games/desc14sw.zip",
+      "sha256": "lead-pins",
+      "size": null,
+      "status": "lead-pins",
+      "licence": {
+        "source": "third_party/games/descent-shareware/UPSTREAM.json",
+        "terms": "Original shareware package only. Exact package terms and licence member hashes await lead download/read-back; no bundling grant asserted.",
+        "verification": "lead-pins",
+        "distribution": "Local acceptance test media only; never included in images or releases.",
+        "class": "test-media"
+      }
+    },
+    {
+      "id": "descent2",
+      "archive": "d2demo10.zip",
+      "url": "https://image.dosgamesarchive.com/games/d2demo10.zip",
+      "sha256": "lead-pins",
+      "size": null,
+      "status": "lead-pins",
+      "licence": {
+        "source": "third_party/games/descent2-demo/UPSTREAM.json",
+        "terms": "Original demo package only. Exact package terms and licence member hashes await lead download/read-back; no bundling grant asserted.",
+        "verification": "lead-pins",
+        "distribution": "Local acceptance test media only; never included in images or releases.",
+        "class": "test-media"
+      }
+    },
+    {
+      "id": "shadowwarrior",
+      "archive": "1sw12.zip",
+      "url": "https://www.gamers.org/pub/mirrors/ftp.3drealms.com/share/1sw12.zip",
+      "sha256": "lead-pins",
+      "size": null,
+      "status": "lead-pins",
+      "licence": {
+        "source": "third_party/games/shadowwarrior-shareware/UPSTREAM.json",
+        "terms": "Original shareware package only. Exact package terms and licence member hashes await lead download/read-back; no bundling grant asserted.",
+        "verification": "lead-pins",
+        "distribution": "Local acceptance test media only; never included in images or releases.",
+        "class": "test-media"
+      }
+    },
+    {
+      "id": "wacky",
+      "archive": "1wacky.zip",
+      "url": "https://www.gamers.org/pub/mirrors/ftp.3drealms.com/share/1wacky.zip",
+      "sha256": "lead-pins",
+      "size": null,
+      "status": "lead-pins",
+      "licence": {
+        "source": "third_party/games/wacky-shareware/UPSTREAM.json",
+        "terms": "Original shareware package only. Exact package terms and licence member hashes await lead download/read-back; no bundling grant asserted.",
+        "verification": "lead-pins",
+        "distribution": "Local acceptance test media only; never included in images or releases.",
+        "class": "test-media"
+      }
+    },
+    {
+      "id": "cosmo",
+      "archive": "1cosmo.zip",
+      "url": "https://www.gamers.org/pub/mirrors/ftp.3drealms.com/share/1cosmo.zip",
+      "sha256": "lead-pins",
+      "size": null,
+      "status": "lead-pins",
+      "licence": {
+        "source": "third_party/games/cosmo-shareware/UPSTREAM.json",
+        "terms": "Original shareware package only. Exact package terms and licence member hashes await lead download/read-back; no bundling grant asserted.",
+        "verification": "lead-pins",
+        "distribution": "Local acceptance test media only; never included in images or releases.",
+        "class": "test-media"
+      }
+    },
+    {
+      "id": "duke2",
+      "archive": "1duke2.zip",
+      "url": "https://www.gamers.org/pub/mirrors/ftp.3drealms.com/share/1duke2.zip",
+      "sha256": "lead-pins",
+      "size": null,
+      "status": "lead-pins",
+      "licence": {
+        "source": "third_party/games/duke2-shareware/UPSTREAM.json",
+        "terms": "Original shareware package only. Exact package terms and licence member hashes await lead download/read-back; no bundling grant asserted.",
+        "verification": "lead-pins",
+        "distribution": "Local acceptance test media only; never included in images or releases.",
+        "class": "test-media"
+      }
+    },
+    {
+      "id": "raptor",
+      "archive": "1raptor.zip",
+      "url": "https://www.gamers.org/pub/mirrors/ftp.3drealms.com/share/1raptor.zip",
+      "sha256": "lead-pins",
+      "size": null,
+      "status": "lead-pins",
+      "licence": {
+        "source": "third_party/games/raptor-shareware/UPSTREAM.json",
+        "terms": "Original shareware package only. Exact package terms and licence member hashes await lead download/read-back; no bundling grant asserted.",
+        "verification": "lead-pins",
+        "distribution": "Local acceptance test media only; never included in images or releases.",
+        "class": "test-media"
+      }
+    },
+    {
+      "id": "hocus",
+      "archive": "1hocus.zip",
+      "url": "https://www.gamers.org/pub/mirrors/ftp.3drealms.com/share/1hocus.zip",
+      "sha256": "lead-pins",
+      "size": null,
+      "status": "lead-pins",
+      "licence": {
+        "source": "third_party/games/hocus-shareware/UPSTREAM.json",
+        "terms": "Original shareware package only. Exact package terms and licence member hashes await lead download/read-back; no bundling grant asserted.",
+        "verification": "lead-pins",
+        "distribution": "Local acceptance test media only; never included in images or releases.",
+        "class": "test-media"
+      }
+    },
+    {
+      "id": "biomenace",
+      "archive": "1bio10.zip",
+      "url": "https://www.gamers.org/pub/mirrors/ftp.3drealms.com/share/1bio10.zip",
+      "sha256": "lead-pins",
+      "size": null,
+      "status": "lead-pins",
+      "licence": {
+        "source": "third_party/games/biomenace-shareware/UPSTREAM.json",
+        "terms": "Original shareware package only. Exact package terms and licence member hashes await lead download/read-back; no bundling grant asserted.",
+        "verification": "lead-pins",
+        "distribution": "Local acceptance test media only; never included in images or releases.",
+        "class": "test-media"
+      }
+    },
+    {
+      "id": "blakestone",
+      "archive": "1bs6.zip",
+      "url": "https://www.gamers.org/pub/mirrors/ftp.3drealms.com/share/1bs6.zip",
+      "sha256": "lead-pins",
+      "size": null,
+      "status": "lead-pins",
+      "licence": {
+        "source": "third_party/games/blakestone-shareware/UPSTREAM.json",
+        "terms": "Original shareware package only. Exact package terms and licence member hashes await lead download/read-back; no bundling grant asserted.",
+        "verification": "lead-pins",
+        "distribution": "Local acceptance test media only; never included in images or releases.",
+        "class": "test-media"
+      }
+    },
+    {
+      "id": "terminal",
+      "archive": "3dldemo.zip",
+      "url": "https://www.gamers.org/pub/mirrors/ftp.3drealms.com/share/3dldemo.zip",
+      "sha256": "lead-pins",
+      "size": null,
+      "status": "lead-pins",
+      "licence": {
+        "source": "third_party/games/terminal-shareware/UPSTREAM.json",
+        "terms": "Original shareware package only. Exact package terms and licence member hashes await lead download/read-back; no bundling grant asserted.",
+        "verification": "lead-pins",
+        "distribution": "Local acceptance test media only; never included in images or releases.",
+        "class": "test-media"
+      }
+    },
+    {
+      "id": "jazz",
+      "archive": "jazz.zip",
+      "url": "https://image.dosgamesarchive.com/games/jazz.zip",
+      "sha256": "lead-pins",
+      "size": null,
+      "status": "lead-pins",
+      "licence": {
+        "source": "third_party/games/jazz-shareware/UPSTREAM.json",
+        "terms": "Original shareware package only. Exact package terms and licence member hashes await lead download/read-back; no bundling grant asserted.",
+        "verification": "lead-pins",
+        "distribution": "Local acceptance test media only; never included in images or releases.",
+        "class": "test-media"
+      }
     }
   ]
 }

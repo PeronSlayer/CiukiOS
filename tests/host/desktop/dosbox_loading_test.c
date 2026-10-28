@@ -56,6 +56,8 @@ static unsigned surfaces;
 static uint64_t clock_ms, enter_ms, first_frame_ms;
 static unsigned title_set, finished_panel, close_requests;
 static int phase, scenario, armed, entered, presents, damage_count, error_seen, closed;
+static unsigned network_expected;
+static int network_custom;
 static unsigned error_idle_waits;
 static unsigned nonvideo, timeout_waits, state_waits, last_events, nonvideo_presents;
 static int input_refused;
@@ -233,7 +235,8 @@ int ciuki_dosvm(uint32_t op, struct ciuki_dosvm_command *c)
     }
     if (op == CIUKI_DOSVM_CREATE) {
         assert(c->surface_fd == 7);
-        assert(c->launch.game==(scenario==6 ? 0u : 2u));
+        assert(c->launch.game==(scenario==6 || network_custom ? 0u : 2u));
+        assert(dosvm_launch_network(c)==network_expected);
         assert(c->launch.kernel==CIUKI_DOSVM_UNIFIED);
         assert(c->launch.memory==CIUKI_DOSVM_MEMORY_PAGED);
         if (scenario==20) assert(image_polls==7 && image_paints==6 && phase>=2);
@@ -402,7 +405,17 @@ int main(int argc, char **argv)
     setvbuf(stdout,NULL,_IONBF,0);
     assert(argc == 2 || argc == 3); scenario = atoi(argv[1]);
     if (argc==3) { nonvideo=(unsigned)atoi(argv[2]); assert(nonvideo==1 || nonvideo==2); }
-    assert(scenario>=0 && scenario<=37);
+    assert(scenario>=0 && scenario<=41);
+    int network_scenario=scenario>=38 ? scenario : 0;
+    if (network_scenario==40) {
+        char *bad[]={"dosbox","--network=bogus","\\TRIAL\\GAME.EXE"};
+        assert(dosbox_main(3,bad)==2 && !surfaces && !phase);
+        puts("PASS dosbox loading replay: invalid network rejected before CREATE");return 0;
+    }
+    if (network_scenario) {
+        network_expected=network_scenario==39 ? CIUKI_DOSVM_NETWORK_OFF : CIUKI_DOSVM_NETWORK_IPX;
+        network_custom=network_scenario==41;scenario=0;
+    }
     if (scenario>=13 && scenario<=16) {
         const char *options[]={"--dos-kernel=ciukidos","--dos-kernel=freedos-1.3","--dos-memory=locked","--dos-network=ipx"};
         char *refused[]={"dosbox",(char *)options[scenario-13]};
@@ -412,6 +425,16 @@ int main(int argc, char **argv)
     }
     char *launch[] = {"dosbox", "--name=DOOM", "\\DOOM\\DOOM.EXE", "-config", "CIUKI.CFG"};
     char *reference[]={"dosbox","--name=DOOM","--dos-kernel=unified","\\DOOM\\DOOM.EXE","-config","CIUKI.CFG"};
+    char *network_launch[]={"dosbox","--name=DOOM",network_scenario==39 ? "--network=off" : "--network=ipx",
+                            network_custom ? "\\TRIAL\\GAME.EXE" : "\\DOOM\\DOOM.EXE","-config","CIUKI.CFG"};
+    char network_path[144];
+    if (network_scenario==39) {
+        assert(!mkdir(DOSBOX_SETTINGS_DIR,0700) || errno==EEXIST);
+        assert(!dosbox_network_path(2,network_path,sizeof(network_path)));
+        FILE *f=fopen(network_path,"wb");assert(f);
+        static const char saved[]="network=ipx\n";
+        assert(fwrite(saved,1,sizeof(saved)-1,f)==sizeof(saved)-1 && !fclose(f));
+    }
     struct dosbox_profile profile;
     if (scenario==34) assert(!dosbox_profile_usage_save("\\DOOM\\DOOM.EXE",DOSBOX_SCREEN_WINDOW));
     if ((scenario>=24 && scenario<=26) || scenario==30) {
@@ -420,7 +443,9 @@ int main(int argc, char **argv)
         assert(!dosbox_profile_save(&profile));
     }
     int selected=scenario==9 || scenario==10;
-    int result = dosbox_main(selected ? 6 : scenario == 6 ? 1 : 5, selected ? reference : launch);
+    int result = dosbox_main(network_scenario || selected ? 6 : scenario == 6 ? 1 : 5,
+                            network_scenario ? network_launch : selected ? reference : launch);
+    if (network_scenario==39) assert(!unlink(network_path) && !rmdir(DOSBOX_SETTINGS_DIR));
     if ((scenario>=24 && scenario<=26) || scenario==30) {
         char path[192]; assert(!dosbox_profile_path(profile.key,path,sizeof(path)) && !unlink(path));
         assert(!rmdir(DOSBOX_SETTINGS_DIR));
