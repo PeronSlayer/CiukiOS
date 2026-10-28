@@ -8,7 +8,8 @@ engine, probe-gated at boot and inert until the boot qualification passes on a
 real chip. The backend mirrors the Savage one
 ([f7-3d-acceleration-contract.md](f7-3d-acceleration-contract.md),
 [savage-fullsize-admission.md](savage-fullsize-admission.md)): same service,
-same admission predicate, same precision policy, same orchestration.
+same admission predicate and same precision policy. The synchronous Radeon
+owner still needs the background-hook adaptation documented below.
 
 ## 1. Sources (pinned, read-only, never vendored)
 
@@ -29,7 +30,10 @@ SHA-256:
 
 Already pinned by f7-02: `MesaLib-7.11.2.tar.bz2`
 (`57746aa8c60bc6f5596ec6c6c7274de40fa12edce5ec33fe899e704fa00b5357`), the
-last Mesa with the classic `radeon`/`r200` DRI drivers. The driver pack under
+release inspected here for the classic `radeon`/`r200` DRI drivers. These
+drivers continued through Mesa 21.3 and then Amber, as documented by the
+[upstream Amber page](https://docs.mesa3d.org/amber.html) and recorded by the
+integration 6 contract. The driver pack under
 `third_party/` contains no ATI register documentation (checked 2026-10-26:
 only storage/ASPI `.sys` files). No ATI register manual was found in the supplied driver pack; programming
 uses the pinned upstream implementations below. This is not a claim that no
@@ -406,9 +410,10 @@ owner contract. Firmware provenance is in
 `505662b1f08ba6b5ecdc46da61bf5b30c8592698`.
 
 D-F6: host commands run sequentially with `nice -n 19`; no scope or guest is
-invoked. The existing synchronous record hook is still the orchestration in
-this worktree. f7-13 background budget orchestration is not present here;
-the lead must integrate that hook when it lands. No hardware claim follows
+invoked. The Radeon synchronous record hook is still its orchestration.
+Integration 6 now contains the Savage f7-13 background budget orchestration;
+this conflict repair preserves it exactly. Adapting the Radeon owner to that
+background hook remains a separate integration follow-up for the lead. No hardware claim follows
 from a successful fake engine, and host execution time is not chip timing.
 
 The 1/16-pixel coordinate restriction applies to every emitted vertex.
@@ -548,3 +553,45 @@ protocol are cited in §§3–4; no command-processor packets are emitted.
 | `RADEON_SRC_PITCH_OFFSET` | `L/radeon_reg.h:1709` |
 | `RADEON_SRC_Y_X` | `L/radeon_reg.h:1716` |
 | `RADEON_DP_WRITE_MSK` (upstream `RADEON_DP_WRITE_MASK`) | `L/radeon_reg.h:832` |
+
+
+## Integration 6 preservation audit (2026-10-28)
+
+The f7-merge6 directive makes integration 6 authoritative for shared code.
+The qualified Savage precision header is retained byte for byte, including
+its cooperative checkpoint support; the older Radeon precision helper does
+not replace it. The GL host fixture keeps the complete Savage format and T23
+lease checks under the default branch. Radeon uses its existing independent
+MMIO model under `GL_KERNEL_FAMILY_RADEON`; Savage-only lease entry points
+explicitly reject use in that build. NVIDIA remains `R3D_SOFTWARE_ONLY`.
+
+Research rechecked the primary [Mesa 7.11.2 release index](https://archive.mesa3d.org/older-versions/7.x/7.11.2/)
+and [X.Org driver archive](https://xorg.freedesktop.org/archive/individual/driver/).
+The pinned Linux v6.1 `radeon_reg.h` cached in the main worktree defines
+`RADEON_WAIT_UNTIL` at line 1834, `RADEON_WAIT_3D_IDLECLEAN` at 1847,
+`RADEON_SE_VF_CNTL` at 2703 and `RADEON_CP_CSQ_CNTL` at 3333.
+The cached X.Org 6.14.6 `radeon_accel.c:587-599` instantiates `ACCEL_MMIO`.
+These agree with the existing family backend's register FIFO and disabled-CP
+boundary. No register programming or precision tolerance is changed by this merge
+repair; the private feature-mask correction below preserves the existing
+D16 capability boundary. The direct GitHub/raw Linux and X.Org tarball
+web requests returned cache misses; the existing pinned local sources remain
+the implementation evidence and their hashes are recorded above.
+
+The integration audit also found that `R3D_ALL_FEATURES` now contains stencil
+flags. Radeon retains its previous D16 pipeline through the private
+`RADEON3D_FEATURES` mask (`R3D_FEATURES | R3D_TEXTURE1`), used consistently by
+validation, capability snapshots and family fixtures. Stencil requests are
+refused before hardware writes; the shared feature definitions stay intact.
+
+The kernel heap now rejects oversized constant requests. Radeon qualification
+services, texture staging and shadows therefore use the existing
+`desktop_buffer_alloc`/`desktop_buffer_free` API with `MM_IO_REQUEST`, following
+the preserved Savage owner's page charge and allocation-prefix pattern.
+The aggregate charge includes both scratch services, staging, all shadows and
+the backend's resident bytes under the existing `R3D_RAM_LIMIT`; neither heap
+nor memory limits are enlarged. Quarantined allocations remain charged.
+The owner fixture models page allocation/free and the current small-heap
+ceiling. The Radeon GL replay uses its actual full-size probe and excludes
+the newly added Savage-only scanout and T23 lease-flow workloads, which remain
+unchanged in the default build.

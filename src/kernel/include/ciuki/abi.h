@@ -515,6 +515,9 @@ typedef uint64_t ciuki_sigset_t;
 #define CIUKI_INPUT_BUTTON 4
 #define CIUKI_INPUT_RESYNC 5
 #define CIUKI_INPUT_WHEEL 6
+/* Kernel secure attention (physical Ctrl+Alt+Delete), delivered only on the
+ * trusted logon UI's input grant; code = CIUKI_SECURITY_SECURE_ATTENTION. */
+#define CIUKI_INPUT_ATTENTION 13
 #define CIUKI_KEY_VALUE_UP 0
 #define CIUKI_KEY_VALUE_DOWN 1
 #define CIUKI_KEY_VALUE_REPEAT 2
@@ -763,10 +766,184 @@ enum ciuki_syscall {
     CIUKI_SYS_FILE_INFO = 98,
     CIUKI_SYS_RECOVERY = 99,
     CIUKI_SYS_NET_INFO = 100,
+    CIUKI_SYS_SECURITY = 101,
 };
 /* f5-03a: additive Win32 family, outside the native numbering (78-95 stay
  * free for F6). Only Win32-personality processes may use it. */
 enum ciuki_w32_syscall { CIUKI_SYS_W32 = 96 };
+
+/* sec-k01: frozen credential/session transport; user-security-kernel.md. */
+#define CIUKI_SECURITY_VERSION 1u
+#define CIUKI_UID_SYSTEM 0u
+#define CIUKI_UID_ADMINISTRATOR 500u
+#define CIUKI_UID_GUEST 501u
+#define CIUKI_UID_FIRST_USER 1000u
+#define CIUKI_UID_LAST_USER 0xfffffffeu
+#define CIUKI_UID_INVALID 0xffffffffu
+#define CIUKI_GID_SYSTEM 0u
+#define CIUKI_GID_ADMINISTRATORS 544u
+#define CIUKI_GID_USERS 545u
+#define CIUKI_GID_GUESTS 546u
+#define CIUKI_GID_INVALID 0xffffffffu
+#define CIUKI_SECURITY_GROUP_MAX 8u
+#define CIUKI_SECURITY_PROFILE_PATH_MAX 64u
+#define CIUKI_SECURITY_SESSION_MAX 4u
+#define CIUKI_CRED_INTERACTIVE 0x00000001u
+#define CIUKI_CRED_SAFE_RECOVERY 0x00000002u
+#define CIUKI_SECURITY_QUERY_SELF 1u
+#define CIUKI_SECURITY_QUERY_PROCESS 2u
+#define CIUKI_SECURITY_QUERY_PEER 3u
+#define CIUKI_SECURITY_SESSION_CREATE 4u
+#define CIUKI_SECURITY_SPAWN_CREDENTIAL 5u
+#define CIUKI_SECURITY_SESSION_END 6u
+#define CIUKI_SECURITY_SESSION_QUERY 7u
+#define CIUKI_SECURITY_SESSION_LAUNCH 8u
+#define CIUKI_SECURITY_LAUNCH_POLL 9u
+#define CIUKI_SECURITY_SECURE_ENTER 10u
+#define CIUKI_SECURITY_SECURE_LEAVE 11u
+#define CIUKI_SECURITY_SERVICE_CONNECT 12u
+#define CIUKI_SECURITY_SERVICE_ACCEPT 13u
+#define CIUKI_SECURITY_SERVICE_CANCEL 14u
+#define CIUKI_SECURITY_LAUNCH_DESKTOP 1u
+#define CIUKI_SECURITY_LAUNCH_W32SRV 2u
+#define CIUKI_SECURITY_LAUNCH_PREPARING 1u
+#define CIUKI_SECURITY_LAUNCH_READY 2u
+#define CIUKI_SECURITY_LAUNCH_RUNNING 3u
+#define CIUKI_SECURITY_LAUNCH_FAILED 4u
+#define CIUKI_SECURITY_SECURE_LOCK 1u
+#define CIUKI_SECURITY_SECURE_SAVER 2u
+#define CIUKI_SECURITY_SECURE_RESUME 3u
+#define CIUKI_SECURITY_SECURE_ATTENTION 4u
+#define CIUKI_SECURITY_CONSOLE_TRUSTED 1u
+#define CIUKI_SECURITY_CONSOLE_USER 2u
+#define CIUKI_SECURITY_ROLE_NONE 0u
+#define CIUKI_SECURITY_ROLE_LOGON 1u
+#define CIUKI_SECURITY_ROLE_LOGON_UI 2u
+#define CIUKI_SECURITY_ROLE_ACCOUNT 3u
+#define CIUKI_SECURITY_ROLE_OWNER 4u
+#define CIUKI_SECURITY_ROLE_REGISTRY 5u
+#define CIUKI_SECURITY_ROLE_DESKTOP 6u
+#define CIUKI_SECURITY_ROLE_W32SRV 7u
+#define CIUKI_SECURITY_ROLE_SETUP 8u
+#define CIUKI_SECURITY_SERVICE_AUTH 1u
+#define CIUKI_SECURITY_SERVICE_ACCOUNTS 2u
+#define CIUKI_SECURITY_SERVICE_OWNER 3u
+#define CIUKI_SECURITY_SERVICE_REGISTRY 4u
+#define CIUKI_SECURITY_SERVICE_LOGON 5u
+#define CIUKI_SECURITY_SERVICE_W32SRV 6u
+#define CIUKI_SECURITY_SERVICE_BODY_MAX 8192u
+#define CIUKI_SECURITY_SERVICE_PENDING_MAX 8u
+#define CIUKI_SECURITY_SERVICE_FRAGMENT_MAX 192u
+#define CIUKI_SECURITY_LAUNCH_TIMEOUT_MS 5000u
+#define CIUKI_SECURITY_SERVICE_TIMEOUT_MS 5000u
+#define CIUKI_SECURITY_END_BEGIN 0x00000001u
+#define CIUKI_SECURITY_END_COLLECT 0x00000002u
+#define CIUKI_SECURITY_SESSION_ACTIVE 1u
+#define CIUKI_SECURITY_SESSION_CLOSING 2u
+#define CIUKI_SECURITY_SESSION_DEAD 3u
+#pragma pack(push, 4)
+struct ciuki_credential {
+    uint32_t version;
+    uint32_t size;
+    uint32_t uid;
+    uint32_t primary_gid;
+    uint32_t group_count;
+    uint32_t groups[8];
+    uint32_t session_id;
+    uint32_t flags;
+    uint32_t reserved;
+};
+struct ciuki_security_profile {
+    uint32_t version;
+    uint32_t size;
+    uint32_t uid;
+    uint32_t flags;
+    uint32_t volume_id_lo;
+    uint32_t volume_id_hi;
+    uint32_t owner_generation_lo;
+    uint32_t owner_generation_hi;
+    uint32_t owner_key_lo;
+    uint32_t owner_key_hi;
+    uint32_t path_bytes;
+    uint32_t reserved;
+    char path[64];
+};
+struct ciuki_security_args {
+    uint32_t version;
+    uint32_t size;
+    uint32_t operation;
+    uint32_t flags;
+    uint32_t credential_address;
+    uint32_t spawn_address;
+    uint32_t session_id;
+    uint32_t target_pid;
+    int32_t endpoint_fd;
+    uint32_t profile_address;
+    uint32_t output_address;
+    uint32_t output_bytes;
+    uint32_t result;
+    uint32_t state;
+    uint32_t reserved[2];
+};
+struct ciuki_security_launch {
+    uint32_t version;
+    uint32_t size;
+    uint32_t purpose;
+    uint32_t flags;
+    uint32_t session_id;
+    uint32_t session_generation;
+    uint32_t launch_id;
+    uint32_t launch_generation;
+    uint32_t pid;
+    uint32_t process_generation;
+    int32_t control_fd;
+    int32_t child_ready_fd;
+    int32_t child_console_fd;
+    int32_t child_display_fd;
+    int32_t child_input_fd;
+    int32_t child_service_fd;
+    uint32_t service_generation;
+    uint32_t grant_generation;
+    uint32_t state;
+    int32_t error;
+    uint32_t activation_console_epoch;
+    uint32_t activation_authentication_epoch;
+    uint32_t reserved[2];
+};
+struct ciuki_security_console {
+    uint32_t version;
+    uint32_t size;
+    uint32_t session_id;
+    uint32_t session_generation;
+    uint32_t console_generation;
+    uint32_t reason;
+    uint32_t grant_generation;
+    uint32_t restore_cookie_lo;
+    uint32_t restore_cookie_hi;
+    uint32_t state;
+    uint32_t authentication_required;
+    uint32_t console_epoch;
+    uint32_t authentication_epoch;
+    uint32_t reserved[3];
+};
+struct ciuki_security_link {
+    uint32_t version;
+    uint32_t size;
+    uint32_t service;
+    uint32_t flags;
+    int32_t endpoint_fd;
+    uint32_t endpoint_generation;
+    uint32_t server_role;
+    uint32_t peer_pid;
+    uint32_t peer_process_generation;
+    uint32_t peer_role;
+    uint32_t session_id;
+    uint32_t service_generation;
+    uint32_t request_id_lo;
+    uint32_t request_id_hi;
+    uint32_t reserved[2];
+};
+#pragma pack(pop)
 
 /* f2-39: diagnostic markers, no copied wire record. See execution-abi.md. */
 #define CIUKI_LAUNCH_STATUS 0u
@@ -1114,6 +1291,9 @@ _Static_assert(sizeof(struct ciuki_time_zone) == 208, "time zone ABI");
 
 /* /dev/media: v2 adds per-drive types; v1 remains accepted at its old size.
  * removable_mask includes ejectable USB and optical media; type[] distinguishes them.
+ * fx-emptydrive: a CD-ROM drive owns its letter from boot; type[] reports
+ * CIUKI_MEDIA_OPTICAL there with or without a disc, removable_mask has the
+ * bit (and generation[] the medium) only while a disc is mounted.
  * A removal names a generation and ejects the physical USB device or CD. */
 #define CIUKI_MEDIA_VERSION 2u
 #define CIUKI_MEDIA_VERSION_1 1u
@@ -1187,6 +1367,20 @@ struct ciuki_media_remove {
  * CIUKI_MEDIA_SPACE_COUNTING: the free count is still being computed in the
  * background (FAT32 FSInfo unknown) and free_clusters is its upper bound. */
 #define MEDIA_GET_SPACE 0x4d06u
+/* Read-only mount diagnostics; slot enumeration also includes refused volumes.
+ * Unused slots return ENOENT. Input: version, size, slot; other fields zero. */
+#define MEDIA_GET_NTFS_STATUS 0x4d22u
+#define CIUKI_MEDIA_NTFS_SLOTS 8u
+struct ciuki_ntfs_status {
+    uint32_t version;
+    uint32_t size;
+    uint32_t slot;
+    uint32_t disk;
+    uint32_t partition;
+    int32_t error;
+    char reason[128];
+};
+_Static_assert(sizeof(struct ciuki_ntfs_status)==152, "NTFS status ABI");
 #define CIUKI_MEDIA_SPACE_COUNTING 1u
 struct ciuki_media_space {
     uint32_t version;
@@ -2196,6 +2390,161 @@ struct ciuki_scandisk {
     char first_problem[64]; /* 136: path of the first damaged entry */
 };
 _Static_assert(sizeof(struct ciuki_scandisk) == 200, "ScanDisk report ABI");
+/* ---- sec-sysvc: SYSTEM services on call 99 (user-security-kernel.md
+ * "SYSTEM services and logs", K-Q4). The kernel checks the caller's retained
+ * subject, then acts as SYSTEM on fixed targets; a caller-chosen input is read
+ * as the caller and no SYSTEM descriptor is handed out. EPERM: not an
+ * administrator (or SYSTEM). EDX is the exact record size.
+ * BOOT_CONFIG SET (administrators): C:\SYSTEM\BOOT.CFG becomes `length`
+ * bytes of `text` (printable ASCII, tab, CR, LF; the loader's 127 at most);
+ * the previous text is restored when the write fails.
+ * LOG: MACHINE scope is C:\SYSTEM\LOGS. LIST and READ are for administrators
+ * (Event Viewer model); its files are written by SYSTEM, except APPEND of the
+ * maintenance reports SCANDISK.LOG and SFC.LOG by an administrator. USER scope
+ * is the caller's own log folder, <profile>\Local Settings\Application Data\
+ * CiukiOS\Logs, listed, read and written as the caller; a session without a
+ * profile (the interim administrator session of a first boot) uses
+ * C:\SYSTEM\LOGS\Users\u<8 hex uid>. Names are 8.3 of [A-Za-z0-9_-]; MACHINE
+ * names may also be Users/u<8 hex>/NAME. LIST returns the index-th file
+ * (ENOENT past the last); READ copies `bytes` (at most DATA_MAX) from
+ * `offset`; APPEND starts the file over when it would pass `limit`; REPLACE
+ * rewrites it. `total` returns the file size.
+ * DRIVER_PACK (administrators): INSTALL copies the files named by the sealed
+ * package manifest (the exact manifest.ndp image) from `root`, read as the
+ * caller, into C:\SYSTEM\DRIVERS\<package>, verifying every byte; REMOVE
+ * deletes the adapter's installed package once its host is stopped. The
+ * result is 0 or -errno; `reason` says what happened in words.
+ * SFC_RESTORE (administrators): System File Checker's "Restore file" for any
+ * file of the sealed baseline C:\SYSTEM\SFC.LST: `source` + `path`, read as
+ * the caller, must have the baseline's size and SHA-256 (EILSEQ otherwise;
+ * ENOENT: not in the baseline); the current file is first copied to
+ * C:\SYSTEM\Helpdesk\SFC, then the original replaces it in one rename. */
+#define CIUKI_RECOVERY_BOOT_CONFIG 5u
+#define CIUKI_RECOVERY_LOG 6u
+#define CIUKI_RECOVERY_DRIVER_PACK 7u
+#define CIUKI_RECOVERY_SFC_RESTORE 8u
+#define CIUKI_BOOT_CONFIG_VERSION 1u
+#define CIUKI_BOOT_CONFIG_SET 1u
+#define CIUKI_BOOT_CONFIG_MAX 127u
+struct ciuki_boot_config {
+    uint32_t version; /* 0 */
+    uint32_t size; /* 4 */
+    uint32_t action; /* 8: CIUKI_BOOT_CONFIG_SET */
+    uint32_t length; /* 12: bytes of text */
+    char text[128]; /* 16 */
+};
+_Static_assert(sizeof(struct ciuki_boot_config) == 144, "boot configuration ABI");
+#define CIUKI_SYSTEM_LOG_VERSION 1u
+#define CIUKI_SYSTEM_LOG_LIST 1u
+#define CIUKI_SYSTEM_LOG_READ 2u
+#define CIUKI_SYSTEM_LOG_APPEND 3u
+#define CIUKI_SYSTEM_LOG_REPLACE 4u
+#define CIUKI_SYSTEM_LOG_MACHINE 1u
+#define CIUKI_SYSTEM_LOG_USER 2u
+#define CIUKI_SYSTEM_LOG_NAME_MAX 48u
+#define CIUKI_SYSTEM_LOG_DATA_MAX 65536u
+#define CIUKI_SYSTEM_LOG_LIMIT 65536u
+#define CIUKI_SYSTEM_LOG_LIMIT_MAX 1048576u
+struct ciuki_system_log {
+    uint32_t version; /* 0 */
+    uint32_t size; /* 4 */
+    uint32_t action; /* 8: CIUKI_SYSTEM_LOG_* */
+    uint32_t scope; /* 12: MACHINE or USER */
+    uint32_t index; /* 16: LIST */
+    uint32_t offset; /* 20: READ */
+    uint32_t buffer; /* 24: READ, APPEND, REPLACE: data address */
+    uint32_t bytes; /* 28: READ: capacity in, bytes out; APPEND, REPLACE: bytes */
+    uint32_t total; /* 32: out: the file's size */
+    uint32_t limit; /* 36: APPEND: 0 is CIUKI_SYSTEM_LOG_LIMIT */
+    uint32_t reserved[2]; /* 40 */
+    char name[48]; /* 48: NUL terminated; LIST returns it */
+};
+_Static_assert(sizeof(struct ciuki_system_log) == 96, "system log ABI");
+#define CIUKI_DRIVER_PACK_JOB_VERSION 1u
+#define CIUKI_DRIVER_PACK_INSTALL 1u
+#define CIUKI_DRIVER_PACK_REMOVE 2u
+#define CIUKI_DRIVER_PACK_MANIFEST_BYTES 48088u
+#define CIUKI_DRIVER_PACK_SOURCE_BYTES 192u
+#define CIUKI_DRIVER_PACK_FILES 32u
+struct ciuki_driver_pack_job {
+    uint32_t version; /* 0 */
+    uint32_t size; /* 4 */
+    uint32_t action; /* 8: INSTALL or REMOVE */
+    uint32_t manifest; /* 12: INSTALL: address of the sealed manifest image */
+    uint32_t manifest_bytes; /* 16: CIUKI_DRIVER_PACK_MANIFEST_BYTES */
+    uint32_t sources; /* 20: INSTALL: one 192-byte path per manifest file, relative to root */
+    uint32_t source_bytes; /* 24: file count times 192 */
+    uint32_t reserved; /* 28 */
+    uint32_t bus; /* 32: REMOVE: the adapter */
+    uint32_t slot; /* 36 */
+    uint32_t function; /* 40 */
+    uint32_t vendor; /* 44 */
+    uint32_t device; /* 48 */
+    uint32_t sub_vendor; /* 52 */
+    uint32_t sub_device; /* 56 */
+    uint32_t revision; /* 60 */
+    char root[256]; /* 64: INSTALL: the package folder, a native path */
+    char reason[160]; /* 320: out: the outcome in words */
+};
+_Static_assert(sizeof(struct ciuki_driver_pack_job) == 480, "driver pack job ABI");
+#define CIUKI_SFC_RESTORE_VERSION 1u
+struct ciuki_sfc_restore {
+    uint32_t version; /* 0 */
+    uint32_t size; /* 4 */
+    uint32_t reserved[2]; /* 8 */
+    char path[160]; /* 16: the baseline path, as /System/VMM.ELF */
+    char source[256]; /* 176: the folder holding the originals, a native path */
+};
+_Static_assert(sizeof(struct ciuki_sfc_restore) == 432, "SFC restore ABI");
+/* ---- end sec-sysvc ---- */
+/* ---- sec-sysvc2: SYSTEM jobs and sealed boot settings on call 99
+ * (user-security-kernel.md, sec-sysvc2 amendment). Same model as the
+ * services above: the kernel checks the caller's retained subject, then acts
+ * as SYSTEM on fixed targets.
+ * JOB (every live session subject, administrators, standard users, Guest,
+ * and SYSTEM): scheduled system maintenance runs as SYSTEM, never as the
+ * session user (Windows XP runs it under LocalSystem). STARTUP_REPORT appends
+ * every ScanDisk check this start ran (REPORT) to C:\SYSTEM\LOGS\SCANDISK.LOG,
+ * once per start and drive, formatted by the kernel from its own record; no
+ * caller data reaches the log. `done` returns the reports this call appended.
+ * SETTING SET (administrators, or SYSTEM): a sealed boot setting, a file the
+ * kernel or the loader reads at the next start, becomes `length` bytes read
+ * from `buffer`: HWPROFILES C:\SYSTEM\HWPROF.CFG (printable text, tab, CR,
+ * LF, at most SETTING_MAX), PERFORMANCE C:\SYSTEM\SETTINGS\performance.cfg
+ * (a complete valid performance record), ACCEL_RETRY the display retry
+ * request C:\SYSTEM\SETTINGS\accel-retry.cfg (exactly
+ * "driver=<id>\npci=<vvvv>:<dddd>\n" of DM8: id 1..15 of [a-z0-9_-],
+ * lowercase hex). EINVAL otherwise; the previous text is restored when the
+ * write fails. */
+#define CIUKI_RECOVERY_JOB 9u
+#define CIUKI_RECOVERY_SETTING 10u
+#define CIUKI_SYSTEM_JOB_VERSION 1u
+#define CIUKI_SYSTEM_JOB_STARTUP_REPORT 1u
+struct ciuki_system_job {
+    uint32_t version; /* 0 */
+    uint32_t size; /* 4 */
+    uint32_t job; /* 8: CIUKI_SYSTEM_JOB_* */
+    uint32_t done; /* 12: out: work done by this call (reports appended) */
+    uint32_t reserved[4]; /* 16: zero */
+};
+_Static_assert(sizeof(struct ciuki_system_job) == 32, "system job ABI");
+#define CIUKI_SYSTEM_SETTING_VERSION 1u
+#define CIUKI_SYSTEM_SETTING_SET 1u
+#define CIUKI_SYSTEM_SETTING_HWPROFILES 1u
+#define CIUKI_SYSTEM_SETTING_PERFORMANCE 2u
+#define CIUKI_SYSTEM_SETTING_ACCEL_RETRY 3u
+#define CIUKI_SYSTEM_SETTING_MAX 24575u
+struct ciuki_system_setting {
+    uint32_t version; /* 0 */
+    uint32_t size; /* 4 */
+    uint32_t action; /* 8: CIUKI_SYSTEM_SETTING_SET */
+    uint32_t setting; /* 12: HWPROFILES, PERFORMANCE or ACCEL_RETRY */
+    uint32_t buffer; /* 16: address of the text */
+    uint32_t length; /* 20: bytes of text */
+    uint32_t reserved[2]; /* 24: zero */
+};
+_Static_assert(sizeof(struct ciuki_system_setting) == 32, "system setting ABI");
+/* ---- end sec-sysvc2 ---- */
 
 struct ciuki_spawn_fd {
     int32_t source; /* 0 */
@@ -2474,6 +2823,9 @@ enum { CIUKI_ACCEL_QUERY, CIUKI_ACCEL_COPY, CIUKI_ACCEL_FILL,
 #define CIUKI_ACCEL_FENCE 11u
 #define CIUKI_ACCEL_QUERY_COMMANDS 12u
 #define CIUKI_ACCEL_QUERY_SURFACE 13u
+/* Revocable offscreen cache epoch. Offscreen COPY/WRITE background and VIDEO
+ * target reserved[0] must equal this value; other reserved words stay zero. */
+#define CIUKI_ACCEL_CACHE_EPOCH 14u
 #define CIUKI_BATCH_VERSION 1u
 #define CIUKI_BATCH_MAGIC 826426435u
 #define CIUKI_BATCH_MAX_BYTES 1048576u
@@ -2563,7 +2915,7 @@ struct ciuki_batch_target {
     uint32_t handle; /* 4 */
     uint32_t generation; /* 8 */
     uint32_t flags; /* 12 */
-    uint32_t reserved[4]; /* 16 */
+    uint32_t reserved[4]; /* 16; VIDEO: cache epoch in [0], [1..3]=0 */
 };
 _Static_assert(sizeof(struct ciuki_batch_target) == 32, "ciuki_batch_target size");
 struct ciuki_batch_clip {
@@ -2862,7 +3214,7 @@ struct ciuki_dosvm_policy {
 #define CIUKI_DOSVM_CIUKIDOS 0u
 #define CIUKI_DOSVM_FREEDOS13 1u
 #define CIUKI_DOSVM_UNIFIED 2u /* sole CiukiDOS K2043 fork, DFV2 binding and native IFS */
-#define CIUKI_DOSVM_GAME_COUNT 4u
+#define CIUKI_DOSVM_GAME_COUNT 5u
 /* f3-46 CREATE launch.memory: 0 demand-zero, pageable pool (default); 1 the
  * per-game compatibility mode, eager and resident (Windows 98 PIF "XMS/EMS
  * memory locked"). Any other value returns EINVAL. */
@@ -2876,6 +3228,8 @@ struct ciuki_dosvm_policy {
 #define CIUKI_DOSVM_FULLSCREEN_REFUSED 16u /* STATUS.reason is positive errno */
 #define CIUKI_DOSVM_SAVE_FULL 64u /* STATUS.changed: game data quota/disk space exhausted */
 #define CIUKI_DOSVM_PROGRAM_RETURNED 128u /* armed EXEC returned to its shell */
+#define CIUKI_DOSVM_GRAPHICS 256u /* STATUS.changed: the guest display is in a graphics mode (VBE, BIOS or programmed VGA) */
+#define CIUKI_DOSVM_FULLSCREEN_HOTKEY 512u /* STATUS.changed: the last full-screen entry or return was the user's Alt+Enter */
 #define CIUKI_DOSVM_BOOTING 0u
 #define CIUKI_DOSVM_RUNNING 1u
 #define CIUKI_DOSVM_STOPPED 2u
@@ -3376,7 +3730,7 @@ _Static_assert(sizeof(struct ciuki_w32_header) == 16, "ciuki_w32_header frozen s
  * All dispatch runs on the existing display worker. State enum ordinals follow
  * the native render3d contract; unknown state is rejected before submission. */
 #define W32_RENDER3D 514u
-#define CIUKI_R3D_VERSION 2u
+#define CIUKI_R3D_VERSION 3u
 #define CIUKI_R3D_QUERY 1u
 #define CIUKI_R3D_OPEN 2u
 #define CIUKI_R3D_CLOSE 3u
@@ -3389,6 +3743,7 @@ _Static_assert(sizeof(struct ciuki_w32_header) == 16, "ciuki_w32_header frozen s
 #define CIUKI_R3D_WAIT 10u
 #define CIUKI_R3D_PRESENT 11u
 #define CIUKI_R3D_D16 1u
+#define CIUKI_R3D_D24S8 2u
 #define CIUKI_R3D_ARGB8888 1u
 #define CIUKI_R3D_RGB565 4u
 #define CIUKI_R3D_ARGB4444 8u
@@ -3411,6 +3766,8 @@ _Static_assert(sizeof(struct ciuki_w32_header) == 16, "ciuki_w32_header frozen s
 #define CIUKI_R3D_DEPTH_WRITE 16u
 #define CIUKI_R3D_COPY 32u
 #define CIUKI_R3D_TEXTURE1 64u
+#define CIUKI_R3D_STENCIL_TEST 128u
+#define CIUKI_R3D_CLEAR_STENCIL 256u
 #define CIUKI_R3D_LESS 0u
 #define CIUKI_R3D_NEVER 1u
 #define CIUKI_R3D_ALWAYS 2u
@@ -3451,6 +3808,17 @@ _Static_assert(sizeof(struct ciuki_w32_header) == 16, "ciuki_w32_header frozen s
 #define CIUKI_R3D_RESOURCE_D16 2u
 #define CIUKI_R3D_RESOURCE_TEXTURE 3u
 #define CIUKI_R3D_RESOURCE_LINEAR_COLOR 4u
+#define CIUKI_R3D_RESOURCE_D24S8 5u
+/* RGB565 resources keep canonical ARGB8888 shadows; no alpha attachment. */
+#define CIUKI_R3D_RESOURCE_COLOR565 6u
+#define CIUKI_R3D_RESOURCE_LINEAR565 7u
+/* Stencil operations; zero initialized state keeps the stored value. */
+#define CIUKI_R3D_STENCIL_KEEP 0u
+#define CIUKI_R3D_STENCIL_ZERO 1u
+#define CIUKI_R3D_STENCIL_REPLACE 2u
+#define CIUKI_R3D_STENCIL_INCR 3u
+#define CIUKI_R3D_STENCIL_DECR 4u
+#define CIUKI_R3D_STENCIL_INVERT 5u
 
 struct ciuki_r3d_sampler {
     uint32_t combine;
@@ -3478,6 +3846,16 @@ struct ciuki_r3d_vertex {
     int32_t u;
     int32_t v;
 };
+struct ciuki_r3d_stencil {
+    uint32_t function;
+    uint32_t reference;
+    uint32_t read_mask;
+    uint32_t write_mask;
+    uint32_t fail;
+    uint32_t zfail;
+    uint32_t zpass;
+    uint32_t clear;
+};
 struct ciuki_r3d_draw {
     uint32_t flags;
     uint32_t target;
@@ -3492,6 +3870,7 @@ struct ciuki_r3d_draw {
     uint32_t flat_color[256];
     int32_t uv1[768][2];
     struct ciuki_r3d_vertex vertices[768];
+    struct ciuki_r3d_stencil stencil;
 };
 struct ciuki_r3d_caps {
     uint32_t version;
@@ -3526,6 +3905,8 @@ struct ciuki_r3d_caps {
  * Completed receipts authenticate generation/context/ordinal (sequence is then
  * informational). PRESENT: exact existing lease token, owned linear resource,
  * dimensions/pitch, completed fence; no user payload or framebuffer mapping.
+ * D24S8 canonical words: increasing Z in bits 23:0, S in bits 31:24.
+ * Vertex/clear Z is 0..65535 for D16, 0..16777215 for D24S8.
  * Other actions require the queried generation. result=1 means success;
  * error is positive native errno. No backend packets or VRAM addresses. */
 struct ciuki_w32_render3d_args {

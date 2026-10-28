@@ -291,7 +291,7 @@ def main():
                     GUEST_NO_X87="1", GUEST_PLAY_MS="8000")
     end = re.search(r"^H61 PLAY END WOLF3D (.*)$", log, re.M)
     play = fields(end.group(1)) if end else {}
-    last = re.findall(r"^H61 PLAY t=(\d+) mode=(\w+) vbe=\w+ unchained=(\d).* xms_kb=(\d+) ems_kb=(\d+)$", log, re.M)
+    last = re.findall(r"^H61 PLAY t=(\d+) mode=(\w+) vbe=\w+ unchained=(\d).* xms_kb=(\d+) ems_kb=(\d+)(?: |$)", log, re.M)
     check(code == 0 and play.get("returned") == "0" and play.get("stopped") == "0" and last and
           int(last[-1][0]) >= 8000 and last[-1][1] == "13" and last[-1][2] == "1",
           f"wolf3d: still in its game graphics after 8 s (play {play}, last sample {last[-1:] or None})")

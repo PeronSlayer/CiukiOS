@@ -5,7 +5,8 @@
 struct rv { char *name; enum reg_type type; void *data; size_t size; struct rv *next; };
 struct rk { char *path; struct rv *values; struct rk *next; };
 struct rt { struct rk *keys; char *comments; uint64_t generation; unsigned nk, nv; };
-struct reg_root { const char *name; char *directory; struct rt *tree; char *snapshot; size_t snapshot_size; };
+struct reg_remote;
+struct reg_root { const char *name; char *directory; struct rt *tree; char *snapshot; size_t snapshot_size; struct reg_remote *remote; };
 int reg_fail(int);
 void reg_tree_free(struct rt *);
 struct rt *reg_tree_new(const char *);

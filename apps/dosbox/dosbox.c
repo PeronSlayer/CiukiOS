@@ -4,7 +4,7 @@
  * this process forwards window focus and input, reports damage and closes
  * the VM with the window. Its death terminates the VM through the
  * supervisor. Protocol: apps/desktop/protocol.h (v2 close requests).
- * Usage: dosbox [--channel-fd=N] [--name=TITLE] [COMMAND...]: the optional
+ * Usage: dosbox [--channel-fd=N] [--name=TITLE] [--network=off|ipx] [COMMAND...]: the optional
  * command (its words joined by spaces) is typed at the DOS prompt once the
  * VM is running and the window has the focus (autorun.h; Programs > Games).
  * SPDX-License-Identifier: MIT */
@@ -162,12 +162,79 @@ static void dosbox_create_work(void *arg)
 }
 #define DOSBOX_CREATE_FIRST_MS 20
 #define DOSBOX_CREATE_POLL_MS 100
+/* fx-doswin3 round 3: the composed acknowledgement. A frame whose DAMAGE
+ * finds no marker outstanding is followed by the scene-less DESK_GFX_FRAME
+ * (the marker); the desktop's DESK_GFX_PRESENTED says that frame is on
+ * screen (or was not needed). The DOS Box converts one more frame meanwhile
+ * (the two stages overlap), then waits for the answer: it is at most one
+ * frame ahead of the desktop and converts no frame the desktop would
+ * coalesce away. It waits only once the desktop has answered one
+ * (ack_live), and never longer than this: the desktop is not a dependency
+ * of the VM. */
+#define DOSBOX_ACK_MS 100
 static int name_valid(const char *name)
 {
     size_t n = strlen(name);
     if (!n || n > CIUKI_DOSVM_NAME_MAX) return 0;
     for (size_t i = 0; i < n; i++) if (name[i] < 32 || name[i] > 126) return 0;
     return 1;
+}
+/* fx-dosfull (owner decision 2026-10-27): every DOS game starts full screen,
+ * as Windows 98 runs "a game that uses graphics modes" full screen (Resource
+ * Kit ch. 25, "Running Games"; Screen tab "Usage"). The profile's usage says
+ * when the session enters full screen by itself: GRAPHICS at the program's
+ * first graphics mode (STATUS CIUKI_DOSVM_GRAPHICS), FULL and EXCLUSIVE once
+ * the program shows its first frame. A refusal (QEMU's standard VGA, f3-29;
+ * a quarantined BIOS video family) keeps the game in its window with no
+ * message, one record and no retry in this session, and changes no setting.
+ * A kernel return the user did not ask for (a VBE mode change, Alt+Tab, the
+ * window losing the focus) enters again once the window has the focus; a
+ * failed session (watchdog, display error) does not. */
+#define DOSBOX_AUTO_RETRY_MS 1000u   /* after a busy display or a focus race */
+#define DOSBOX_AUTO_ENTRIES 16u      /* automatic entries per session (mode changes) */
+/* After a return the DOS Box did not ask for, Alt+Tab or another window takes
+ * the focus a moment later (the kernel's synthetic Alt+Tab reaches the
+ * desktop after the return); entering again before that would undo it. */
+#define DOSBOX_AUTO_RETURN_MS 1000u
+static struct { int refused, stopped; unsigned entries; uint64_t next_at; } fs_auto;
+static int fs_graphics;              /* the last STATUS: a graphics mode */
+/* 1 entered; 0 the kernel kept the window (DISPLAY_FULLSCREEN_WINDOWED is
+ * success with the session still windowed); -1 busy or not focused (try
+ * again); -2 refused with an error. errno is kept for the caller. */
+static int fullscreen_enter(uint32_t id, uint32_t generation)
+{
+    struct ciuki_dosvm_command c;
+    command(&c,id,generation); c.focused=1;
+    if (ciuki_dosvm(CIUKI_DOSVM_FULLSCREEN,&c))
+        return errno==EBUSY || errno==EACCES || errno==EAGAIN || errno==EINTR ? -1 : -2;
+    command(&c,id,generation);
+    if (ciuki_dosvm(CIUKI_DOSVM_STATUS,&c)) return -2;
+    return (c.changed&CIUKI_DOSVM_FULL_SCREEN) ? 1 : 0;
+}
+/* The user's own switch is remembered per program (Windows 98 reopens a
+ * program in the mode it last used). Only the usage field is stored. */
+static void remember_usage(uint32_t id, uint32_t generation, int fullscreen, const char *source)
+{
+    uint32_t before=window.profile.screen, next=dosbox_usage_after(before,fullscreen,fs_graphics);
+    if (next==before) return;
+    window.profile.screen=next; window.draft.screen=next;
+    int saved=!dosbox_profile_usage_save(window.profile.key,next);
+    fprintf(stderr,"dosbox: screen usage vm=%u generation=%u usage=%s source=%s saved=%d\n",
+            id,generation,dosbox_usage_name(next),source,saved);
+    if ((before==DOSBOX_SCREEN_EXCLUSIVE)!=(next==DOSBOX_SCREEN_EXCLUSIVE)) {
+        struct ciuki_dosvm_command c;
+        command(&c,id,generation); c.focused=next==DOSBOX_SCREEN_EXCLUSIVE || !window.profile.background;
+        (void)ciuki_dosvm(CIUKI_DOSVM_BACKGROUND,&c);
+    }
+}
+/* The toolbar's Full screen and the window menu's: the user asked, so a
+ * refusal is shown (Alt+Enter's own refusal stays silent in the kernel). */
+static int user_fullscreen(uint32_t id, uint32_t generation, const char *source)
+{
+    int r=fullscreen_enter(id,generation);
+    if (r>0) { remember_usage(id,generation,1,source); return 1; }
+    db_notice(&window,"Full screen is unavailable on this display.");
+    return 0;
 }
 static int window_action(int action, uint32_t id, uint32_t generation, int fullscreen)
 {
@@ -194,11 +261,14 @@ static int window_action(int action, uint32_t id, uint32_t generation, int fulls
     } else if (action==DB_FULLSCREEN) {
         (void)dos_clip_action(0);
         if (window.marking) db_end_mark(&window,id,generation);
-        command(&c,id,generation); c.focused=!fullscreen;
-        if (ciuki_dosvm(CIUKI_DOSVM_FULLSCREEN,&c)) db_notice(&window,"Full screen is unavailable on this display.");
+        if (!fullscreen) (void)user_fullscreen(id,generation,"toolbar");
+        else {
+            command(&c,id,generation);
+            if (ciuki_dosvm(CIUKI_DOSVM_FULLSCREEN,&c)) db_notice(&window,"Full screen is unavailable on this display.");
+        }
     } else if (action==DB_APPLY) {
         if (dosbox_profile_save(&window.profile)) db_notice(&window,"Cannot save properties.");
-        command(&c,id,generation); c.focused=window.profile.screen==2 || !window.profile.background;
+        command(&c,id,generation); c.focused=window.profile.screen==DOSBOX_SCREEN_EXCLUSIVE || !window.profile.background;
         if (ciuki_dosvm(CIUKI_DOSVM_BACKGROUND,&c) || db_policy(&window,id,generation)) return -1;
     }
     return 0;
@@ -223,9 +293,15 @@ static int paste_step(uint32_t id, uint32_t generation, int focused)
 }
 int main(int argc, char **argv)
 {
+#ifdef __i386__
+    /* fx-dosfull, as fx-acc1 for the desktop: every write() is its own
+     * "[console]" line and newlib's unbuffered stderr wrote each fprintf
+     * conversion separately; every DOS Box record ends with a newline. */
+    setvbuf(stderr, NULL, _IOLBF, BUFSIZ);
+#endif
     int channel = 3, result = 1, pause_background = 0, properties_requested=0;
     const char *name = "CiukiDOS";
-    const char *kernel_override=NULL;
+    const char *kernel_override=NULL, *network_override=NULL;
     char typed[DOSBOX_COMMAND_MAX + 1] = "";
     size_t typed_length = 0;
     for (int i = 1; i < argc; i++) {
@@ -235,6 +311,7 @@ int main(int argc, char **argv)
             channel = (int)n;
         } else if (!strncmp(argv[i], "--name=", 7)) name = argv[i] + 7;
         else if (!strncmp(argv[i],"--dos-kernel=",13)) kernel_override=argv[i]+13;
+        else if (!strncmp(argv[i],"--network=",10)) network_override=argv[i]+10;
         else if (!strcmp(argv[i], "--pause-background")) pause_background = 1;
         else if (!strcmp(argv[i], "--properties")) properties_requested=1;
         else if (!strncmp(argv[i], "--", 2)) return 2;
@@ -253,7 +330,10 @@ int main(int argc, char **argv)
     if (dosbox_profile_load(&window.profile)<0) db_notice(&window,"Invalid program properties. Using defaults.");
     if (pause_background) window.profile.background=0;
     if (properties_requested) db_properties(&window);
-    snprintf(typed,sizeof(typed),"%s",window.profile.command); typed_length=strlen(typed);
+    /* A stored command line replaces the launcher's; an empty one (a profile
+     * that only remembers the screen usage, fx-dosfull) keeps it. */
+    if (window.profile.command[0] || !typed_length) { snprintf(typed,sizeof(typed),"%s",window.profile.command); typed_length=strlen(typed); }
+    else snprintf(window.profile.command,sizeof(window.profile.command),"%s",typed);
     if (typed_length || window.profile.batch[0] || window.profile.directory[0]) {
         int n = dosbox_profile_keys(&window.profile, autorun, DOSBOX_PROFILE_KEYS);
         if (n <= 0) { fprintf(stderr, "dosbox: cannot type '%s' at the DOS prompt\n", typed); return 2; }
@@ -262,6 +342,14 @@ int main(int argc, char **argv)
     unsigned kernel=CIUKI_DOSVM_UNIFIED;
     unsigned memory=window.profile.memory;
     unsigned network=game ? dosbox_network_load(game) : CIUKI_DOSVM_NETWORK_OFF;
+    /* A shortcut may explicitly start a multiplayer session, including a
+     * locally installed game outside the bundled catalog. Never persist a
+     * command-line override in another program's per-game preferences. */
+    if (network_override) {
+        if (!strcmp(network_override,"ipx")) network=CIUKI_DOSVM_NETWORK_IPX;
+        else if (!strcmp(network_override,"off")) network=CIUKI_DOSVM_NETWORK_OFF;
+        else return 2;
+    }
     /* Runtime selector retained for existing test callers; it never writes. */
     if (kernel_override && strcmp(kernel_override,"unified")) return 2;
     size_t len = strlen(name);
@@ -414,17 +502,20 @@ int main(int argc, char **argv)
         }
     }
     if (id) {
-        command(&c,id,generation); c.focused=window.profile.screen==2 || !window.profile.background;
+        command(&c,id,generation); c.focused=window.profile.screen==DOSBOX_SCREEN_EXCLUSIVE || !window.profile.background;
         if (ciuki_dosvm(CIUKI_DOSVM_BACKGROUND,&c)) goto done;
         if (db_policy(&window,id,generation)) goto done;
     }
-    int running = 1, fullscreen = 0, fullscreen_painted = 0;
-    int startup_fullscreen=window.profile.screen!=0, returned_seen=0, kept_early=0;
+    int running = 1, fullscreen = 0, fullscreen_painted = 0, fullscreen_seen = 0;
+    int returned_seen=0, kept_early=0;
+    uint32_t ack_serial=0, ack_wait=0; uint64_t ack_until=0; unsigned ack_ahead=0;
+    int ack_supported=1, ack_live=0, drained=0;
     while (running) {
         dos_clip_vm(id,generation,server);
+        drained=0;
         for (unsigned budget = 0; budget < 32; budget++) {
             int n = dos_clip_recv(&m);
-            if (n < 0 && (errno == EAGAIN || errno == EINTR)) break;
+            if (n < 0 && (errno == EAGAIN || errno == EINTR)) { drained = errno == EAGAIN; break; }
             if (n <= 0) { running = 0; break; }               /* desktop gone */
             struct desk_packet packet;
             int valid = m.sender_pid && (!server || server == m.sender_pid) &&
@@ -442,6 +533,12 @@ int main(int argc, char **argv)
             }
             if (packet.opcode == DESK_END_SESSION) {
                 if (packet.focused) { running = 0; break; }  /* every program agreed: close (forced if still running) */
+                continue;
+            }
+            if (packet.opcode == DESK_GFX_PRESENTED) {
+                if (packet.serial == ack_wait) { ack_wait = 0; ack_ahead = 0; }
+                if (packet.result == -EPERM) ack_supported = ack_live = 0;   /* a desktop without the DOS window form */
+                else ack_live = 1;
                 continue;
             }
             if (packet.opcode == DESK_CLOSE_REQUEST) {
@@ -469,11 +566,14 @@ int main(int argc, char **argv)
                 if (window.marking) db_end_mark(&window,id,generation);
                 window.properties=window.font_menu=0; window.dirty=1;
                 (void)dos_clip_action(0);
-                command(&c,id,generation); c.focused=!fullscreen;
-                if (ciuki_dosvm(CIUKI_DOSVM_FULLSCREEN,&c)) {
-                    snprintf(fullscreen_notice,sizeof(fullscreen_notice),"%s",strerror(errno));
-                    fullscreen_notice_until=now_ms()+3000;
-                    notice_painted=0;
+                if (!fullscreen) (void)user_fullscreen(id,generation,"menu");
+                else {
+                    command(&c,id,generation);
+                    if (ciuki_dosvm(CIUKI_DOSVM_FULLSCREEN,&c)) {
+                        snprintf(fullscreen_notice,sizeof(fullscreen_notice),"%s",strerror(errno));
+                        fullscreen_notice_until=now_ms()+3000;
+                        notice_painted=0;
+                    }
                 }
             } else if (packet.opcode == DESK_CONFIGURE) {
                 if (packet.width != CIUKI_DOSVM_WIDTH || packet.height != CIUKI_DOSVM_HEIGHT) goto done;
@@ -548,6 +648,16 @@ int main(int argc, char **argv)
          * changed pixels through the same viewport as ordinary VGA damage. */
         if (dos_clip_dirty()) window.dirty=1;
         if (failure) goto panel;
+        /* The last frame is not on screen yet: serve the channel (its
+         * PRESENTED reply, input) instead of converting another frame. */
+        if (ack_wait && ack_live && ack_ahead) {
+            uint64_t now=now_ms();
+            if (now<ack_until) {
+                if (drained) { struct pollfd p={channel,POLLIN,0}; (void)poll(&p,1,(int)(ack_until-now)); }
+                continue;
+            }
+            ack_wait=0; ack_ahead=0;
+        }
         /* Producer events and the VM's fractional VGA deadline determine
          * the frame rate. This timeout bounds input/lifecycle service only. */
         command(&c,id,generation); c.wait.timeout_ms=CIUKI_DOSVM_WAIT_MAX_MS;
@@ -562,11 +672,28 @@ int main(int argc, char **argv)
         command(&c, id, generation);
         if (ciuki_dosvm(CIUKI_DOSVM_STATUS, &c)) goto done;
         fullscreen=!!(c.changed&CIUKI_DOSVM_FULL_SCREEN);
+        fs_graphics=!!(c.changed&CIUKI_DOSVM_GRAPHICS);
+        if (fullscreen!=fullscreen_seen) {
+            /* The kernel marks the user's Alt+Enter (entry or return). */
+            if (c.changed&CIUKI_DOSVM_FULLSCREEN_HOTKEY) remember_usage(id,generation,fullscreen,"alt-enter");
+            else if (!fullscreen) fs_auto.next_at=now_ms()+DOSBOX_AUTO_RETURN_MS;
+            fullscreen_seen=fullscreen;
+        }
         if (autorun_launch_sent && (c.changed&CIUKI_DOSVM_PROGRAM_RETURNED) && (c.changed&CIUKI_DOSVM_SHELL_READY)) {
-            if (!returned_seen) kept_early=dosbox_early_exit(loading,launch_at,now_ms());
+            if (!returned_seen) {
+                kept_early=dosbox_early_exit(loading,launch_at,now_ms());
+                fprintf(stderr,"dosbox: program returned vm=%u generation=%u early=%d\n",id,generation,kept_early);
+            }
             if (window.profile.close_on_exit && !kept_early) break;
             if (!returned_seen) {
                 returned_seen=1; loading=0; shown=1; redraw=1;
+                if (fullscreen) {
+                    /* The window stays with the program's last screen: show
+                     * it there (the DOS Box's request, not a usage choice). */
+                    struct ciuki_dosvm_command leave;
+                    command(&leave,id,generation);
+                    if (!ciuki_dosvm(CIUKI_DOSVM_FULLSCREEN,&leave)) fullscreen=fullscreen_seen=0;
+                }
                 if (kept_early) {
                     /* Show the program's text screen (its error message) and
                      * title the window "Finished - <name>", as Windows 98 does. */
@@ -585,15 +712,17 @@ int main(int argc, char **argv)
             save_full_seen=1; fullscreen_title="Game data is full";
             snprintf(fullscreen_notice,sizeof(fullscreen_notice),"Game data is full (64 MiB limit or disk space). Further writes are disabled. Export or reset data in Properties.");
             fullscreen_notice_until=now_ms()+8000; notice_painted=0;
+            fs_auto.stopped=1;            /* the notice stays readable in the window */
             if (fullscreen) {
                 struct ciuki_dosvm_command leave;
                 command(&leave,id,generation);
-                if (!ciuki_dosvm(CIUKI_DOSVM_FULLSCREEN,&leave)) fullscreen=0;
+                if (!ciuki_dosvm(CIUKI_DOSVM_FULLSCREEN,&leave)) fullscreen=fullscreen_seen=0;
             }
         }
         if (!(c.changed&CIUKI_DOSVM_FULLSCREEN_REFUSED)) fullscreen_error_seen=0;
         else if (c.reason!=fullscreen_error_seen) {
             fullscreen_error_seen=c.reason;
+            fs_auto.stopped=1;                /* a failed session is not entered again by itself */
             /* Still painted as full screen: the kernel ended the session
              * itself (watchdog, display error); the game keeps running. */
             fullscreen_title=fullscreen_painted ? "Back in the window" : "Full screen unavailable";
@@ -601,6 +730,24 @@ int main(int argc, char **argv)
                      fullscreen_painted ? dosbox_return_text((int)c.reason) : strerror((int)c.reason));
             fullscreen_notice_until=now_ms()+3000;
             notice_painted=0;
+        }
+        if (!fullscreen && !failure && !loading && configured && focused && c.state==CIUKI_DOSVM_RUNNING &&
+            window.profile.screen!=DOSBOX_SCREEN_WINDOW && (window.profile.screen!=DOSBOX_SCREEN_GRAPHICS || fs_graphics) &&
+            (!typed_length || (autorun_launch_sent && !(c.changed&CIUKI_DOSVM_PROGRAM_RETURNED))) &&
+            !window.properties && !window.font_menu && !window.marking && !dos_clip_marking() && !dos_clip_pasting() &&
+            !fs_auto.refused && !fs_auto.stopped && fs_auto.entries<DOSBOX_AUTO_ENTRIES && now_ms()>=fs_auto.next_at) {
+            fs_auto.next_at=now_ms()+DOSBOX_AUTO_RETRY_MS;
+            int entered=fullscreen_enter(id,generation);
+            if (entered>0) {
+                fs_auto.entries++; fullscreen=fullscreen_seen=1;
+                fprintf(stderr,"dosbox: fullscreen auto vm=%u generation=%u usage=%s graphics=%d result=entered\n",
+                        id,generation,dosbox_usage_name(window.profile.screen),fs_graphics);
+            } else if (entered==0 || entered==-2) {
+                int error=entered ? errno : 0;
+                fs_auto.refused=1;
+                fprintf(stderr,"dosbox: fullscreen auto vm=%u generation=%u usage=%s graphics=%d result=refused error=%d continuation=windowed\n",
+                        id,generation,dosbox_usage_name(window.profile.screen),fs_graphics,error);
+            }
         }
         if (fullscreen) {
             if (!fullscreen_painted && configured) {
@@ -680,10 +827,6 @@ int main(int argc, char **argv)
             result = 1;
         }
         if (loading) goto panel;
-        if (startup_fullscreen && focused && !window.properties && !window.marking && !dos_clip_marking()) {
-            startup_fullscreen=0;
-            if (window_action(DB_FULLSCREEN,id,generation,fullscreen)) goto done;
-        }
         if (paste_step(id,generation,focused)) goto done;
         if (configured && (redraw || window.dirty || (video_events&CIUKI_DOSVM_EVENT_VIDEO))) {
             command(&c, id, generation);
@@ -709,6 +852,7 @@ int main(int argc, char **argv)
                 }
                 db_paint_rows(&window,&canvas,guest,full ? NULL : source_rows,damage_rows);
                 if (full) for (unsigned y=0;y<480;y++) damage_rows[y/32]|=1u<<(y%32);
+                int sent=0;
                 for (unsigned y=0;y<480;) {
                     if (!(damage_rows[y/32]&(1u<<(y%32)))) { y++; continue; }
                     unsigned first=y++;
@@ -716,6 +860,14 @@ int main(int argc, char **argv)
                     desk_message(&m,DESK_DAMAGE,20); desk_put32(m.data+8,first);
                     desk_put32(m.data+12,640); desk_put32(m.data+16,y-first);
                     if (send_packet(channel,&m)) goto done;
+                    sent=1;
+                }
+                if (sent && ack_supported && ack_wait) ack_ahead++;
+                else if (sent && ack_supported) {
+                    if (!++ack_serial) ack_serial=1;
+                    desk_message(&m,DESK_GFX_FRAME,64); desk_put32(m.data+4,ack_serial);
+                    if (send_packet(channel,&m)) goto done;
+                    ack_wait=ack_serial; ack_until=now_ms()+DOSBOX_ACK_MS; ack_ahead=0;
                 }
             }
             redraw=0;

@@ -88,6 +88,44 @@ static int ciuki_test_format(char *line,size_t cap,unsigned status,size_t bytes,
     return n>0 && (size_t)n<cap ? n : -1;
 }
 
+/* fx-11c: the terminal http/https fetches, newest last. fx-acc1: the
+ * acceptance run 56762a60 (site 2: the 52,761-byte document, then 19 more
+ * fetches, most of them 404 images the snapshot does not hold) reported
+ * "status=404 bytes=27": a history of 8 had dropped the document's own
+ * record and the fallback took the newest fetch. The history now holds 256
+ * fetches keyed by a 64-bit FNV-1a hash of the URL, and a shown http/https
+ * document without a record of its own reports nothing rather than another
+ * fetch's outcome. */
+#define CIUKI_TEST_SEEN 256
+struct ciuki_test_seen { uint64_t url; unsigned status; size_t bytes; int tls; bool error; };
+static struct ciuki_test_seen test_seen[CIUKI_TEST_SEEN];
+static unsigned test_seen_count;
+
+static uint64_t ciuki_test_url_hash(const char *url)
+{
+    uint64_t h=0xcbf29ce484222325ull;
+    for(const unsigned char *p=(const unsigned char *)(url?url:"");*p;p++){h^=*p;h*=0x100000001b3ull;}
+    return h;
+}
+static void ciuki_test_seen_add(const char *url,unsigned status,size_t bytes,int tls_error,bool error)
+{
+    if(test_seen_count==CIUKI_TEST_SEEN) {
+        memmove(test_seen,test_seen+1,sizeof(test_seen)-sizeof(*test_seen));test_seen_count--;
+    }
+    test_seen[test_seen_count++]=(struct ciuki_test_seen){ciuki_test_url_hash(url),status,bytes,tls_error,error};
+}
+/* The fetch behind the shown document: the newest one for its URL; for an
+ * internal page (the error page of a failed fetch) the newest failure,
+ * else the newest fetch. -1: nothing to report yet. */
+static int ciuki_test_outcome(const char *shown)
+{
+    bool remote=shown && (!strncmp(shown,"http://",7) || !strncmp(shown,"https://",8));
+    uint64_t key=ciuki_test_url_hash(shown);
+    for(int i=(int)test_seen_count-1;i>=0;i--)
+        if(remote ? test_seen[i].url==key : test_seen[i].error)return i;
+    return !remote && test_seen_count ? (int)test_seen_count-1 : -1;
+}
+
 #ifndef CIUKI_TESTMODE_PURE
 #include "testmode.h"
 #include "test_anchors.h"
@@ -96,11 +134,6 @@ static int ciuki_test_format(char *line,size_t cap,unsigned status,size_t bytes,
 #include <ciuki/runtime.h>
 #endif
 static bool test_requested,test_active,test_reported;
-/* fx-11c: the last terminal http/https fetches, newest last. */
-#define CIUKI_TEST_SEEN 8
-struct ciuki_test_seen { char url[256]; unsigned status; size_t bytes; int tls; bool error; };
-static struct ciuki_test_seen test_seen[CIUKI_TEST_SEEN];
-static unsigned test_seen_count;
 
 static size_t ciuki_test_request(char *out,size_t cap)
 {
@@ -139,21 +172,7 @@ const br_x509_trust_anchor *ciuki_test_anchors(size_t *count)
 void ciuki_test_fetch_observe(const char *url,unsigned status,size_t bytes,int tls_error,const char *error)
 {
     if(!test_active)return;
-    if(test_seen_count==CIUKI_TEST_SEEN) {
-        memmove(test_seen,test_seen+1,sizeof(test_seen)-sizeof(*test_seen));test_seen_count--;
-    }
-    struct ciuki_test_seen *seen=&test_seen[test_seen_count++];
-    snprintf(seen->url,sizeof(seen->url),"%s",url?url:"");
-    seen->status=status;seen->bytes=bytes;seen->tls=tls_error;seen->error=error!=NULL;
-}
-/* The fetch behind the shown document: the newest one for its URL; for an
- * internal page (the error page of a failed fetch) the newest failure. */
-static int ciuki_test_outcome(const char *shown)
-{
-    bool remote=shown && (!strncmp(shown,"http://",7) || !strncmp(shown,"https://",8));
-    for(int i=(int)test_seen_count-1;i>=0;i--)
-        if(remote ? !strncmp(test_seen[i].url,shown,sizeof(test_seen[i].url)-1) : test_seen[i].error)return i;
-    return test_seen_count ? (int)test_seen_count-1 : -1;
+    ciuki_test_seen_add(url,status,bytes,tls_error,error!=NULL);
 }
 
 static void ciuki_test_send(const char *line,size_t n)

@@ -45,7 +45,7 @@ class StartOrbTests(unittest.TestCase):
             sources = [ROOT / "apps/desktop" / f"{n}.c" for n in
                        ("client", "protocol", "input", "compositor", "theme", "image")]
             sources += desktop.SHELL_SOURCES
-            sources += [ROOT / "apps/libdeskui" / n for n in ("icons.c", "icon_map.c")]
+            sources += [ROOT / "apps/libdeskui" / n for n in ("icons.c", "icon_map.c", "iconx.c", "fileicon.c")]
             sources += [ROOT / "tests/host/desktop" / n for n in ("fake.c", "start_orb_test.c")]
             subprocess.run(["clang", "-std=c17", "-O1", "-g", "-Wall", "-Wextra", "-Werror",
                             "-fsanitize=address,undefined", "-fno-sanitize-recover=undefined",

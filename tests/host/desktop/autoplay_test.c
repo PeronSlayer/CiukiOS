@@ -13,6 +13,7 @@
 #include <string.h>
 #include <pthread.h>
 #include "autoplay_wait.h"
+#include "exe_kind.h"
 int ciuki_devices(struct ciuki_devices_info *out) { (void)out; errno=ENODEV; return -1; }
 static struct desktop d;
 static struct ciuki_media_volume volumes[26];
@@ -27,6 +28,21 @@ static int cd_launch(struct desktop *desk,const struct desk_launch_record *r)
     cd_launches++; return 101;
 }
 static char program[64], argument[FM_PATH];
+/* fx-autorun: Windows programs go to the launch worker as a record. */
+static struct desk_launch_record queued; static unsigned windows_launches; static int windows_result;
+static int windows_launch(struct desktop *desk,const struct desk_launch_record *r)
+{
+    assert(desk->launch_request.origin==DESK_LAUNCH_AUTOPLAY);
+    queued=*r; windows_launches++; return windows_result;
+}
+static void exe_header(int node,unsigned size,uint32_t lfanew,const char *signature,unsigned char target_os)
+{
+    fake_nodes[node].meta.size=size; memset(fake_nodes[node].data,0,size);
+    memcpy(fake_nodes[node].data,"MZ",2);
+    for (unsigned k=0;k<4;k++) fake_nodes[node].data[60+k]=(unsigned char)(lfanew>>(8*k));
+    memcpy(fake_nodes[node].data+lfanew,signature,strlen(signature)==2 ? 2 : 4);
+    if (target_os) fake_nodes[node].data[lfanew+0x36]=target_os;
+}
 static int launch(struct desktop *desk,const struct desk_program *p)
 {
     launches++; snprintf(program,sizeof(program),"%s",p->name);
@@ -167,6 +183,18 @@ int main(int argc,char **argv)
     struct ap_inf quoted;
     const char *quoted_text="[autorun]\nopen=\"SETUP\\INSTALL.COM\" /S\nlabel=\"Ciuki Games\"\n";
     assert(!ap_parse(&quoted,quoted_text,strlen(quoted_text)) && !strcmp(quoted.open,"\"SETUP\\INSTALL.COM\" /S") && !strcmp(quoted.label,"Ciuki Games"));
+    const char *period_inf="[ AutoRun ] ; period mastering tool\rOPEN=SETUP.COM /S\runknown=\001\377\rlabel=Caf\xc3\xa9\ricon=disc.ico\r";
+    assert(!ap_parse(&quoted,period_inf,strlen(period_inf)));
+    assert(!strcmp(quoted.open,"SETUP.COM /S") && !strcmp(quoted.label,"Caf\xc3\xa9") && !strcmp(quoted.icon,"disc.ico"));
+    char long_inf[1200];
+    strcpy(long_inf,"[autorun]\nopen=SETUP.COM\n"); size_t used=strlen(long_inf);
+    memset(long_inf+used,'x',1000); used+=1000;
+    strcpy(long_inf+used,"\nicon=disc.ico\nlabel=Games\n");
+    assert(!ap_parse(&quoted,long_inf,strlen(long_inf)) && !strcmp(quoted.open,"SETUP.COM") && !strcmp(quoted.icon,"disc.ico"));
+    long_inf[strlen("[autorun]\nopen=SETUP.COM\n")]='[';
+    assert(!ap_parse(&quoted,long_inf,strlen(long_inf)) && !strcmp(quoted.open,"SETUP.COM") && !quoted.icon[0]);
+    const char *utf8_edge="[autorun]\nlabel=1234567890123456789012345678901\xc3\xa9\n";
+    assert(!ap_parse(&quoted,utf8_edge,strlen(utf8_edge)) && strlen(quoted.label)==31);
     assert(!strcmp(d.sh.autoplay.content.inf.label,"Ciuki Games") && !strcmp(d.sh.autoplay.content.inf.icon,"disc.ico"));
     char label[33]; assert(!ap_drive_label(&fake_vfs,3,label) && !strcmp(label,"Ciuki Games")); render();
     select_action(AP_RUN); key(DU_KEY_ENTER); autoplay_drain(&d);
@@ -184,21 +212,85 @@ int main(int argc,char **argv)
     mounted(6,32,"fat-87654321-1234","PHOTOS",CIUKI_MEDIA_REMOVABLE);
     mounted(6,33,"fat-87654322-1234","NEW PHOTOS",CIUKI_MEDIA_REMOVABLE);
     assert(d.sh.autoplay.active.generation==33 && d.sh.autoplay.open); key(DU_KEY_ESC); assert(!d.sh.autoplay.open); eject(6);
-    /* PE Windows entry is visible, disabled, and cannot be remembered or launched. */
-    int exe=fake_file("/mnt/d/SETUP/WIN.EXE",128,0); assert(exe>=0); memset(fake_nodes[exe].data,0,128);
-    memcpy(fake_nodes[exe].data,"MZ",2); fake_nodes[exe].data[60]=64; memcpy(fake_nodes[exe].data+64,"PE\0\0",4);
-    file("/mnt/d/AUTORUN.INF","[autorun]\nopen=SETUP\\WIN.EXE\n");
+    /* fx-autorun: a Windows (PE) open= program is offered first and selected,
+     * starts from the disc root through the launch worker, and its "always"
+     * choice is saved only once the worker reports the program started. */
+    d.v3_launch=windows_launch;
+    int exe=fake_file("/mnt/d/AUTORUN.EXE",256,0); assert(exe>=0); exe_header(exe,256,128,"PE\0\0",0);
+    file("/mnt/d/AUTORUN.INF","[autorun]\r\nOPEN=AUTORUN.EXE /lang=en\r\nICON=VALVE.ICO\r\n");
     mounted(3,21,"iso-2345678901234567","WINDOWS",CIUKI_MEDIA_OPTICAL);
-    assert(d.sh.autoplay.content.run_kind==2 && !desk_autoplay_enabled(&d,AP_RUN)); render();
-    char run[100]; assert(strstr(desk_autoplay_label(&d,AP_RUN,run,sizeof(run)),"F5"));
+    assert(d.sh.autoplay.open && d.sh.autoplay.content.run_kind==2 && d.sh.autoplay.content.exe_kind==DESK_EXE_WIN32);
+    assert(desk_autoplay_enabled(&d,AP_RUN) && d.sh.autoplay.selected==AP_RUN); render();
+    char run[100]; assert(!strcmp(desk_autoplay_label(&d,AP_RUN,run,sizeof(run)),"Run AUTORUN.EXE"));
+    key(DU_KEY_SPACE); key(DU_KEY_ENTER); autoplay_drain(&d);
+    assert(windows_launches==1 && launches==5 && d.sh.autoplay.phase==AP_LAUNCHING && !d.launch_request.origin);
+    assert(!strcmp(queued.target,"/mnt/d/AUTORUN.EXE") && !strcmp(queued.arguments,"/lang=en") && !strcmp(queued.directory,"/mnt/d") && queued.show==1);
+    assert(ap_preference_get(registry_dir,"iso-2345678901234567")==-1);
+    mounted(4,90,"fat-0000000a-1234","QUEUED",CIUKI_MEDIA_REMOVABLE);
+    assert(!d.sh.autoplay.open && d.sh.autoplay.waiting==(1u<<4)); /* arrivals wait for the launch result */
+    desk_autoplay_completed(&d,4242); autoplay_drain(&d);
+    assert(ap_preference_get(registry_dir,"iso-2345678901234567")==AP_RUN);
+    autoplay_drain(&d); assert(d.sh.autoplay.open && d.sh.autoplay.active.drive==4); key(DU_KEY_ESC); eject(4); eject(3);
+    mounted(3,22,"iso-2345678901234567","WINDOWS",CIUKI_MEDIA_OPTICAL);
+    assert(!d.sh.autoplay.open && windows_launches==2 && d.sh.autoplay.phase==AP_LAUNCHING);
+    desk_autoplay_completed(&d,4243); autoplay_drain(&d); eject(3);
+    assert(!ap_preference_forget(registry_dir,"iso-2345678901234567"));
+    /* An InstallShield 5 NE stub (16-bit Windows) also goes to the Win32
+     * personality; a refusal (-ENOEXEC) is the kernel's dialog, not AutoPlay's,
+     * and is never remembered. The header lies past the 4 KiB sniff. */
+    int stub=fake_file("/mnt/d/SETUP.EXE",9000,0); assert(stub>=0); exe_header(stub,9000,8192,"NE",2);
+    file("/mnt/d/AUTORUN.INF","[autorun]\nopen=SETUP.EXE\n");
+    mounted(3,23,"iso-3456789012345678","IS5",CIUKI_MEDIA_OPTICAL);
+    assert(d.sh.autoplay.content.run_kind==2 && d.sh.autoplay.content.exe_kind==DESK_EXE_WIN16 && d.sh.autoplay.selected==AP_RUN);
+    key(DU_KEY_SPACE); key(DU_KEY_ENTER); autoplay_drain(&d);
+    assert(windows_launches==3 && !strcmp(queued.target,"/mnt/d/SETUP.EXE") && !queued.arguments[0] && !strcmp(queued.directory,"/mnt/d"));
+    d.sh.message_text[0]=0; desk_autoplay_completed(&d,-ENOEXEC); autoplay_drain(&d);
+    assert(!d.sh.message_text[0] && ap_preference_get(registry_dir,"iso-3456789012345678")==-1);
+    /* Any other failure is reported in words by AutoPlay. */
+    mounted(3,24,"iso-3456789012345678","IS5",CIUKI_MEDIA_OPTICAL); key(DU_KEY_ENTER); autoplay_drain(&d);
+    desk_autoplay_completed(&d,-EAGAIN); autoplay_drain(&d);
+    assert(strstr(d.sh.message_text,"SETUP.EXE could not be started.") && strstr(d.sh.message_text,"(error 11)"));
+    key(DU_KEY_ESC); eject(3);
+    windows_result=-EBUSY; mounted(3,25,"iso-3456789012345678","IS5",CIUKI_MEDIA_OPTICAL); key(DU_KEY_ENTER); autoplay_drain(&d);
+    assert(d.sh.autoplay.phase==AP_IDLE && strstr(d.sh.message_text,"SETUP.EXE could not be started.") && strstr(d.sh.message_text,"(error 16)"));
+    windows_result=0; key(DU_KEY_ESC); eject(3);
+    /* A program the disc does not have stays visible, disabled, with its reason. */
+    file("/mnt/d/AUTORUN.INF","[autorun]\nopen=MISSING.EXE\n");
+    mounted(3,26,"iso-4567890123456789","MISSING",CIUKI_MEDIA_OPTICAL);
+    assert(d.sh.autoplay.open && d.sh.autoplay.content.run_kind==3 && !desk_autoplay_enabled(&d,AP_RUN) && d.sh.autoplay.selected==AP_FOLDER);
+    assert(!strcmp(desk_autoplay_label(&d,AP_RUN,run,sizeof(run)),"Run MISSING.EXE (not found)")); render();
     int w=window(); struct desk_box content=desk_content(&d.clients[w]);
     desk_internal_click(&d,w,content.x+30,content.y+58+AP_RUN*24+5); assert(d.sh.autoplay.selected==AP_FOLDER);
     select_action(AP_NOTHING); key(DU_KEY_SPACE); key(DU_KEY_ENTER); autoplay_drain(&d);
-    assert(launches==5 && ap_preference_get(registry_dir,"iso-2345678901234567")==AP_NOTHING); eject(3);
-    mounted(3,22,"iso-2345678901234567","WINDOWS",CIUKI_MEDIA_OPTICAL); assert(!d.sh.autoplay.open && launches==5); eject(3);
+    assert(launches==5 && windows_launches==5 && ap_preference_get(registry_dir,"iso-4567890123456789")==AP_NOTHING); eject(3);
+    mounted(3,27,"iso-4567890123456789","MISSING",CIUKI_MEDIA_OPTICAL); assert(!d.sh.autoplay.open && launches==5); eject(3);
+    /* Shift held while the disc arrives skips AutoPlay for that insertion. */
+    d.sh.modifiers|=DU_SHIFT; mounted(3,28,"iso-2345678901234567","WINDOWS",CIUKI_MEDIA_OPTICAL);
+    assert(!d.sh.autoplay.open && !d.sh.autoplay.waiting && windows_launches==5);
+    d.sh.modifiers&=~(unsigned)DU_SHIFT; autoplay_drain(&d); assert(!d.sh.autoplay.open); eject(3);
+    /* ... and also when it is held as the probe completes. */
+    volumes[3]=(struct ciuki_media_volume){.version=1,.size=96,.drive=3,.flags=CIUKI_MEDIA_OPTICAL,.generation=29};
+    strcpy(volumes[3].id,"iso-2345678901234567"); desk_autoplay_update(&d,volumes);
+    d.sh.modifiers|=DU_SHIFT; autoplay_drain(&d); autoplay_drain(&d); d.sh.modifiers&=~(unsigned)DU_SHIFT;
+    assert(!d.sh.autoplay.open && windows_launches==5 && !d.sh.autoplay.waiting); eject(3);
+    /* LE (DOS/4GW-class) programs are MS-DOS programs: typed into the DOS Box. */
+    int le=fake_file("/mnt/d/GAME.EXE",256,0); assert(le>=0); exe_header(le,256,128,"LE",0);
+    file("/mnt/d/AUTORUN.INF","[autorun]\nopen=GAME.EXE -nosound\n");
+    struct ap_content le_probe; assert(!ap_probe(&fake_vfs,3,&le_probe));
+    assert(le_probe.run_kind==1 && le_probe.exe_kind==DESK_EXE_DOS && !strcmp(le_probe.command,"D:\\GAME.EXE -nosound"));
+    /* An OS/2 NE (target OS 1) is not a Windows program either. */
+    exe_header(stub,9000,8192,"NE",1); file("/mnt/d/AUTORUN.INF","[autorun]\nopen=SETUP.EXE\n");
+    assert(!ap_probe(&fake_vfs,3,&le_probe) && le_probe.run_kind==1 && le_probe.exe_kind==DESK_EXE_DOS);
+    /* My Computer's AutoPlay verb: the drive label and the same record. */
+    exe_header(stub,9000,8192,"NE",2); file("/mnt/d/AUTORUN.INF","[autorun]\nlabel=Install\nopen=SETUP.EXE -s\n");
+    struct ap_drive_info info; assert(!ap_drive_info(&fake_vfs,3,&info));
+    assert(!strcmp(info.label,"Install") && info.run_kind==2 && info.exe_kind==DESK_EXE_WIN16);
+    assert(!strcmp(info.record.target,"/mnt/d/SETUP.EXE") && !strcmp(info.record.arguments,"-s") && !strcmp(info.record.directory,"/mnt/d") && !strcmp(info.record.label,"Install"));
+    file("/mnt/d/AUTORUN.INF","[autorun]\nlabel=Nothing\n"); assert(!ap_drive_info(&fake_vfs,3,&info) && !info.run_kind && !strcmp(info.label,"Nothing"));
+    file("/mnt/d/AUTORUN.INF","[autorun]\nopen=MISSING.EXE\n"); assert(!ap_drive_info(&fake_vfs,3,&info) && info.run_kind==3);
     /* Unavailable remembered action falls back to asking. Failed launches never save. */
     assert(!ap_preference_set(registry_dir,"fat-00000001-1234","Empty stick",AP_MUSIC));
-    mounted(3,23,"fat-00000001-1234","EMPTY",CIUKI_MEDIA_REMOVABLE); assert(d.sh.autoplay.open);
+    mounted(3,30,"fat-00000001-1234","EMPTY",CIUKI_MEDIA_REMOVABLE); assert(d.sh.autoplay.open);
     fail_launch=1; key(DU_KEY_SPACE); key(DU_KEY_ENTER); autoplay_drain(&d); fail_launch=0;
     assert(ap_preference_get(registry_dir,"fat-00000001-1234")==AP_MUSIC); eject(3);
     /* Simultaneous arrivals are queued, and an eject removes a queued item. */
@@ -220,7 +312,7 @@ int main(int argc,char **argv)
     file("/mnt/d/SETUP/WITH SPACE.COM","dos");
     file("/mnt/d/AUTORUN.INF","[autorun]\nopen=\"SETUP\\WITH SPACE.COM\" /S\n");
     assert(!ap_probe(&fake_vfs,3,&probe) && probe.run_kind==3 && !probe.command[0]);
-    fake_countdown=1; mounted(3,24,"fat-00000002-1234","UNREADABLE",CIUKI_MEDIA_REMOVABLE);
+    fake_countdown=1; mounted(3,31,"fat-00000002-1234","UNREADABLE",CIUKI_MEDIA_REMOVABLE);
     assert(d.sh.autoplay.open && desk_autoplay_enabled(&d,AP_FOLDER)); key(DU_KEY_ESC); eject(3);
     assert(ap_parse(&inf,"[autorun]\nopen=ok\0x",20)<0);
     char big[AP_INF_MAX+1]; memset(big,'x',sizeof(big)); assert(ap_parse(&inf,big,sizeof(big))<0);
@@ -248,6 +340,6 @@ int main(int argc,char **argv)
     desk_autoplay_stop(&d); free(d.sh.autoplay.workspace);
     free(d.pixels); d.pixels=NULL; desk_render_release(&d); assert(!fake_live()); fake_assert_clean();
     test_probe_budgets();
-    puts("PASS AutoPlay: mount music/CD/pictures, typed DOS launch, disabled Windows, registry across letters, cancellation/eject/replacement/queue, sounds seam, bounded parser");
+    puts("PASS AutoPlay: mount music/CD/pictures, typed DOS launch, Windows PE and IS5 NE autoruns from the disc root (fx-autorun), refusal/failure wording, missing program, Shift skip, LE/OS2 as DOS, drive verb record, registry across letters, cancellation/eject/replacement/queue, sounds seam, bounded parser");
     return 0;
 }

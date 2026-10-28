@@ -5,6 +5,7 @@
 #include <ciuki/cpu.h>
 #include <ciuki/sha256.h>
 #include <ciuki/joystick_settings.h>
+#include <ciuki/security.h> /* sec-user-05: retained scope subject */
 
 /* Version 1 payloads use the native i686 little-endian fixed-width words.
  * No pointers, bools, padding or boot-local device numbers are serialized. */
@@ -253,20 +254,98 @@ int joystick_settings_get_game(struct ciuki_joystick_control *c)
     }
     return 0;
 }
-void joystick_settings_start(const struct joystick_settings_io *io)
+/* --- sec-user-05 (user-security-contract.md K-Q8; sec-k04 open item): one
+ * settings scope is active at a time. Scope 0 is the machine store (SYSTEM
+ * and the boot state). An interactive session's scope is its profile store
+ * (joystick_storage.c), which reads the machine record of any controller or
+ * game the profile has never saved and writes only to the profile, as that
+ * session's retained subject. Interactive CALIBRATE/ROUTE/CONFIGURE/
+ * SAVE_GAME therefore change and persist the user's own preferences; the
+ * machine defaults stay SYSTEM-only. Storage I/O stays serialized: the
+ * worker's pass and a scope switch exclude each other through `busy`. A
+ * controller with no record in either store keeps its current runtime
+ * calibration until it is attached again (the drivers expose no default
+ * reset). --- */
+static struct joystick_settings_io machine_storage;
+static uint32_t scope_session, busy;
+static struct security_subject *scope_subject;
+#pragma weak security_subject_get
+#pragma weak security_subject_put
+#pragma weak security_subject_live
+/* Installed by the settings worker (gameport.c); host fixtures never wait. */
+void (*joystick_settings_pause)(uint32_t ms);
+static bool busy_acquire(unsigned attempts)
 {
-    /* Only initialization or the host's reboot model calls this function. */
-    started=false; memset(controllers,0,sizeof(controllers)); memset(games,0,sizeof(games));
-    last_error=0; storage=*io;
+    for (unsigned i=0;;i++) {
+        uint32_t expected=0;
+        if (__atomic_compare_exchange_n(&busy,&expected,1,false,__ATOMIC_ACQUIRE,__ATOMIC_RELAXED)) return true;
+        if (i>=attempts || !joystick_settings_pause) return false;
+        joystick_settings_pause(10);
+    }
+}
+static void busy_release(void) { __atomic_store_n(&busy,0,__ATOMIC_RELEASE); }
+static void load_games(struct preference_slot out[JOY_SETTINGS_GAMES+1], bool legacy);
+static void save_dirty(void);
+uint32_t joystick_settings_scope_session(void)
+{ uint32_t flags=irq_save(), session=scope_session; irq_restore(flags); return session; }
+static bool scope_live(void)
+{ return !scope_session || !security_subject_live || security_subject_live(scope_subject); }
+/* Caller holds `busy`. A personal scope retains the session desktop's subject
+ * (alive for the whole session): every load and save runs as that user.
+ * `bind` prepares the new store; nothing can fail after it succeeds. */
+static int scope_switch(uint32_t session, struct security_subject *subject,
+                        int (*bind)(void *, struct joystick_settings_io *), void *ctx)
+{
+    struct joystick_settings_io next=machine_storage;
+    int e=session ? security_subject_get(subject) : 0;
+    if (e) return e;
+    save_dirty(); /* the old scope's pending changes, to its own store */
+    if (session && (e=bind(ctx,&next))) { security_subject_put(subject); return e; }
+    static struct preference_slot loaded[JOY_SETTINGS_GAMES+1];
+    struct joystick_settings_io previous=storage;
+    storage=next; load_games(loaded,!session); storage=previous;
+    uint32_t flags=irq_save();
+    struct security_subject *old=scope_subject;
+    scope_session=session; scope_subject=session ? subject : 0; storage=next;
+    memset(controllers,0,sizeof(controllers)); memcpy(games,loaded,sizeof(games)); last_error=0;
+    irq_restore(flags);
+    if (old && security_subject_put) security_subject_put(old);
+    klog("[joystick-settings] scope session=%u",session);
+    return 0;
+}
+int joystick_settings_scope(uint32_t session, struct security_subject *subject,
+                            int (*bind)(void *, struct joystick_settings_io *), void *ctx)
+{
+    if (!started) return -EAGAIN;
+    uint32_t flags=irq_save();
+    bool current=scope_session==session;
+    irq_restore(flags);
+    if (current && scope_live()) return 0;
+    if (session && (!subject || !bind || !security_subject_get || !security_subject_put)) return -EOPNOTSUPP;
+    if (!busy_acquire(300)) return -EAGAIN;
+    flags=irq_save(); current=scope_session==session; irq_restore(flags);
+    int e=current && scope_live() ? 0 : scope_switch(session,subject,bind,ctx);
+    busy_release();
+    return e;
+}
+/* Session teardown (sec-k07) or a revoked subject: back to the machine store. */
+void joystick_settings_session_end(uint32_t session)
+{
+    if (session && joystick_settings_scope_session()==session) (void)joystick_settings_scope(0,0,0,0);
+}
+/* --- end sec-user-05 --- */
+static void load_games(struct preference_slot out[JOY_SETTINGS_GAMES+1], bool legacy)
+{
+    memset(out,0,sizeof(struct preference_slot)*(JOY_SETTINGS_GAMES+1));
     for (unsigned i=0;i<=JOY_SETTINGS_GAMES;i++) {
         char stem[96]; ksnprintf(stem,sizeof(stem),"dos-game-%u-joystick",i);
-        struct preference_slot *s=&games[i];
+        struct preference_slot *s=&out[i];
         int e=read_record(stem,&s->value,sizeof(s->value),&s->sequence);
         if (e || !valid_preference(&s->value)) {
             if (!e) klog("[joystick-settings] invalid route game=%u; defaults",i);
             memset(&s->value,0,sizeof(s->value));
         }
-        if (e==-ENOENT && i) {
+        if (legacy && e==-ENOENT && i) {
             /* f1-113 had exactly six boot-local decimal words. Only default
              * and off are safely portable; never guess a new hardware ID. */
             char name[112], old[128]; size_t n=0;
@@ -280,6 +359,15 @@ void joystick_settings_start(const struct joystick_settings_io *io)
             }
         }
     }
+}
+void joystick_settings_start(const struct joystick_settings_io *io)
+{
+    /* Only initialization or the host's reboot model calls this function. */
+    started=false; memset(controllers,0,sizeof(controllers)); memset(games,0,sizeof(games));
+    last_error=0; storage=*io; machine_storage=*io; /* sec-user-05 */
+    if (scope_subject && security_subject_put) security_subject_put(scope_subject);
+    scope_session=0; scope_subject=0;
+    load_games(games,true);
     started=true;
 }
 static void attach(uint32_t device, uint32_t generation)
@@ -322,23 +410,8 @@ static void attach(uint32_t device, uint32_t generation)
     }
     s->device=device; s->generation=generation; irq_restore(flags);
 }
-void joystick_settings_service(void)
+static void save_dirty(void)
 {
-    if (!started) return;
-    /* NEXT reads retained cache only, never polls hardware. */
-    uint32_t cursor=0;
-    for (;;) {
-        struct ciuki_joystick_control c={.version=1,.size=sizeof(c),.operation=CIUKI_JOY_NEXT,.device=cursor};
-        uint32_t flags=irq_save(); int e=joystick_control(&c); irq_restore(flags);
-        if (e) break;
-        cursor=c.device; attach(c.device,c.generation);
-    }
-    /* Load inactive children too; child 0 owns the physical wiring setting. */
-    for (unsigned d=CIUKI_GAMEPORT_FIRST;d<=CIUKI_JOYSTICK_LAST;d++) {
-        struct ciuki_hid_caps c={.device=d};
-        uint32_t flags=irq_save(); int e=gameport_hid_query(INPUT_HID_GET_CAPS,&c); irq_restore(flags);
-        if (!e && !c.attached) attach(d,c.generation);
-    }
     for (unsigned i=0;i<JOY_SETTINGS_CONTROLLERS;i++) {
         struct calibration_slot *s=&controllers[i];
         uint32_t flags=irq_save(), rev=s->revision, seq=s->sequence;
@@ -361,4 +434,25 @@ void joystick_settings_service(void)
         if (!e) { s->sequence=seq; s->saved=rev; } irq_restore(flags);
         if (e) return;
     }
+}
+void joystick_settings_service(void)
+{
+    if (!started || !busy_acquire(0)) return; /* sec-user-05: a scope switch owns storage */
+    if (!scope_live()) (void)scope_switch(0,0,0,0); /* the session ended: machine store */
+    /* NEXT reads retained cache only, never polls hardware. */
+    uint32_t cursor=0;
+    for (;;) {
+        struct ciuki_joystick_control c={.version=1,.size=sizeof(c),.operation=CIUKI_JOY_NEXT,.device=cursor};
+        uint32_t flags=irq_save(); int e=joystick_control(&c); irq_restore(flags);
+        if (e) break;
+        cursor=c.device; attach(c.device,c.generation);
+    }
+    /* Load inactive children too; child 0 owns the physical wiring setting. */
+    for (unsigned d=CIUKI_GAMEPORT_FIRST;d<=CIUKI_JOYSTICK_LAST;d++) {
+        struct ciuki_hid_caps c={.device=d};
+        uint32_t flags=irq_save(); int e=gameport_hid_query(INPUT_HID_GET_CAPS,&c); irq_restore(flags);
+        if (!e && !c.attached) attach(d,c.generation);
+    }
+    save_dirty();
+    busy_release();
 }

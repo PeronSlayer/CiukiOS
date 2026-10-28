@@ -16,6 +16,7 @@
  * first poll.
  * SPDX-License-Identifier: GPL-2.0-only */
 #include <ciuki/kernel.h>
+#include <ciuki/security_device.h>
 #include <ciuki/cpu.h>
 #include <ciuki/clock.h>
 #include <ciuki/process.h>
@@ -229,7 +230,7 @@ static void tz_fill(struct process *p, struct ciuki_time_zone *q, uint32_t opera
         .rtc_bias_minutes = c.rtc_local ? c.rtc_bias_minutes : 0, .generation = gen};
     q->flags = (c.auto_dst ? CIUKI_TIME_AUTO_DST : 0) | (c.rtc_local ? CIUKI_TIME_RTC_LOCAL : 0) |
                (daylight ? CIUKI_TIME_DAYLIGHT : 0) | (adj ? CIUKI_TIME_ADJUSTED : 0) |
-               (p && p->time_capability ? CIUKI_TIME_AUTHORITY : 0);
+               (security_device_admin(p) ? CIUKI_TIME_AUTHORITY : 0);
     if (tzr_next_change(&r, utc, &next)) q->next_change = next;
     tz_copy_name(q->zone, sizeof(q->zone), c.zone);
     tz_copy_name(q->rule, sizeof(q->rule), c.tz);
@@ -285,7 +286,7 @@ int timezone_call(struct process *p, struct ciuki_time_zone *q)
     if (op > CIUKI_TIME_ACKNOWLEDGE) return -EINVAL;
     if (op == CIUKI_TIME_GET) timezone_poll();
     else {
-        if (!p || !p->time_capability) return -EPERM;
+        if (!security_device_admin(p)) return -EPERM;
         if (!tz_enter()) return -EBUSY;
         struct tzr_config c = tz_config;
         struct tzr r = tz_rule;

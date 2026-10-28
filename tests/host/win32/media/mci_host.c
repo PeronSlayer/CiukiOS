@@ -171,6 +171,7 @@ HANDLE CreateFileA(const char *name, DWORD access, DWORD share,
   int fd = hf_open(name);
   return fd < 0 ? K32_INVALID : (HANDLE)(uintptr_t)(fd + 0x1000);
 }
+void OutputDebugStringA(const char *s) { fprintf(stderr,"%s",s); }
 BOOL ReadFile(HANDLE h, void *p, DWORD n, DWORD *done, OVERLAPPED *o) {
   (void)o;
   long r = hf_read((int)((uintptr_t)h - 0x1000), p, n);

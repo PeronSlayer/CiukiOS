@@ -4,6 +4,7 @@
 #include "../gdi32/support.h"
 #include "aliases.h"
 #include <assert.h>
+#include <pthread.h>
 #include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -586,7 +587,7 @@ void gl_quake3_benchmark(unsigned iterations, int default_format) {
 
 /* Complete H1 frames through production GL/GDI/wire and fake Savage packets.
  * No game assets; both one-pass and two-pass lightmapped worlds. */
-void gl_quake3_savage(void) {
+void gl_quake3_savage(int default_format) {
   extern void gl_hardware_native(int),gl_kernel_setup(int),gl_kernel_teardown(void);
   extern void gl_kernel_mode(unsigned,unsigned),gl_savage_begin(void);
   extern unsigned gl_kernel_draws(void);
@@ -595,14 +596,36 @@ void gl_quake3_savage(void) {
   gl_hardware_native(1); savage_frames=1;
   for (unsigned size=0;size<2;size++) {
     unsigned w=size ? 1024 : 640,h=size ? 768 : 480;
-    gl_kernel_mode(w,h); gl_kernel_setup(2);
+    gl_kernel_mode(w,h);
+#ifdef GL_KERNEL_FAMILY_RADEON
+    assert(!default_format); gl_kernel_setup(2);
+#else
+    extern void gl_kernel_fullscreen_setup(unsigned,unsigned); gl_kernel_fullscreen_setup(w,h);
+#endif
     for (unsigned scenario=0;scenario<2;scenario++) {
       unsigned *pixels=calloc(w*h,4); assert(pixels);
       struct w32_dib dib=test_dib(pixels,w,h,32,0,1);
       HDC dc=w32_gdi_surface_dc(&dib,(POINT){0},0,0); assert(dc);
       PIXELFORMATDESCRIPTOR p={.nSize=40,.nVersion=1,.dwFlags=PFD_DOUBLEBUFFER|PFD_SUPPORT_OPENGL,
-        .cColorBits=32,.cDepthBits=16};
-      assert(SetPixelFormat(dc,ChoosePixelFormat(dc,&p),&p));
+        .cColorBits=32,.cDepthBits=default_format ? 24 : 16,.cStencilBits=default_format ? 8 : 0};
+      int chosen=ChoosePixelFormat(dc,&p);
+      if (default_format) {
+        extern int gl_quake3_enumerate_format(HDC,unsigned);
+        int strict=gl_quake3_enumerate_format(dc,8);
+        if (!strict) strict=gl_quake3_enumerate_format(dc,0);
+        assert(strict==chosen);
+      }
+      PIXELFORMATDESCRIPTOR actual; assert(DescribePixelFormat(dc,chosen,40,&actual));
+      assert(!(actual.dwFlags&PFD_GENERIC_FORMAT));
+      printf(
+#ifdef GL_KERNEL_FAMILY_RADEON
+          "GL_RADEON_FORMAT width="
+#else
+          "GL_SAVAGE_FORMAT width="
+#endif
+          "%u height=%u request=%u/%u selected=%d depth=%u stencil=%u flags=%08x\n",
+          w,h,p.cDepthBits,p.cStencilBits,chosen,actual.cDepthBits,actual.cStencilBits,actual.dwFlags);
+      assert(SetPixelFormat(dc,chosen,&p));
       HGLRC rc=wglCreateContext(dc); assert(rc && wglMakeCurrent(dc,rc));
       glViewport(0,0,w,h); glEnable(GL_SCISSOR_TEST); glScissor(0,0,w,h);
       glEnableClientState(GL_VERTEX_ARRAY); glEnableClientState(GL_COLOR_ARRAY);
@@ -618,6 +641,9 @@ void gl_quake3_savage(void) {
 #endif
         extern void gl_savage_scope(unsigned);
         gl_savage_scope(scenario); gl_savage_begin(); frame(scenario); glFinish();
+#ifndef GL_KERNEL_FAMILY_RADEON
+        extern void gl_kernel_present_lease(const uint32_t *,unsigned,unsigned); gl_kernel_present_lease(pixels,w,h);
+#endif
 #ifdef SW_PROFILE
         gl_savage_end(w,h,f,gl_kernel_draws()-before,gl_kernel_fragments()-fragments,work[SW_TRIANGLE],work[SW_FRAGMENT]);
 #else
@@ -629,5 +655,86 @@ void gl_quake3_savage(void) {
     }
     gl_kernel_teardown();
   }
+#ifndef GL_KERNEL_FAMILY_RADEON
+  extern void gl_quake3_lease_flow(int); gl_quake3_lease_flow(default_format);
+#endif
   gl_kernel_mode(640,480); gl_hardware_native(0); savage_frames=0;
+}
+/* f7-15 review P1 (real Quake III order): wglCreateContext and the first
+ * frame run in the 1024x768 desktop generation; the first SwapBuffers takes
+ * the full-screen lease, whose 640x480 mode switch revokes that generation.
+ * The context must regain hardware without a failure mark, and later frames
+ * must stay GPU-resident: no READ, no UPLOAD, direct native scanout. */
+void gl_quake3_lease_flow(int default_format) {
+  extern void gl_kernel_desktop_setup(unsigned,unsigned),gl_kernel_teardown(void),gl_kernel_mode(unsigned,unsigned);
+  extern void gl_kernel_counters(unsigned *); extern unsigned gl_kernel_draws(void);
+  extern const uint8_t *gl_kernel_scanout(void); extern unsigned gl_kernel_scanout_pitch(void);
+  extern HDC gl_test_dc; extern unsigned gl_test_width,gl_test_height,gl_test_popup,gl_test_generation,gl_test_token;
+  extern pthread_t gl_test_owner;
+  const unsigned w=640,h=480;
+  gl_kernel_mode(w,h); gl_kernel_desktop_setup(w,h);
+  unsigned *pixels=calloc(w*h,4); assert(pixels);
+  struct w32_dib dib=test_dib(pixels,w,h,32,0,1);
+  HDC dc=w32_gdi_surface_dc(&dib,(POINT){0},0,0); assert(dc);
+  gl_test_dc=dc; gl_test_owner=pthread_self(); gl_test_width=w; gl_test_height=h; gl_test_popup=1;
+  PIXELFORMATDESCRIPTOR p={.nSize=40,.nVersion=1,.dwFlags=PFD_DOUBLEBUFFER|PFD_SUPPORT_OPENGL|PFD_DRAW_TO_WINDOW,
+    .cColorBits=32,.cDepthBits=default_format ? 24 : 16,.cStencilBits=default_format ? 8 : 0};
+  int chosen=ChoosePixelFormat(dc,&p); assert(chosen && SetPixelFormat(dc,chosen,&p));
+  HGLRC rc=wglCreateContext(dc); assert(rc && wglMakeCurrent(dc,rc));
+  glViewport(0,0,w,h); glEnable(GL_SCISSOR_TEST); glScissor(0,0,w,h);
+  glEnableClientState(GL_VERTEX_ARRAY); glEnableClientState(GL_COLOR_ARRAY);
+  for (unsigned u=0;u<2;u++) {
+    glActiveTextureARB(GL_TEXTURE0_ARB+u); texture(1024+u,256>>u);
+    glClientActiveTextureARB(GL_TEXTURE0_ARB+u); glEnableClientState(GL_TEXTURE_COORD_ARRAY);
+  }
+  glActiveTextureARB(GL_TEXTURE0_ARB); glClientActiveTextureARB(GL_TEXTURE0_ARB);
+  for (unsigned f=0;f<4;f++) {
+    unsigned before[5],after[5],draws=gl_kernel_draws();
+    gl_kernel_counters(before);
+    glDrawBuffer(GL_BACK); /* Quake III's per-frame RB_DrawBuffer: no sync */
+    frame(0);
+    assert(SwapBuffers(dc) && glGetError()==GL_NO_ERROR);
+    gl_kernel_counters(after);
+    unsigned gpu=gl_kernel_draws()-draws,reads=after[0]-before[0],uploads=after[1]-before[1];
+    unsigned direct=after[2]-before[2],vram_accesses=after[3]-before[3];
+    printf("GL_T23_SWAP depth=%u frame=%u generation=%u gpu_draws=%u reads=%u uploads=%u direct=%u vram_accesses=%u\n",
+      p.cDepthBits,f,after[4],gpu,reads,uploads,direct,vram_accesses);
+    /* Frame 0 also counts the 3-triangle minimum recheck that the grant's
+     * mode switch runs on the fake engine. */
+    assert(gpu==(f ? 3000u : 3003u));
+    if (!f) {
+      /* The first clear loads RAM unless it clears every attachment (D16);
+       * one coherent readback (colour + depth) before the grant that
+       * switches the mode, then a CPU present of that frame. */
+      assert(after[4]==43 && gl_test_generation==43 && reads==2 && uploads==(default_format ? 2u : 0u) && !direct);
+    } else {
+      assert(after[4]==43 && !reads && direct==1);
+      /* D16: the full clear needs no upload; D24/S8 (stencil not cleared by
+       * this frame) uploads its RAM copy once, after the mode switch. */
+      assert(uploads==(f==1 && default_format ? 2u : 0u));
+      if (f>1) assert(vram_accesses<4096); /* CPU VRAM accesses: sampled + scanout guards only */
+    }
+  }
+  const char *renderer=(const char *)glGetString(GL_RENDERER);
+  assert(renderer && strstr(renderer,"render3d"));
+  /* The front buffer of a GPU swap is the presented copy, read on demand. */
+  unsigned before[5],after[5]; gl_kernel_counters(before);
+  glReadBuffer(GL_FRONT);
+  uint8_t *front=malloc(w*h*4); assert(front);
+  glReadPixels(0,0,w,h,GL_RGBA,GL_UNSIGNED_BYTE,front);
+  gl_kernel_counters(after);
+  assert(glGetError()==GL_NO_ERROR && after[0]-before[0]>=1);
+  const uint8_t *scanout=gl_kernel_scanout(); unsigned pitch=gl_kernel_scanout_pitch(),mismatches=0;
+  for (unsigned y=0;y<h;y++) for (unsigned x=0;x<w;x++) {
+    const uint8_t *q=front+((h-1-y)*w+x)*4;
+    uint32_t a=(uint32_t)q[0]<<16|(uint32_t)q[1]<<8|q[2],b; memcpy(&b,scanout+y*pitch+x*4,4);
+    if (a!=(b&0xffffffu)) mismatches++;
+  }
+  assert(!mismatches);
+  free(front);
+  assert(wglMakeCurrent(0,0) && wglDeleteContext(rc)); assert(DeleteDC(dc)); free(pixels);
+  gl_test_dc=0; gl_test_popup=0; gl_test_generation=12; gl_test_token=11;
+  gl_kernel_teardown();
+  printf("GL_T23_LEASE_FLOW depth=%u context_before_lease=1 regained_hardware=1 gpu_resident_frames=3 front_on_demand=1 PASS\n",
+    p.cDepthBits);
 }

@@ -141,6 +141,7 @@ CiukiOS 1.0.0 alpha Startup Menu
   6. Safe mode command prompt only
   7. Safe mode without disks
   8. Hardware check
+  9. Self-test (unattended, about 5 minutes)
 
 Enter a choice: 1   Time remaining: 30
 F5=Safe mode  Shift+F5=Command prompt  Shift+F8=Step-by-step confirmation [N]
@@ -168,6 +169,7 @@ a person can read the menu and the step-by-step prompts.
 | 6 Safe mode command prompt only | `CBI_F_SAFE_MODE | CBI_F_SAFE_STORAGE | CBI_F_CMD_ONLY` |
 | 7 Safe mode without disks | `CBI_F_SAFE_MODE` (the earlier S) |
 | 8 Hardware check | `CBI_F_HW_CHECK | CBI_F_VERBOSE` (as H) |
+| 9 Self-test | `CBI_F_SELF_TEST` (as T; fx-selftest, [self-test](self-test.md)) |
 
 Step-by-step prompts, each `[Enter=Y,Esc=N]` (Y keeps the default): "Create
 a startup log on screen?" (Y adds the Logged flags), "Load the accelerated
@@ -265,6 +267,21 @@ is deleted. `SCANREG` in the Terminal: `/BACKUP`, `/COMMENT="text"`,
 restart prompt). Restoring needs no other registry writer, so the
 Terminal refuses `/RESTORE` unless the start is "Command prompt only"
 (Windows 98: "you must use the MS-DOS-based utility outside of Windows").
+
+*sec-sysvc2 amendment (user security, `docs/validation/sec-sysvc2.md`):*
+since sec-k06 the registry is the SYSTEM registry broker's, so Registry
+Checker runs there (`apps/registry/checker.c`, engine `regcheck.c`). A
+backup holds the broker's machine registry (native System and Programs
+roots, the committed Win32 machine hive slot under
+`C:\SYSTEM\SECURITY\REGISTRY\MACHINE`), BOOT.CFG, HWPROF.CFG and the settings
+files; `C:\SYSTEM\SYSBCKUP` is SYSTEM-only. Listing, backups, `/RESTORE` and
+`/FIX` are for administrators; the daily backup is a SYSTEM job every
+session's desktop asks for, made once a local day by the broker's clock. A
+restore is applied by the broker at the next start, before anything uses the
+registry (so `/RESTORE` no longer needs Command prompt only); a damaged root
+is restored at that start and the desktop reports it. The desktop's at-start
+ScanDisk reports are appended to SCANDISK.LOG by the kernel as SYSTEM
+(call 99 JOB), whoever logs on.
 
 ### 2.6 System File Checker
 

@@ -30,11 +30,13 @@ enum proc_personality { PROC_NATIVE, PROC_WIN32 };
  * unsupported realtime policies/classes remain rejected by public APIs. */
 int proc_priority_posix(int policy, int priority, int nice_value);
 int proc_priority_win32(uint32_t priority_class, int relative, bool foreground);
+struct security_subject;
 struct w32_delivery;
 struct w32_process;
 struct w32_thread;
 struct process {
     uint32_t pid, ppid, pgid, slot;
+    struct security_subject *subject; /* immutable; assigned before publication */
     enum proc_personality personality;
     struct w32_process *w32;
     uint32_t w32_image, w32_peb, w32_dispatcher, w32_stack_reserve, w32_stack_commit;
@@ -109,6 +111,8 @@ struct process *proc_supervisor(void);
 struct process *proc_find(uint32_t pid);
 /* Retained published slot; no waits between lookup and use. */
 struct process *proc_at_slot(unsigned slot);
+/* Security teardown includes unpublished reservations; never exposed to users. */
+struct process *proc_reserved_at_slot(unsigned slot);
 struct proc_thread *proc_thread_for(const struct task *task);
 struct proc_thread *proc_thread_find(struct process *p, uint32_t tid);
 struct proc_thread *proc_thread_slot(unsigned slot);

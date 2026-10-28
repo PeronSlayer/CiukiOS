@@ -286,6 +286,7 @@ int dpmi_terminate(struct dosvm *v, bool from_pm)
     if (d->return_steps && d->return_client == id) dpmi_return_cancel(v);
     struct dpmi_client *cl = &d->client[c];
     dpmi_unwind(v, cl->depth_base);
+    dosvm_mouse_callback_free(v, 0xF000, DPMI_RM_CALLBACK + 4 * c * DPMI_CALLBACKS, 4 * DPMI_CALLBACKS);
     if (cl->env_sel) dosvm_write(v, ((uint32_t)cl->psp << 4) + 0x2C, &cl->env, 2);
     for (unsigned i = 0; i < DPMI_BLOCKS; i++)
         if (d->block[i].b.used && d->block[i].owner == id) {
@@ -724,6 +725,7 @@ static int service(struct dosvm *v, struct v86_frame *f, unsigned ax)
             if (!d->clients || cx != 0xF000 || dx < base || dx >= base + 4 * DPMI_CALLBACKS || (dx - base) % 4) return 1;
             struct dpmi_callback *cb = &d->client[d->clients - 1].cb[(dx - base) / 4];
             if (!cb->used) return 1;
+            dosvm_mouse_callback_free(v, cx, dx, 4);
             memset(cb, 0, sizeof(*cb));
             return 0;
         }

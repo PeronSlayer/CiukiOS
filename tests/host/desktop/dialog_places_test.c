@@ -22,7 +22,7 @@ static int places_close_fd(int);
 #undef open
 static unsigned opens, closes, state_reads, volume_reads;
 static uint32_t mounted=(1u<<3)|(1u<<4), transport=12;
-static int unavailable, changed_mid_snapshot, bad_volume, floppy_present;
+static int unavailable, changed_mid_snapshot, bad_volume, floppy_present, optical_empty;
 static const char *usb_label="CIUKI USB";
 static int places_open(const char *path,int flags,...)
 {
@@ -39,6 +39,7 @@ int places_devctl(int fd,uint32_t op,void *record,uint32_t bytes)
         assert(bytes==sizeof(struct ciuki_media_state)); state_reads++;
         struct ciuki_media_state *s=record; s->removable_mask=mounted;
         if (floppy_present) s->type[0]=CIUKI_MEDIA_FLOPPY; /* fx-17b: drive A:, no disk */
+        if (optical_empty) s->type[3]=CIUKI_MEDIA_OPTICAL; /* fx-emptydrive: drive D:, no disc */
         for (unsigned d=3;d<26;d++) if (mounted&(1u<<d)) {
             s->type[d]=d==3 ? CIUKI_MEDIA_OPTICAL : CIUKI_MEDIA_USB;
             s->generation[d]=transport;
@@ -58,6 +59,7 @@ static int list(void *ctx,const char *path,struct du_file_entry *out,unsigned ca
 {
     (void)ctx; assert(cap);
     if (!strcmp(path,"/Documents/Pictures")) return -EIO;
+    if (optical_empty && !strcmp(path,"/mnt/d")) return -ENXIO; /* the kernel's "not ready" */
     *count=1; *out=(struct du_file_entry){0};
     snprintf(out->name,sizeof(out->name),"%s",!strcmp(path,"/mnt/e") ? "Original tone with spaces.mp3" : "Example.txt");
     return 0;
@@ -128,7 +130,18 @@ int main(int argc,char **argv)
     assert(!du_file_dialog(&u,4,0,"Open","/Documents","",list,NULL));
     assert(d->places->count==6 && !strcmp(d->places->entries[5].label,"3.5 Floppy (A:)") &&
            !strcmp(d->places->entries[5].path,"/mnt/a") && d->places->rows[5].icon16);
-    du_dialog_close(&u); floppy_present=0; du_release(&u);
+    du_dialog_close(&u); floppy_present=0;
+    /* fx-emptydrive: an empty CD-ROM drive is a Place (Windows 98 lists the
+     * drive without a disc); opening it asks for one and stays put. */
+    optical_empty=1; mounted=0;
+    assert(!du_file_dialog(&u,5,0,"Open","/Documents","",list,NULL));
+    assert(d->places->count==6 && !strcmp(d->places->entries[5].label,"Compact Disc (D:)") &&
+           !strcmp(d->places->entries[5].path,"/mnt/d") && d->places->rows[5].icon16);
+    click_place(&u,5);
+    assert(!strcmp(d->folder,"/Documents") && strstr(FILE_STATE(d)->sub_text,"Please insert a disk into drive D:"));
+    render(&u,argv[1],"places-empty-cd");
+    du_dialog_close(&u); optical_empty=0; du_release(&u);
     puts("PASS Places: native media labels/generations, floppy A: place, render, mouse/keyboard navigation, hotplug, query errors and close");
+    puts("PASS fx-emptydrive Places: empty CD-ROM D: listed as Compact Disc (D:), opening it asks for a disc");
     puts("PASS F2-86 Places: unchanged polls render=0; renamed label invalidates pane only; retained row pointers/selection/scroll");
 }

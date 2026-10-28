@@ -1,0 +1,19 @@
+<!doctype html><meta charset="utf-8"><title>Modern layout subset</title>
+<style>
+:root { --paper: #fafbf8; --ink: #110e35; --accent: #78e6a3; --surface: #f0f2ee; --space: 8px; }
+@property --accent { syntax: '<color>'; inherits: false; initial-value: blue; }
+html,body { margin: 0; padding: 0; background: var(--paper); color: var(--ink); }
+.row { display: flex; flex-wrap: wrap; width: 100px; gap: 10px var(--space); }
+.tile { flex: 0 0 40px; height: 20px; background: var(--accent); }
+.tile + .tile { background: var(--ink); }
+.tile + .tile + .tile { background: color-mix(in srgb, var(--surface) 84%, var(--accent)); }
+.column { display: flex; flex-direction: column; width: 40px; gap: 10px; }
+.column .tile { flex-basis: 20px; }
+.grid { display: grid; grid-template-columns: repeat(2,minmax(0,1fr)); gap: 12px; }
+.grid article { background: var(--surface); }
+.grid .wide { grid-column: 1 / -1; }
+</style>
+<div class="row"><div class="tile"></div><div class="tile"></div><div class="tile"></div></div>
+<div class="column"><div class="tile"></div><div class="tile"></div></div>
+<section class="grid"><article><h2>First entry</h2><p>Readable content in source order.</p></article>
+<article class="wide"><h2>Second entry</h2><p>The grid fallback keeps this paragraph.</p></article></section>

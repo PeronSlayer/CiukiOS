@@ -456,6 +456,7 @@ BOOL u32_destroy(struct u32_window *w, UINT mode) {
   u32_destroy_dependents(w, mode, 2);
   u32_classic_destroy(h); /* USER-owned control/dialog/menu/caret records, also at thread exit */
   u32_window_region_free(w);
+  w32_user_display_release((uintptr_t)h);
   u32_destroy_paint(w);
   while (w->props) {
     struct u32_prop *p = w->props;
@@ -536,6 +537,33 @@ BOOL W32API GetWindowRect(HWND h, RECT *r) {
     POINT p = u32_origin(u32_window(w->parent));
     OffsetRect(r, p.x, p.y);
   }
+  return 1;
+}
+/* fx-is5boot (InstallShield 5 engine import). The desktop minimizes and
+ * zooms a window without a separate restore rectangle, so rcNormalPosition
+ * is the current rectangle: parent client coordinates for a child, work-area
+ * coordinates for a top-level window. Minimized/maximized positions were
+ * never set: (-1, -1). showCmd follows WS_MINIMIZE/WS_MAXIMIZE. */
+struct u32_placement {
+  UINT length, flags, show;
+  POINT minimum, maximum;
+  RECT normal;
+};
+BOOL W32API GetWindowPlacement(HWND h, struct u32_placement *p) {
+  U32_GUARD;
+  struct u32_window *w = u32_window(h);
+  if (!w)
+    return u32_fail(1400);
+  if (!p)
+    return u32_fail(998);
+  p->length = sizeof(*p);
+  p->flags = 0;
+  p->show = w->style & WS_MINIMIZE ? 2 : w->style & WS_MAXIMIZE ? 3 : 1;
+  p->minimum.x = p->minimum.y = p->maximum.x = p->maximum.y = -1;
+  p->normal = w->rect;
+  RECT area;
+  if (!w->parent && SystemParametersInfoA(48, 0, &area, 0))
+    OffsetRect(&p->normal, -area.left, -area.top);
   return 1;
 }
 BOOL W32API ClientToScreen(HWND h, POINT *p) {
@@ -951,6 +979,10 @@ uintptr_t W32API SetClassLongA(HWND h, int index, intptr_t value) {
       return u32_fail(1413);
     w32_put32(c->extra + index, value);
   }
+  if (index == -14 || index == -34) /* fx-exeicons: the class's windows show the new icon */
+    for (UINT k = 0; k < U32_WINDOWS; k++)
+      if (u32_windows[k].handle && u32_windows[k].cls == c && !u32_windows[k].parent)
+        (void)u32_window_icon(&u32_windows[k]);
   return old;
 }
 uint16_t W32API GetWindowWord(HWND h, int n) {
@@ -1350,6 +1382,21 @@ LRESULT W32API DefWindowProcA(HWND h, UINT msg, WPARAM wp, LPARAM lp) {
       u32_mark();
     }
     return 0;
+  case 0x0080: { /* WM_SETICON: ICON_SMALL 0, ICON_BIG 1; the previous icon */
+    if (!w || wp > 1)
+      return 0;
+    HICON old = wp ? w->icon_big : w->icon_small;
+    if (wp)
+      w->icon_big = (HICON)lp;
+    else
+      w->icon_small = (HICON)lp;
+    (void)u32_window_icon(w);
+    return (LRESULT)old;
+  }
+  case 0x007f: /* WM_GETICON: ICON_SMALL2 2 is the small icon or the one made from the big */
+    if (!w)
+      return 0;
+    return (LRESULT)(wp == 1 ? w->icon_big : wp == 0 ? w->icon_small : wp == 2 ? (w->icon_small ? w->icon_small : w->icon_big) : 0);
   case WM_GETTEXT:
     return title_copy(h, (char *)lp, (int)wp);
   case WM_GETTEXTLENGTH:

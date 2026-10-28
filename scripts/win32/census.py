@@ -52,7 +52,7 @@ class PE:
         require(len(data) >= 64, 'dos-header-truncated')
         require(data[:2] == b'MZ', 'dos-magic')
         p = self.u32(60)
-        require(p % 4 == 0, 'pe-offset-alignment')
+        if p % 4: self.warnings.append('pe-offset-alignment')
         require(p >= 64 and p + 24 <= len(data), 'pe-header-bounds')
         require(data[p:p+4] == b'PE\0\0', 'pe-signature')
         require(self.u16(p+4) == 0x14c, 'machine-not-i386')

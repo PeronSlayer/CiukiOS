@@ -46,7 +46,9 @@ int pe_parse(struct pe_image *p, const void *bytes, uint32_t size, struct pe_err
     CHECK(bytes && size >= 64, "dos-header-truncated");
     CHECK(f[0] == 'M' && f[1] == 'Z', "dos-magic");
     uint32_t off = pe_u32(f + 60);
-    CHECK(!(off & 3), "pe-offset-alignment");
+    /* fx-classaudit: as the kernel validator and Wine's get_image_params,
+     * an unaligned e_lfanew is read bytewise; bounds and signature decide. */
+    if (off & 3) pe_note(p, "pe-offset-unaligned-accepted");
     CHECK(off >= 64 && within(off, 24, size), "pe-header-bounds");
     CHECK(pe_u32(f + off) == 0x4550, "pe-signature");
     CHECK(pe_u16(f + off + 4) == 0x14c, "machine-not-i386");

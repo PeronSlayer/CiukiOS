@@ -139,7 +139,7 @@ struct dosvm_audio {
         struct { uint32_t a, b, c; } state_event[16];
         uint8_t state_head, state_count, sb_state, periodic;
         uint32_t dropped;
-        bool attachment, environment, summary_pending;
+        bool attachment, environment, summary_pending, opl_activity, midi_activity;
         int attach_error;
         uint64_t next_log, next_summary, last_summary, published, next_level;
         uint64_t next_cadence, underruns;

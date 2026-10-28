@@ -44,7 +44,7 @@
 #include "network_io.inc"
 #include "../dosbox/port_settings.h"
 
-struct cp_main { struct users_worker users_worker; char settings_temp[160]; struct cp_network_worker network_worker; struct cp_app app; struct du_ui ui; struct du_window window; struct cfg_writer writer;
+struct cp_main { unsigned icon_generation; /* fx-exeicons: du_file_icons_generation() shown */ struct users_worker users_worker; char settings_temp[160]; struct cp_network_worker network_worker; struct cp_app app; struct du_ui ui; struct du_window window; struct cfg_writer writer;
     int writer_started, reload_pending, hwid_loaded, usb_hwid_loaded; char *hwid_pci, *hwid_usb; uint32_t portrait[256 * 256]; uint32_t install_serial, serial, display_serial, audio_serial, engine_serial;
     struct ciuki_display_engine_info generic_engine;
     struct ciuki_accel_info engine; int engine_ok; uint64_t engine_next; int title_page;
@@ -64,6 +64,9 @@ struct cp_main { struct users_worker users_worker; char settings_temp[160]; stru
     struct cp_job program_scan; int programs_requested,programs_ready,program_count,next_program_count;
     struct desk_uninstall_entry program_cache[CP_PROGRAM_MAX], *program_next;
     pthread_mutex_t completion_lock;
+    /* sec-user-04: User Accounts worker (accounts_client.c over the
+     * ACCOUNTS link); the request copy holds secrets only while it runs. */
+    struct cp_job accounts_job; struct cpa_request accounts_request; struct cpa_view accounts_view; int accounts_error;
     int completion[2];
     uint32_t applet_serial;
     uint64_t tick_next;
@@ -84,6 +87,59 @@ static int user_begin(void *ctx,const struct users_request *q)
 { struct cp_main *m=ctx; return users_begin(&m->users_worker,q,notify_completion,m); }
 static int user_poll(void *ctx,struct users_view *v,int *e)
 { struct cp_main *m=ctx; return users_poll(&m->users_worker,v,e); }
+/* --- sec-user-04: User Accounts over the SYSTEM account service. The link
+ * (call-101 SERVICE_CONNECT to ACCOUNTS, server role ACCOUNT) and QUERY_SELF
+ * carry this process's kernel credential; nothing here is an authority.
+ * Target only: host harnesses that include this file keep the G32 pages. --- */
+#ifdef __i386__
+#include "../logon/sys_ciuki.h"
+#include <ciuki/security.h>
+static struct lgn_client accounts_link;
+static int accounts_call(void *ctx,uint32_t op,uint64_t generation,const void *body,size_t n,void *reply,size_t cap,size_t *used,int *status)
+{
+    (void)ctx;
+    if (!accounts_link.sys) lgn_client_init(&accounts_link,&lgn_client_ciuki,CIUKI_SECURITY_SERVICE_ACCOUNTS,CIUKI_SECURITY_ROLE_ACCOUNT);
+    return lgn_client_call(&accounts_link,op,generation,body,n,reply,cap,used,status,15000);
+}
+static int accounts_self(void *ctx,uint32_t *uid,uint32_t groups[8],unsigned *count)
+{
+    (void)ctx; struct ciuki_credential c;
+    if (ciuki_security_self(&c)) return errno ? -errno : -EIO;
+    *uid=c.uid; *count=c.group_count>8 ? 8 : c.group_count;
+    for (unsigned i=0;i<*count;i++) groups[i]=c.groups[i];
+    return 0;
+}
+static const struct cpa_transport accounts_transport={NULL,accounts_call,accounts_self};
+static void accounts_work(void *ctx)
+{
+    struct cp_main *m=ctx;
+    m->accounts_error=cpa_execute(&accounts_transport,&m->accounts_request,&m->accounts_view);
+    cpa_wipe(&m->accounts_request,sizeof(m->accounts_request));
+}
+static int accounts_begin(void *ctx,const struct cpa_request *q)
+{
+    struct cp_main *m=ctx;
+    if (m->accounts_job.started) return -EBUSY;
+    m->accounts_request=*q;
+    int e=cp_job_start(&m->accounts_job,accounts_work,m,notify_completion,m);
+    if (e) cpa_wipe(&m->accounts_request,sizeof(m->accounts_request));
+    return e;
+}
+static int accounts_poll_io(void *ctx,struct cpa_view *v,int *e)
+{
+    struct cp_main *m=ctx;
+    if (!cp_job_ready(&m->accounts_job)) return 0;
+    cp_job_finish(&m->accounts_job); *v=m->accounts_view; *e=m->accounts_error; return 1;
+}
+static int self_admin(void *ctx)
+{
+    uint32_t uid=0,groups[8]; unsigned n=0;
+    if (accounts_self(ctx,&uid,groups,&n)) return 0;   /* unknown: machine controls stay disabled */
+    for (unsigned i=0;i<n;i++) if (groups[i]==CPA_GROUP_ADMINS && uid) return 1;
+    return 0;
+}
+#endif
+/* --- end sec-user-04 --- */
 /* All applet jobs share one bounded notification channel. Queue saturation
  * already means readable; other send failures close the peer and wake HUP.
  * Serialize send/close so concurrent producers cannot use a recycled fd. */
@@ -162,12 +218,9 @@ static void remember_size(struct cp_main *m)
 static int load(void *ctx, char *text, size_t size, size_t *length)
 {
     (void)ctx;
-    FILE *f = fopen(profile_settings(), "rb");
-    if (!f) return -1;
-    *length = fread(text, 1, size, f);
-    int ok = !ferror(f) && *length < size;
-    fclose(f);
-    return ok ? 0 : -1;
+    int error=cfg_read_at(profile_settings(),text,size,length);
+    if (error) { errno=error; return -1; }
+    return 0;
 }
 static int save(void *ctx, const char *text, size_t length)
 {
@@ -208,6 +261,12 @@ static int boot_save(void *ctx, const char *text, size_t length)
 {
     char previous[CP_BOOT_MAX]; size_t n = 0;
     if (length >= CP_BOOT_MAX || boot_load(ctx, previous, sizeof(previous), &n)) return -1;
+    /* sec-sysvc: BOOT.CFG is a sealed boot input; an administrator saves it
+     * through the SYSTEM boot-configuration service (it restores the old
+     * text itself after a failed write). ENOSYS: an older kernel; ENODEV:
+     * no managed system volume (Setup media), where the file is written. */
+    if (!ciuki_boot_config_set(text, length)) return 0;
+    if (errno != ENOSYS && errno != ENODEV) return -1;
     int fd = open("/system/BOOT.CFG", O_RDWR | O_CLOEXEC);
     if (fd < 0) return -1;
     int r = boot_write(fd, text, length);
@@ -235,9 +294,25 @@ static int hw_load(void *ctx, char *text, size_t size, size_t *length)
     text[n] = 0; *length = n;
     return 0;
 }
+/* sec-sysvc2: HWPROF.CFG, performance.cfg and accel-retry.cfg are sealed
+ * boot inputs (the loader and the kernel read them at the next start). An
+ * administrator saves them through the SYSTEM setting service (EPERM for
+ * other accounts); ENOSYS (an older kernel) or ENODEV (no managed system
+ * volume) keep the direct file write. 1: write the file yourself. */
+static int setting_service(unsigned setting, const char *text, size_t length, int *error)
+{
+    *error = 0;
+    if (!ciuki_system_setting_set(setting, text, length)) return 0;
+    if (errno != ENOSYS && errno != ENODEV) { *error = -errno; return 0; }
+    return 1;
+}
 /* Atomic replace: temporary file, fsync, rename (cfg_write_at). */
 static int hw_save(void *ctx, const char *text, size_t length)
-{ (void)ctx; int e = cfg_write_at(CP_HW_FILE, "/system/HWPROF.TMP", text, length); return e ? -e : 0; }
+{
+    (void)ctx; int e;
+    if (!setting_service(CIUKI_SYSTEM_SETTING_HWPROFILES, text, length, &e)) return e;
+    e = cfg_write_at(CP_HW_FILE, "/system/HWPROF.TMP", text, length); return e ? -e : 0;
+}
 static uint32_t boot_serial(void *ctx)
 {
     (void)ctx; struct ciuki_recovery_status status;
@@ -261,7 +336,9 @@ static int perf_save(void *ctx, const struct system_perf *p)
     char text[256];
     int n = snprintf(text, sizeof(text), "version=1\nrole=%u\nread_ahead=%u\ngraphics=%u\nvm=%u\nmin_mb=%u\nmax_mb=%u\n",
         p->role, p->read_ahead, p->graphics, p->vm, p->min_mb, p->max_mb);
-    int e = cfg_write_at(SYSTEM_PERF_PATH, CFG_DIR "/performance.tmp", text, (size_t)n);
+    int e;
+    if (!setting_service(CIUKI_SYSTEM_SETTING_PERFORMANCE, text, (size_t)n, &e)) return e; /* sec-sysvc2 */
+    e = cfg_write_at(SYSTEM_PERF_PATH, CFG_DIR "/performance.tmp", text, (size_t)n);
     return e ? -e : 0;
 }
 static int memory_query(void *ctx, uint64_t *total_k, uint64_t *free_k)
@@ -328,6 +405,17 @@ static int pack_present(const struct ndp_device *d)
     }
     free(info); return found;
 }
+/* sec-sysvc: the driver store is sealed (K-Q4); the SYSTEM driver-pack
+ * service installs and removes packages after an administrator check, reads
+ * the package folder as this user and verifies every byte it writes. */
+static int pack_service(struct ciuki_driver_pack_job *job,char reason[160])
+{
+    job->version=CIUKI_DRIVER_PACK_JOB_VERSION; job->size=sizeof(*job);
+    int r=ciuki_driver_pack(job) ? -errno : 0;
+    snprintf(reason,160,"%s",job->reason[0] ? job->reason : r==-EPERM ? "You must be an administrator to change driver packages." :
+             r ? "The driver package service is unavailable." : "");
+    return r;
+}
 static int pack_install(void *ctx,const struct dp_plan *plan,const char *root,char reason[160])
 {
     (void)ctx;
@@ -338,21 +426,25 @@ static int pack_install(void *ctx,const struct dp_plan *plan,const char *root,ch
             snprintf(reason,160,"Qualification changed or the driver host is busy. Select the package again."); return -EBUSY;
         }
     }
-    /* /System already belongs to the installed OS; never create a source-media store. */
-    if(mkdir(NDP_ROOT,0700) && errno!=EEXIST) { snprintf(reason,160,"The system driver store is unavailable."); return -errno; }
-    return dp_install(plan,root,NDP_ROOT,reason);
-}
-static int pack_busy(void *ctx,const struct ndp_device *d)
-{
-    (void)ctx; struct ciuki_driver_pack_query q;
-    /* Fail closed: an unreadable host state counts as busy. */
-    return pack_query(d,NULL,&q) || q.busy;
+    struct ciuki_driver_pack_job *job=calloc(1,sizeof(*job));
+    if(!job) { snprintf(reason,160,"Not enough memory to install the package."); return -ENOMEM; }
+    if(strlen(root)>=sizeof(job->root)) { free(job); snprintf(reason,160,"The location is too long."); return -ENAMETOOLONG; }
+    job->action=CIUKI_DRIVER_PACK_INSTALL; strcpy(job->root,root);
+    job->manifest=(uint32_t)(uintptr_t)&plan->manifest; job->manifest_bytes=sizeof(plan->manifest);
+    job->sources=(uint32_t)(uintptr_t)plan->source; job->source_bytes=plan->manifest.file_count*(uint32_t)sizeof(plan->source[0]);
+    int r=pack_service(job,reason);
+    free(job);
+    return r;
 }
 static int pack_remove(void *ctx,const struct ndp_device *d,char reason[160])
 {
     (void)ctx;
     if(!pack_present(d)) { snprintf(reason,160,"Device changed or is quarantined. Refresh the inventory."); return -EBUSY; }
-    return dp_uninstall_checked(d,NDP_ROOT,pack_busy,ctx,reason);
+    /* The service checks the host as SYSTEM: an unreadable host state counts as busy. */
+    struct ciuki_driver_pack_job job; memset(&job,0,sizeof(job));
+    job.action=CIUKI_DRIVER_PACK_REMOVE; job.bus=d->bus; job.slot=d->slot; job.function=d->function;
+    job.vendor=d->vendor; job.device=d->device; job.sub_vendor=d->sub_vendor; job.sub_device=d->sub_device; job.revision=d->revision;
+    return pack_service(&job,reason);
 }
 /* The id database is intentionally opened on first Device Manager lookup.
  * Its generator emits a flat, deterministic JSON object with no escaped
@@ -527,6 +619,10 @@ static int accel_retry(void *ctx)
 {
     struct cp_main *m=ctx;
     if (!m->engine_ok || m->generic_engine.version!=CIUKI_DISPLAY_ENGINE_VERSION) return -EAGAIN;
+    /* sec-sysvc2: the retry request is a sealed boot input (setting_service). */
+    char text[48]; int n=cp_accel_retry_text(&m->generic_engine,text,sizeof(text)),e;
+    if (n<0) return n;
+    if (!setting_service(CIUKI_SYSTEM_SETTING_ACCEL_RETRY,text,(size_t)n,&e)) return e;
     return cp_accel_retry_request(CP_ACCEL_RETRY_PATH,&m->generic_engine);
 }
 static int engine_query(void *ctx, struct ciuki_accel_info *info)
@@ -549,6 +645,15 @@ static int network_poll(void *ctx,struct cp_network_result *result)
 { return network_worker_poll(&((struct cp_main *)ctx)->network_worker,result); }
 static int log_read(void *ctx,uint32_t offset,char *text,size_t cap,size_t *length,uint32_t *total)
 {
+    /* sec-sysvc: the boot log is a system log; administrators read it
+     * through the SYSTEM log service (Event Viewer model). ENOSYS (an older
+     * kernel) or ENODEV (no system volume for the service): read the file. */
+    size_t got=0; uint32_t size=0;
+    if (cap>CIUKI_SYSTEM_LOG_DATA_MAX) cap=CIUKI_SYSTEM_LOG_DATA_MAX;
+    if (!ciuki_system_log_read(CIUKI_SYSTEM_LOG_MACHINE,"BOOT.LOG",offset,text,cap,&got,&size)) {
+        *length=got; *total=size; return 0;
+    }
+    if (errno!=ENOSYS && errno!=ENODEV) return -errno;
     (void)ctx; int fd=open(CP_LOG_FILE,O_RDONLY|O_CLOEXEC);
     if (fd<0) return -errno;
     struct stat st;
@@ -712,6 +817,8 @@ static void idle(void *arg)
     struct cp_main *m=arg;
     if (m->app.page==CP_DISPLAY || m->app.page==CP_SYSTEM || m->app.page==CP_DEVICES || m->app.page==CP_DRIVERS) m->assets_requested=1;
     if (m->window.configured && m->ui.frame_count) programs_poll(m);
+    unsigned icons=du_file_icons_generation();   /* fx-exeicons: program icons the worker published */
+    if (icons!=m->icon_generation) { m->icon_generation=icons; cp_uninstall_icons(&m->app); }
     if (m->assets.started && cp_job_ready(&m->assets) && m->ui.capture<0 && !m->ui.dialog.kind) {
         cp_job_finish(&m->assets); m->assets_ready=1;
         m->hwid_pci=m->pci_cache; m->hwid_usb=m->usb_cache;
@@ -724,7 +831,8 @@ static void idle(void *arg)
     if (m->title_page!=m->app.page) {
         m->title_page=m->app.page;
         const char *title=m->app.page==CP_DISPLAY ? "Display Properties" :
-            m->app.page==CP_DEVICES || m->app.page==CP_DRIVERS ? "System" : "Control Panel";
+            m->app.page==CP_DEVICES || m->app.page==CP_DRIVERS ? "System" :
+            m->app.page==CP_PASSWORDS ? "User Accounts" : "Control Panel";   /* sec-user-04: the Passwords alias */
         for (unsigned k=0;k<CP_APPLETS;k++) if (cp_applets[k].page==m->app.page && m->app.page!=CP_DISPLAY) title=cp_applets[k].label;
         du_window_set_title(&m->window,title);
     }
@@ -809,6 +917,7 @@ static struct cp_program_store programs={.root="",.registry_list=registry_list,.
 static void scan_programs(void *ctx)
 {
     struct cp_main *m=ctx; struct cp_program_store store=programs;
+    store.profile=profile_root_path(); /* sec-user-04 */
     m->next_program_count=cp_program_list(&store,m->program_next,CP_PROGRAM_MAX);
 }
 static void programs_poll(struct cp_main *m)
@@ -838,6 +947,7 @@ static int program_remove(void *ctx,const struct desk_uninstall_entry *r)
 {
     struct cp_main *m=ctx; if (m->program_scan.started) return -EBUSY;
     programs.ctx=ctx;
+    programs.profile=profile_root_path(); /* sec-user-04: per-user shortcuts too */
     int result=cp_program_remove(&programs,r);
     struct cp_program_store recorder=programs;recorder.log=program_log;
     cp_program_record(&recorder,r,result);return result;
@@ -902,7 +1012,12 @@ static int control_run(struct cp_main *m)
 
 #include "internet_history.h"
 static int internet_clear(void *ctx)
-{ (void)ctx;return internet_history_clear("/Documents/NetSurf"); }
+{
+    /* sec-user-05: the browser profile of this session (sdk/netsurf chrome.c). */
+    (void)ctx;char own[200];const char *path=profile_data(own,sizeof(own),"NetSurf",1);
+    if(!path && profile_root_path()){errno=EACCES;return -1;}
+    return internet_history_clear(path ? path : "/Documents/NetSurf");
+}
 static int internet_read(void *ctx,struct cp_internet_options *o)
 { (void)ctx;return internet_load(INTERNET_OPTIONS_PATH,o); }
 static int internet_write(void *ctx,const struct cp_internet_options *o)
@@ -945,6 +1060,9 @@ int main(int argc, char **argv)
     m->writer_started=!cfg_writer_start(&m->writer,profile_settings(),m->settings_temp);
     struct cp_host *h = &m->app.host;
     h->user_begin=user_begin; h->user_poll=user_poll;
+#ifdef __i386__
+    if (profile_root_path()) { h->accounts_begin=accounts_begin; h->accounts_poll=accounts_poll_io; h->self_admin=self_admin; } /* sec-user-04 */
+#endif
     h->menu_begin=menu_begin_io;h->menu_poll=menu_poll_io;h->menu_explore=menu_explore;
     h->pack_scan=pack_scan; h->pack_preview=pack_preview;
     h->pack_install=pack_install; h->pack_remove=pack_remove;
@@ -995,9 +1113,15 @@ int main(int argc, char **argv)
     }
     if (game) cp_game_open(&m->app,game);
     if (set_wallpaper && cp_wallpaper_set(&m->app,set_wallpaper)) fprintf(stderr,"control: wallpaper path is not a supported image\n");
+    if (du_file_icons_start(m->ui.wake, m->ui.wake_ctx)) fprintf(stderr,"control: icon worker unavailable\n");   /* fx-exeicons */
     int r = control_run(m);
+    du_file_icons_stop();
     cp_decoder_stop();
     cp_job_finish(&m->users_worker.job);
+    cp_job_finish(&m->accounts_job); cpa_wipe(&m->accounts_request,sizeof(m->accounts_request)); /* sec-user-04 */
+#ifdef __i386__
+    lgn_client_close(&accounts_link);
+#endif
     cp_job_finish(&m->menu_job);
     cp_job_finish(&m->game_job);
     cp_job_finish(&m->program_scan); free(m->program_next);

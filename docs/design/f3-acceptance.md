@@ -1191,7 +1191,8 @@ build's `DOSBOOT.IMG` (manifest hashes, and the canonical image's
 `dos.image_sha256` when the runner passes it), the game directory under
 `\DOOM` or `\WOLF3D` (top-level plain 8.3 files; others skipped and listed)
 and generated files (`\DOOM\CIUKI.CFG`: SB 220h/IRQ 7/DMA 1, sound and music
-device 3, no mouse or joystick). It is embedded sparsely as `\CIUKIGAM.IMG`
+device 3, mouse enabled with click-to-capture in a window, no joystick).
+It is embedded sparsely as `\CIUKIGAM.IMG`
 (read-only attribute) in one contiguous chain of a 160 MiB FAT16 superfloppy
 made by `mkfs.fat` (32 KiB clusters: the VFS walks at most 4096 FAT entries
 per sector read); `fsck.fat` and `mtools` read both volumes back. The kernel
@@ -1914,7 +1915,7 @@ f3-41 VBE rule that any dirty page redraws every row.
    opcode passes the burst's own first test or a DAC write is open), then
    returns without the ordinary path's per-exit housekeeping and with one
    serialized clock read fewer in its cost sample, when before the instruction the
-   VM is booted, windowed and running, has no full-screen hold, idle poll,
+   VM is booted and running (windowed or full screen), has no full-screen hold, idle poll,
    IPX/NE2000 binding, pending SB16 IRQ-entry stamp, STI or MOV SS shadow,
    single-step, mouse callback due, and, with a DPMI client, no
    IF recovery, return tracker, client watchpoint or CLI-seed demand
@@ -1984,6 +1985,11 @@ f3-41 VBE rule that any dirty page redraws every row.
 - The DOS window's surface stays 640x480 XRGB (no ABI change). The desktop
   composes it and presents duplicated scaled rows with 2D-engine screen
   copies (f2-92 `present_box_raw`); that path is unchanged here.
-- Full-screen operation, the SB16 DSP ports (22xh), the keyboard (60h/64h)
-  and the game port (201h) keep the ordinary exit; so do exits during a
+- fx-doomfs2 amendment: non-VGA hot ports and PM CLI/STI use the fx-27
+  lean exit in every full screen. VGA register ports qualify only while
+  modeled (window or VBE full screen); native VGA full screen keeps direct
+  adapter I/O, and any trapped VGA access there takes the ordinary exit.
+  Mouse callbacks due also refuse lean exits in protected mode.
+- The SB16 DSP ports (22xh), the keyboard (60h/64h) and the game port
+  (201h) keep the ordinary exit; so do exits during a
   CLI-seed demand window (fx-16) and every exit with a pending IRQ.

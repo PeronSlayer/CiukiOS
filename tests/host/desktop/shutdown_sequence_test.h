@@ -306,6 +306,17 @@ static void test_shutdown_sequence(void)
         shutdown_at(2000000000ull); assert(shutdown_calls==1);
         shutdown_cleanup();
     }
+    /* fx-acpioff: ENOTSUP after STOPPED (no soft-off method) is a normal
+     * ending without an error code; a method that left the machine on
+     * (EIO) still names its error. */
+    shutdown_setup(); shutdown_error=ENOTSUP; shutdown_progress=CIUKI_POWER_STOPPED;
+    desk_power_begin(d,2); shutdown_at(1000000000ull);
+    assert(d->power.state==DESK_POWER_DONE && strstr(d->power.text,"safe to turn off") && !strstr(d->power.text,"error") && !strstr(d->power.text,"95"));
+    shutdown_cleanup();
+    shutdown_setup(); shutdown_error=EIO; shutdown_progress=CIUKI_POWER_STOPPED;
+    desk_power_begin(d,2); shutdown_at(1000000000ull);
+    assert(d->power.state==DESK_POWER_DONE && strstr(d->power.text,"safe to turn off") && strstr(d->power.text,"error 5"));
+    shutdown_cleanup();
 
     /* Runtime gates (including the crash-isolation desktop) cannot begin. */
     shutdown_setup(); d->sh.gate=1;

@@ -42,24 +42,32 @@ static void release(void *p)
     if (!h->pages) kfree(h);
     else { uint32_t n = h->pages, phys = h->physical; for (uint32_t i = 0; i < n; i++) mm_free(phys + i * PAGE_SIZE, MM_HEAP); }
 }
-static const void *map(uint32_t a, uint32_t n)
+/* core/power.c: the firmware-extent rule shared with the power parsers. */
+struct ciuki_e820;
+bool acpi_firmware_extent(const struct ciuki_e820 *, unsigned, uint32_t, uint32_t, bool);
+static const void *map_window(uint32_t a, uint32_t n, bool reserved_tail)
 {
-    if (!n || a > UINT32_MAX - n) return NULL;
     /* Reject kernel-owned RAM and reserved device BARs. Firmware tables
-     * must be in the BIOS/EBDA window or E820 ACPI reclaim/NVS regions. */
-    bool firmware = (a >= 0xe0000 && a + n <= 0x100000) ||
-                    (a >= 0x80000 && a + n <= 0xa0000);
-    for (unsigned i = 0; i < g_boot.e820_count; i++) {
-        const struct ciuki_e820 *e = &g_boot.e820[i];
-        if ((e->type == 3 || e->type == 4) && e->base <= a &&
-            e->length <= UINT64_MAX - e->base && e->base + e->length >= (uint64_t)a + n) firmware = true;
-    }
-    if (!firmware) return NULL;
+     * must be in the BIOS/EBDA window or E820 ACPI reclaim/NVS regions
+     * (plus, for the power parsers, the SeaBIOS reserved RAM tail). */
+    if (!acpi_firmware_extent(g_boot.e820, g_boot.e820_count < CIUKI_E820_MAX ? g_boot.e820_count : CIUKI_E820_MAX,
+                              a, n, reserved_tail)) return NULL;
     for (uint64_t p = PAGE_ALIGN_DOWN(a); p < (uint64_t)a + n; p += PAGE_SIZE)
         if (!pmm_is_reserved(p)) return NULL;
     return vmm_map_physical_ro(a, n);
 }
+static const void *map(uint32_t a, uint32_t n) { return map_window(a, n, false); }
 static void unmap(const void *p, uint32_t n) { vmm_revoke_mmio((void *)p, n); }
+/* fx-acpioff: the same read-only firmware windows for core/power_acpi_s5.c
+ * (its once-per-boot table parse); no ACPICA state is involved. sec-wire
+ * (QEMU run of image ae977fbe: "[power] acpi s5 fallback unavailable
+ * step=rsdt", RSDP in the F segment, RSDT/FADT/DSDT in SeaBIOS's ZoneHigh,
+ * an E820 reserved range): the power parsers also accept that firmware RAM
+ * tail (core/power.c acpi_firmware_extent). The ACPICA inventory keeps the
+ * narrower rule, so QEMU's ACPI ownership is unchanged (firmware-owned, as
+ * on the T23 its twin models). */
+const void *acpi_firmware_table_map(uint32_t a, uint32_t n) { return map_window(a, n, true); }
+void acpi_firmware_table_unmap(const void *p, uint32_t n) { unmap(p, n); }
 static uint64_t clock100ns(void)
 {
     static uint64_t last;

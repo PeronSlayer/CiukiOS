@@ -656,7 +656,7 @@ BOOL W32API w32_user_gl_target(DWORD dc,DWORD *values) {
  struct u32_window *w=u32_window(hwnd);
  if(!w||!values||w->destroying)return -1;
  RECT r;GetClientRect(w->handle,&r);values[0]=r.right;values[1]=r.bottom;values[2]=U32_PTR(w->handle);
- values[3]=!w->parent&&!(w->style&WS_CAPTION)&&(w->style&WS_POPUP)&&IsWindowVisible(w->handle);
+ values[3]=!w->lease_failed&&!w->parent&&!(w->style&WS_CAPTION)&&(w->style&WS_POPUP)&&IsWindowVisible(w->handle);
  /* A window target must never fall through to a generic GDI swap when its
   * owner cannot service the synchronous presentation transport. */
  return w->tid==u32_tid()?1:-1;

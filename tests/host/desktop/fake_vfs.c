@@ -174,7 +174,7 @@ static int metadata_node(void *ctx, const char *p, const struct fm_meta *m)
 }
 
 struct fm_vfs fake_vfs = {NULL, list, stat_node, mkdir_node, rename_node, unlink_node, rmdir_node,
-                          open_node, read_node, write_node, sync_node, close_node, metadata_node};
+                          open_node, read_node, write_node, sync_node, close_node, metadata_node, NULL};
 
 void fake_reset(void)
 {

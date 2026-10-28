@@ -193,8 +193,35 @@ char *mkdtemp(char *name) {
     int e=errno;if(pthread_mutex_unlock(&temp_lock)) { if(ok)rmdir(name);errno=EIO;return NULL; }
     if(!ok) { errno=e;return NULL; }return name;
 }
+/* sec-user-05 (user-security-contract.md 8.2, A1-10): temporaries go in the
+ * session's private directory, TMPDIR, which the kernel launch generates as
+ * <committed profile>/Local Settings/Temp and the desktop forwards; its
+ * missing components are created inside the profile. Only a profile-less
+ * process (SYSTEM tools, pre-logon bootstrap) keeps P_tmpdir, which the
+ * kernel path policy leaves writable to administrators alone. */
+static const char *temp_directory(void)
+{
+    const char *d=getenv("TMPDIR");
+    return d && d[0]=='/' && strlen(d)<200 && !strstr(d,"/../") && !strstr(d,"/./") ? d : "/tmp";
+}
+static int temp_ready(const char *dir)
+{
+    char path[200];size_t n=strlen(dir);if(n>=sizeof(path)) { errno=ENAMETOOLONG;return -1; }
+    memcpy(path,dir,n+1);
+    for(size_t i=1;i<=n;i++) {
+        if(i<n&&path[i]!='/')continue;
+        if(path[i-1]=='/')continue;
+        char c=path[i];path[i]=0;struct stat st;int failed=0;
+        if(!stat(path,&st)) { if(!S_ISDIR(st.st_mode)) { errno=ENOTDIR;failed=1; } }
+        else if(errno!=ENOENT||(mkdir(path,0700)&&errno!=EEXIST))failed=1;
+        path[i]=c;if(failed)return -1;
+    }
+    return 0;
+}
 FILE *tmpfile(void) {
-    char name[]="/tmp/ciuki-XXXXXX";int fd=mkstemp(name);if(fd<0)return NULL;
+    char name[256];const char *dir=temp_directory();
+    if(temp_ready(dir))return NULL;
+    snprintf(name,sizeof(name),"%s/ciuki-XXXXXX",dir);int fd=mkstemp(name);if(fd<0)return NULL;
     if(unlink(name)<0) { int e=errno;close(fd);errno=e;return NULL; }
     FILE *f=fdopen(fd,"w+");if(!f) { int e=errno;close(fd);errno=e; }return f;
 }
@@ -202,7 +229,7 @@ char *tmpnam(char *out) {
     static char buffer[L_tmpnam];if(!out)out=buffer;
     if(pthread_mutex_lock(&temp_lock)) { errno=EIO;return NULL; }
     unsigned counter=++temp_counter;int e=pthread_mutex_unlock(&temp_lock);if(e) { errno=e;return NULL; }
-    snprintf(out,L_tmpnam,"/tmp/c%lx-%lx",(unsigned long)getpid(),(unsigned long)counter);return out;
+    snprintf(out,L_tmpnam,"%s/c%lx-%lx",temp_directory(),(unsigned long)getpid(),(unsigned long)counter);return out;
 }
 
 int ciuki_devices(struct ciuki_devices_info *i) { return RET(CU_CALL(DEVICES,CU_PTR(i),sizeof(*i),0,0,0,0)); }

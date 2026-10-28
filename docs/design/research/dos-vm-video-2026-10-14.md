@@ -292,3 +292,66 @@ can prove.
 **Proven only on hardware:** VME/PVI behaviour; SuperSavage VGA mode entry,
 LCD expansion and the return to VBE; real exception, INVLPG and UC VRAM
 costs; switch latency; fps targets.
+
+## 6. fx-doomwin (2026-10-27): step 1 at trap entry, and what still costs
+
+Directive `docs/directives/fx-doomwin.md`; validation and figures in
+`docs/validation/fx-doomwin.md`. T23 trial 6c3b7800 (Pentium III-M, DOOM in
+the window, 5 s banks n=3/n=4): 103,224-137,500 VGA port exits at
+5.4-5.9 µs (the `vm_perf_port` rank 1 is 03C5h with 102,888-132,973), and
+the per-exit `remap_us` is about 2.06 µs. These selects already took
+fx-27's lean exit; what remained was the generic exit around a one-byte
+register store and one 16-entry PTE exchange.
+
+**How the references handle a sequencer write.**
+- Windows 3.x/9x VDD: for a VM in the background or a window it "traps all
+  the video I/O, saving the output port values and emulating the input
+  port values", and maps or hooks the video pages from the VM's virtual
+  controller state in its page-fault service (Windows 3.0 DDK, *Virtual
+  Device Adaptation Guide*, 18.1.3 "VDD I/O Trapping and Hooked Pages",
+  [PCjs copy](https://www.pcjs.org/documents/books/mspl13/win/w3ddkvxd/);
+  `Hook_V86_Page`, 19.2). CiukiOS follows that split: every SR02 write
+  traps, the model keeps it, and the A0000h window maps the plane it
+  selects. The Windows 9x VDD (VDD.VXD plus a vendor mini-VDD) keeps this
+  architecture: M. Necasek, "Windows 3.x VDDVGA", OS/2 Museum, 2023-01-23
+  ([article](https://www.os2museum.com/wp/windows-3-x-vddvga/)): "The VDD
+  is meant to virtualize VGA registers and not let DOS applications touch
+  the real hardware"; the VDDVGA.386 source shipped with the Windows 3.1
+  DDK; Windows 9x "was, as you say, architecturally the same" (the
+  author, in the article's comments).
+- DOSBox Staging
+  ([`vga_seq.cpp`](https://raw.githubusercontent.com/dosbox-staging/dosbox-staging/main/src/hardware/video/vga_seq.cpp)
+  `write_p3c5`, case 2): stores `map_mask` and the expanded
+  `full_map_mask`; no handler or mapping change (only SR04 calls
+  `VGA_SetupHandlers`). Every unchained store goes through a memory handler
+  that applies the mask, so the select itself is free and every store pays.
+- QEMU ([`vga.c`](https://raw.githubusercontent.com/qemu/qemu/master/hw/display/vga.c)
+  `vga_ioport_write`, `VGA_SEQ_D`): stores the register and calls
+  `vga_update_memory_access`, which only changes the chain-4 alias;
+  `vga_mem_writeb` applies `sr[VGA_SEQ_PLANE_WRITE]` per store. Under KVM
+  the legacy window is coalesced MMIO (`memory_region_set_coalescing`), so
+  its stores are batched instead of exiting one by one; the VGA port list
+  flushes that buffer first (`portio_list_set_flush_coalesced`), so every
+  port write still exits. Without VT-x the same holds here: every guest
+  OUT to a port closed in the TSS I/O bitmap is a #GP (Intel SDM Vol. 1,
+  "I/O Permission Bit Map").
+
+**Decision.** Keep the CiukiOS model (trap, store, map the selected plane):
+it lets DOOM's column stores run natively, which no reference does. Cut
+the exit around the store instead: `dosvm_trap_fast` (`dosvm.c`) retires
+OUT DX,AL/AX to 3C4h/3C5h (SR02) and 3CEh/3CFh (GR04/GR05) from
+`trap_dispatch` before its per-exit task accounting, with physical IF
+clear to the IRET, under the fx-27 lean conditions, in an unchained planar
+window only (chain-4 off, so no linear seed or 64 KiB harvest can occur in
+that IRQ-off section), reaching exactly `dosvm_vga_port`'s state
+(`dosvm_vga_select_fast`). It leaves out the frame copy, `cpu_trap_enter`/
+`cpu_user_return`, the second IRQ-off section, the generic port dispatch,
+the burst probe and the two `cpu_path_clock` reads; every VM exit's
+boundary stamps lose their CPUIDs (`dosvm_perf_stamp`), and a DPMI
+client's exits no longer scan the 256-slot native thread table on their
+way back to ring 3 (`proc_signal_return_to_user`). The 16-entry exchange
+stays: fx-doswin3 already invalidates only entries with A set
+(`vmm.c as_replace_pages`), and a lazily mapped window would trade the
+other twelve locked exchanges for page faults whenever a column's page
+range moves. OPL writes (388h/389h) could take the same entry; not done
+here.

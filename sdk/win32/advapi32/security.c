@@ -2,8 +2,10 @@
  * W21 service/NT-security/MSI failures of ADVAPI32 for the reused Wine
  * 10.0 DLLs (f5-20A). SIDs, ACLs and security descriptors are built in the
  * NT layout; FAT objects enforce none of them (decision
- * core-security-structures). Windows 9x has no Service Control Manager,
- * no tokens and no MSI: those calls fail with ERROR_CALL_NOT_IMPLEMENTED.
+ * core-security-structures). Windows 9x has no Service Control Manager
+ * and no MSI: those calls fail with ERROR_CALL_NOT_IMPLEMENTED. The
+ * read-only token/SID view of the kernel credential is identity.c
+ * (sec-user-05).
  * SPDX-License-Identifier: LGPL-2.1-or-later
  * Copyright 2026 CiukiOS contributors. */
 #include "internal.h"
@@ -25,6 +27,24 @@ static uint32_t sid_length(const uint8_t *sid) {
 uint32_t W32API GetLengthSid(const void *sid) {
   const uint8_t *s = sid;
   return s ? 8u + 4u * s[1] : 0;
+}
+/* fx-is5boot (InstallShield 5 engine imports). EqualSid compares two valid
+ * SIDs byte for byte and clears the last error, as Windows and Wine
+ * (kernelbase EqualSid over RtlEqualSid); an invalid SID is ERROR_INVALID_SID.
+ * sec-user-05: AllocateAndInitializeSid/FreeSid and the other SID helpers
+ * are in identity.c. */
+int W32API EqualSid(const void *a, const void *b) {
+  uint32_t n = sid_length(a), m = sid_length(b);
+  if (!n || !m)
+    return fail(1337);
+  w32r_last_error(0);
+  const uint8_t *x = a, *y = b;
+  if (n != m)
+    return 0;
+  for (uint32_t i = 0; i < n; i++)
+    if (x[i] != y[i])
+      return 0;
+  return 1;
 }
 /* ACL header: revision, sbz1, size, ACE count, sbz2. */
 int W32API InitializeAcl(void *acl, uint32_t length, uint32_t revision) {
@@ -332,12 +352,8 @@ int W32API SetFileSecurityA(const char *file, uint32_t information, void *sd) {
   (void)sd;
   W21("SetFileSecurityA", 0);
 }
-int W32API LookupPrivilegeValueW(const WCHAR *system, const WCHAR *name, void *luid) {
-  (void)system;
-  (void)name;
-  (void)luid;
-  W21("LookupPrivilegeValueW", 0);
-}
+/* sec-user-05: LookupPrivilegeValueA/W resolve the frozen local privilege
+ * view in identity.c. */
 /* MSI advertised shortcuts: W32_REFUSE_MSI, the UINT error result. */
 uint32_t W32API CommandLineFromMsiDescriptor(const WCHAR *descriptor, WCHAR *command,
                                              uint32_t *length) {

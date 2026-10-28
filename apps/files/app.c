@@ -26,7 +26,7 @@ enum {
     D_DELETE = 200, D_REPLACE, D_ERROR, D_PROPERTIES, D_INFO, D_PROGRESS, D_CANCEL_JOB, D_BIN_PURGE, D_BIN_EMPTY, D_BIN_PROPS, D_BIN_ITEM, D_INSERT, D_FIND = 228,
     C_GO_DOCUMENTS = 300, C_GO_GAMES, C_GO_CONTROL, C_GO_DESKTOP, C_MUSIC, C_GO_RECYCLE, C_RESTORE, C_EMPTY_BIN, C_BIN_PROPS, C_DELETE_NOW,
     C_OPTIONS = 310, C_ATTRIBUTES = 311,
-    C_CLEANUP = 312, C_FORMAT = 313, C_COPY_DISK = 314, C_BACKUP = 315, C_DEFRAG = 316, C_CONVERT = 317,
+    C_CLEANUP = 312, C_FORMAT = 313, C_COPY_DISK = 314, C_BACKUP = 315, C_DEFRAG = 316, C_CONVERT = 317, C_AUTOPLAY = 318,
     T_JOB = 1, T_MEDIA, T_BROWSER, T_DRAG_REFRESH
 };
 #define PANE_TOP 92
@@ -60,6 +60,7 @@ static void scan_poll(struct files_app *);
 static void scan_stop(struct files_app *);
 static void open_item(struct files_app *, unsigned, int);
 static int operation_open(struct files_app *,const char *);
+static int operation_spawn_record(struct files_app *,struct desk_launch_record *);
 static void open_with(struct files_app *,const char *);
 static int operations_command(struct files_app *,int);
 static int operations_result(struct files_app *,const struct du_event *);
@@ -187,8 +188,18 @@ static void insert_disk_prompt(struct files_app *a, int drive, const char *path)
 /* fx-17b: A:/B: drives the controller found, listed with or without a disk. */
 static int floppy_drive(const struct files_app *a, int d)
 { return d>=0 && d<2 && a->media.type[d]==CIUKI_MEDIA_FLOPPY; }
+/* fx-emptydrive: a CD-ROM drive keeps its letter with or without a disc. */
+static int optical_drive(const struct files_app *a, int d)
+{ return d>=3 && d<26 && a->media.type[d]==CIUKI_MEDIA_OPTICAL; }
+/* An existing drive without a mounted medium: Windows 98 asks for one. */
+static int empty_drive(const struct files_app *a, int d)
+{ return (floppy_drive(a,d) || optical_drive(a,d)) && !(a->media.removable_mask & (1u<<d)); }
 static uint32_t floppy_slots(const struct files_app *a)
-{ return (floppy_drive(a,0) ? 1u : 0u) | (floppy_drive(a,1) ? 2u : 0u) | a->media.removable_mask; }
+{
+    uint32_t slots=(floppy_drive(a,0) ? 1u : 0u) | (floppy_drive(a,1) ? 2u : 0u) | a->media.removable_mask;
+    for (int d=3;d<26;d++) if (optical_drive(a,d)) slots|=1u<<d;
+    return slots;
+}
 static void checkpoint(struct files_app *a, int stage)
 {
     if (!a->test || stage != a->stage + 1) return;
@@ -196,12 +207,45 @@ static void checkpoint(struct files_app *a, int stage)
     if (a->checkpoint) a->checkpoint(a, stage);
 }
 
-/* ---- icons: Tango store (libdeskui du_icon, icon_map.c) ---- */
-static const uint32_t *icon_of(const struct fm_entry *e, unsigned size)
-{ return du_icon_argb(du_icon_file(e->name, e->meta.type == FM_DIR, e->meta.exec != 0), size); }
-static const uint32_t *icon16(const struct fm_entry *e) { return icon_of(e, 16); }
-static const uint32_t *icon32(const struct fm_entry *e) { return icon_of(e, 32); }
+/* ---- icons: Tango store (libdeskui du_icon, icon_map.c) ----
+ * fx-exeicons: a program, library, icon file, shortcut (with the Windows
+ * overlay), PIF, Internet shortcut or read-only/system folder with a
+ * desktop.ini shows its own icon (libdeskui fileicon.c), as in Windows 98's
+ * Explorer. The icon worker extracts it off the UI thread; the type's icon
+ * stands in until files_service sees the published generation. */
+static const uint32_t *icon_of(struct files_app *a, const struct fm_entry *e, unsigned size)
+{
+    int dir = e->meta.type == FM_DIR;
+    if (dir ? (e->meta.attributes & (CIUKI_ATTR_READONLY | CIUKI_ATTR_SYSTEM)) != 0 : du_file_icon_candidate(e->name, 0)) {
+        char path[FM_PATH];
+        size_t index = (size_t)(e - a->model.entries);
+        if (index < a->model.count && !fm_entry_path(&a->model, (unsigned)index, path)) {
+            const uint32_t *own = du_file_icon_flags(path, e->meta.modified, size,
+                                                     DU_FILE_ICON_DEFAULT | (!dir && du_file_icon_shortcut(e->name) ? DU_FILE_ICON_LINK : 0));
+            if (own) return own;
+        }
+    }
+    return du_icon_argb(du_icon_file(e->name, dir, e->meta.exec != 0), size);
+}
+static const uint32_t *icon16(struct files_app *a, const struct fm_entry *e) { return icon_of(a, e, 16); }
+static const uint32_t *icon32(struct files_app *a, const struct fm_entry *e) { return icon_of(a, e, 32); }
 static const uint32_t *named(const char *object, unsigned size) { return du_icon_argb(du_icon_name(object), size); }
+/* A drive's AUTORUN.INF icon= (CD-ROM and fixed drives, as Windows 98); the
+ * medium's generation keys the cache, so another disc reads it again. */
+static const uint32_t *drive_icon_of(struct files_app *a, int letter, const char *fallback, unsigned size)
+{
+    if (letter >= 0 && letter < 26) {
+        int optical = (a->media.removable_mask & (1u << letter)) && a->media.type[letter] == CIUKI_MEDIA_OPTICAL;
+        int fixed = !(a->media.removable_mask & (1u << letter)) && a->media.type[letter] != CIUKI_MEDIA_FLOPPY;
+        if (optical || fixed) {
+            char root[8] = "/";
+            if (letter != 2) snprintf(root, sizeof(root), "/mnt/%c", 'a' + letter);
+            const uint32_t *own = du_file_icon_flags(root, (int64_t)a->media.generation[letter] + 1, size, 0);
+            if (own) return own;
+        }
+    }
+    return named(fallback, size);
+}
 
 /* Deterministic box-filter size conversion of the approved portrait array. */
 static void shrink(const uint32_t *src, uint32_t *dst, int size)
@@ -450,7 +494,7 @@ static void tree_items(struct files_app *a)
         if (here) current = (int)i;
         it->text[0] = n->name;
         it->icon16 = !i ? (a->ciuki ? a->ciuki16 : named("place:computer", 16)) :
-                     named(n->depth == 1 ? (n->name[0]>='D' && n->name[0]<='Z' && a->media.type[n->name[0]-'A']==CIUKI_MEDIA_OPTICAL ? "place:optical" :
+                     named(n->depth == 1 ? (n->name[0]>='D' && n->name[0]<='Z' && optical_drive(a,n->name[0]-'A') ? "place:optical" :
                                             floppy_drive(a,n->name[0]-'A') ? "place:floppy" : "place:volume") : here ? "type:folder-open" : "type:folder", 16);
         it->selected = (uint8_t)here; it->depth = (uint8_t)(n->depth > 255 ? 255 : n->depth);
         it->expanded = n->expanded; it->children = n->children;
@@ -494,14 +538,39 @@ static int labels_refresh(struct files_app *a, const struct files_scan *s)
         int same=label->valid && label->generation==a->media.generation[d] &&
             !strcmp(label->key.volume,key.volume) && label->key.size==key.size &&
             label->key.ino==key.ino && label->key.modified==key.modified && label->key.inf_status==key.inf_status;
-        if (same || !a->media_label) continue;
-        char text[33]={0};
-        if (a->media_label(d,text)) continue;
+        if (same || (!a->media_label && !a->media_autoplay)) continue;
+        char text[33]={0}; int autoplay=0;
+        if (a->media_autoplay ? a->media_autoplay(d,text,&autoplay,&label->autoplay_record) : a->media_label(d,text)) continue;
         text[32]=0;
-        memcpy(label->text,text,sizeof(text)); label->key=key;
+        memcpy(label->text,text,sizeof(text)); label->key=key; label->autoplay=autoplay;
         label->generation=a->media.generation[d]; label->valid=1; changed=1;
     }
     return changed;
+}
+/* fx-autorun: the drive of My Computer row index whose cached AUTORUN.INF
+ * open= program the AutoPlay verb starts, else -1. Microsoft "Enabling and
+ * Disabling AutoRun": the drive's shortcut menu includes an AutoPlay command
+ * and "To run AutoRun manually, either right-click the drive icon and select
+ * AutoPlay from the shortcut menu or double-click the drive icon"; "Autorun.inf
+ * Entries", shell: without shell=, "the default menu item text will be
+ * "AutoPlay", which launches the application specified by the open entry". */
+static int autoplay_drive(const struct files_app *a,unsigned index)
+{
+    if (a->model.path[0] || a->model.searching || index>=a->model.count) return -1;
+    const struct fm_entry *e=&a->model.entries[index];
+    if (e->name[0]<'D' || e->name[0]>'Z' || e->name[1]!=':') return -1;
+    int d=e->name[0]-'A';
+    if (!(a->media.removable_mask & (1u<<d))) return -1;
+    const struct files_drive_label *l=&a->drive_labels[d];
+    return l->valid && l->autoplay && l->generation==a->media.generation[d] ? d : -1;
+}
+static void autoplay_run(struct files_app *a,int d)
+{
+    if (d<0 || d>=26) return;
+    struct desk_launch_record *r=malloc(sizeof(*r));
+    int e=r ? 0 : -ENOMEM;
+    if (r) { *r=a->drive_labels[d].autoplay_record; e=operation_spawn_record(a,r); free(r); }
+    if (e<0) files_launch_failed(a,e);
 }
 static const char *drive_label(const struct files_app *a,int drive)
 {
@@ -568,7 +637,7 @@ void files_update(struct files_app *a)
         int drive=computer && e->name[0]>='A' && e->name[0]<='Z' && e->name[0]!='C' ? e->name[0]-'A' : -1;
         int floppy=floppy_drive(a,drive);
         int removable=drive>=3 && (a->media.removable_mask & (1u<<drive));
-        int optical=removable && a->media.type[drive]==CIUKI_MEDIA_OPTICAL;
+        int optical=optical_drive(a,drive);
         const char *drive_icon=floppy ? "place:floppy" : optical ? "place:optical" : removable ? "place:removable" : "place:volume";
         char buffer[40]; snprintf(t->type, sizeof(t->type), "%s", computer ? (floppy ? "3.5-Inch Floppy Disk" : optical ? "CD-ROM Drive" : removable ? "Removable Drive" : "Disk Drive") : fm_type_name(e, buffer, sizeof(buffer)));
         time_text(t->modified, sizeof(t->modified), computer ? 0 : e->meta.modified);
@@ -592,6 +661,8 @@ void files_update(struct files_app *a)
             char *dot=strrchr(t->label,'.'); if (dot && dot!=t->label) *dot=0;
         } else t->label[0]=0;
         if (volume_label[0]) snprintf(t->label,sizeof(t->label),"%s (%s)",volume_label,e->name);
+        /* fx-emptydrive: Windows 98 My Computer names an empty CD-ROM drive. */
+        else if (computer && optical && !removable) snprintf(t->label,sizeof(t->label),"Compact Disc (%s)",e->name);
         if (bin && e->bin && i < a->bin_row_capacity) {
             /* G2: the original name, location and deletion time; sizes also for folders. */
             struct files_bin_row *br = &a->bin_rows[i]; const struct rb_item *item = rb_entry_item(m, e);
@@ -600,13 +671,14 @@ void files_update(struct files_app *a)
             time_text(br->deleted, sizeof(br->deleted), item->deleted);
             kb_text(t->size, sizeof(t->size), e->meta.size);
             a->rows[i] = (struct du_item){{br->name, br->where, br->deleted, t->type, t->size, t->modified},
-                                          icon16(e), icon32(e), (uint8_t)e->selected, 0, 0, 0, 0};
+                                          icon16(a, e), icon32(a, e), (uint8_t)e->selected, 0, 0, 0, 0};
             continue;
         }
         a->rows[i] = (struct du_item){{t->label[0] ? t->label : e->name, t->size, t->type, t->modified,
                                       a->attribute_column ? t->attributes : m->searching ? t->location : t->attributes,
                                       a->attribute_column && m->searching ? t->location : NULL},
-                                      computer ? named(drive_icon, 16) : icon16(e), computer ? named(drive_icon, 32) : icon32(e),
+                                      computer ? drive_icon_of(a, e->name[1] == ':' ? e->name[0] - 'A' : -1, drive_icon, 16) : icon16(a, e),
+                                      computer ? drive_icon_of(a, e->name[1] == ':' ? e->name[0] - 'A' : -1, drive_icon, 32) : icon32(a, e),
                                       (uint8_t)e->selected, (uint8_t)in_clipboard(a, i), 0, 0, 0};
     }
     struct du_widget *list = W(a, W_LIST);
@@ -958,6 +1030,18 @@ static void *scan_run(void *arg)
             if (s->kind == SCAN_MEDIA || s->kind == SCAN_REFRESH ||
                 (s->kind == SCAN_NAVIGATE && !a->model.history_count)) {
                 struct ciuki_media_state state = a->media;
+                if (a->ntfs_status && !a->ntfs_notified && !scan_cancelled(s)) {
+                    size_t used=0; a->ntfs_notice[0]=0;
+                    for (unsigned slot=0;slot<CIUKI_MEDIA_NTFS_SLOTS;slot++) {
+                        struct ciuki_ntfs_status status;
+                        if (a->ntfs_status(slot,&status) || !status.error) continue;
+                        status.reason[sizeof(status.reason)-1]=0;
+                        int n=snprintf(a->ntfs_notice+used,sizeof(a->ntfs_notice)-used,
+                            "Disk %u, partition %u: %s\n",status.disk,status.partition,status.reason);
+                        if (n<0 || (size_t)n>=sizeof(a->ntfs_notice)-used) break;
+                        used+=(size_t)n;
+                    }
+                }
                 if (a->media_read && !scan_cancelled(s) && !a->media_read(&state)) {
                     int d = media_drive(a->model.path);
                     int expired = d >= 0 && (a->media.removable_mask & (1u << d)) &&
@@ -1045,6 +1129,9 @@ static int scan_submit(struct files_app *a, enum scan_kind kind, const char *pat
     memcpy(b->leaf, a->leaf, sizeof(b->leaf)); b->leaf_count = a->leaf_count;
     b->media = a->media; memcpy(b->drive_labels, a->drive_labels, sizeof(b->drive_labels));
     b->media_read = a->media_read; b->media_label_key = a->media_label_key; b->media_label = a->media_label;
+    b->media_autoplay = a->media_autoplay;
+    b->ntfs_status=a->ntfs_status; b->ntfs_notified=a->ntfs_notified;
+    memcpy(b->ntfs_notice,a->ntfs_notice,sizeof(b->ntfs_notice));
     b->media_load = a->media_load; b->model.drive_slots = a->model.drive_slots;
     b->view_loaded=a->view_loaded; b->attribute_column=a->attribute_column;
     b->model.show_hidden = a->model.show_hidden; b->model.hide_system = a->model.hide_system;
@@ -1151,7 +1238,7 @@ static void scan_poll(struct files_app *a)
         if (floppy>=0 && (a->media.removable_mask&(1u<<floppy)) &&
             (a->media.type[floppy]==CIUKI_MEDIA_FLOPPY || a->media.type[floppy]==CIUKI_MEDIA_USB) &&
             fm_drive_root(s->target) && s->kind==SCAN_NAVIGATE) (void)files_disk_open(a,(unsigned)floppy,1);
-        else if (floppy_drive(a, floppy) && s->kind == SCAN_NAVIGATE) insert_disk_prompt(a, floppy, s->target);
+        else if ((floppy_drive(a, floppy) || empty_drive(a, floppy)) && s->kind == SCAN_NAVIGATE) insert_disk_prompt(a, floppy, s->target);
         else if (s->error != -ENOENT || s->kind != SCAN_HISTORY)
             error_box(a, "Files", s->kind == SCAN_SEARCH ? "Cannot search this location:" : "Cannot open the folder.", s->error);
     } else {
@@ -1201,6 +1288,7 @@ static void scan_poll(struct files_app *a)
     if (!s->error && a->show_bin_properties && fm_is_recycle(a->model.path)) { a->show_bin_properties = 0; bin_properties(a); }
     int pending = s->error ? 0 : a->pending_command;
     a->pending_command = 0;
+    memcpy(a->ntfs_notice,b->ntfs_notice,sizeof(a->ntfs_notice));
     scan_free(s);
     if (a->shell_action) {
         int action=a->shell_action; a->shell_action=0;
@@ -1215,6 +1303,10 @@ static void scan_poll(struct files_app *a)
         command(a,action);
     } else if (pending) command(a, pending);
     if (a->find_initial) { a->find_initial = 0; files_find(a); }
+    if (!a->ntfs_notified && !a->model.path[0] && a->ntfs_notice[0] && !du_dialog_id(a->ui)) {
+        a->ntfs_notified=1;
+        du_message(a->ui,D_INFO,"Some NTFS volumes could not be opened",a->ntfs_notice,DU_DLG_ICON_WARNING,NULL,0,0,0);
+    }
 }
 static void scan_stop(struct files_app *a)
 {
@@ -1358,6 +1450,15 @@ static int fold_drive(char c) { return (c >= 'A' && c <= 'Z' ? c - 'A' : c - 'a'
  * the job owns the stable source paths until this modal sheet closes. */
 static const struct du_item property_pages[] = {{.text={"General"}}, {.text={"Tools"}}};
 static const struct du_item version_pages[] = {{.text={"General"}}, {.text={"Version"}}};
+static const struct du_item screen_pages[] = {{.text={"General"}}, {.text={"Screen"}}};
+/* fx-dosfull: the Screen page's Usage group (slot 8) and its choices (slots
+ * 9-12, Windows 98 order: full screen first), as DOSBOX_SCREEN_* values:
+ * graphics full screen (the default), whole session, exclusive, window. */
+#define PROPERTY_USAGE 420
+#define PROPERTY_USAGE_SLOT 8u
+static const unsigned property_usages[4] = {3, 1, 2, 0};
+static const char property_screen_text[] = "How this MS-DOS program uses the screen in its DOS window.\n"
+    "Alt+Enter switches between full screen and a window;\nthe DOS window remembers the last choice for this program.";
 static const struct du_item option_pages[] = {{.text={"View"}}};
 static const uint32_t property_bits[] = {CIUKI_ATTR_READONLY, CIUKI_ATTR_HIDDEN, CIUKI_ATTR_ARCHIVE, CIUKI_ATTR_SYSTEM};
 /* Runs on the transfer worker before its recursive count. The completion
@@ -1376,6 +1477,7 @@ static int property_prepare(void *ctx)
     a->property_have_info=have; a->property_common=common; a->property_either=either;
     a->property_drive=j->count==1 && fm_drive_root(path) ? (!strcmp(path,"/") ? 2 : fold_drive(path[5])) : -1;
     a->property_have_space=0; a->property_have_version=0; a->property_label[0]=0;
+    a->property_have_dos=0; a->property_dos_usage=0;
     if (a->property_drive>=0) {
         a->property_have_space=a->media_space && !a->media_space((unsigned)a->property_drive,&a->property_space);
         if (a->volume_label || a->media_label) {
@@ -1384,8 +1486,11 @@ static int property_prepare(void *ctx)
                 snprintf(a->property_label,sizeof(a->property_label),"%.11s",label);
         }
         j->property_meta.type=FM_DIR; j->state=FM_DONE; /* capacity does not enumerate a drive */
-    } else if (j->count==1 && a->version_info && !(info->attributes & CIUKI_ATTR_DIRECTORY))
-        a->property_have_version=!a->version_info(path,a->property_version,sizeof(a->property_version));
+    } else if (j->count==1 && !(info->attributes & CIUKI_ATTR_DIRECTORY)) {
+        unsigned usage=0;
+        if (a->dos_usage && !a->dos_usage(path,&usage) && usage<=3) { a->property_have_dos=1; a->property_dos_usage=usage; }
+        else if (a->version_info) a->property_have_version=!a->version_info(path,a->property_version,sizeof(a->property_version));
+    }
     return 0;
 }
 
@@ -1394,17 +1499,23 @@ static void property_page(struct files_app *a)
 {
     struct du_dialog *d=&a->ui->dialog;
     int tools=a->property_drive>=0 && d->items[3].active==1;
-    int version=a->property_drive<0 && d->items[3].active==1;
-    /* G14: Check Now lives on a drive sheet's Tools page only; every other control hides there. */
-    for (unsigned i=4;i<d->count;i++)
-        d->items[i].hidden=(uint8_t)(a->property_drive>=0 && d->items[i].id==PROPERTY_CHECK_NOW ? !tools : tools || version);
+    int screen=a->property_drive<0 && a->property_have_dos && d->items[3].active==1;
+    int version=a->property_drive<0 && !a->property_have_dos && d->items[3].active==1;
+    /* G14: Check Now lives on a drive sheet's Tools page only; every other control hides there.
+     * fx-dosfull: the Usage group lives on a DOS program's Screen page only. */
+    for (unsigned i=4;i<d->count;i++) {
+        int usage=a->property_have_dos && d->items[i].id>=PROPERTY_USAGE && d->items[i].id<=PROPERTY_USAGE+4;
+        d->items[i].hidden=(uint8_t)(usage ? !screen : a->property_drive>=0 && d->items[i].id==PROPERTY_CHECK_NOW ? !tools : tools || version || screen);
+    }
     if (a->property_drive>=0) {
         struct du_widget *button=du_property_control(a->ui,9,DU_BUTTON,C_DEFRAG,(struct du_rect){24,252,190,25},"&Defragment Now...");
         button->hidden=!tools; button->disabled=!a->media_defrag;
     }
     if (a->property_drive>=0 && a->backup_call && d->count>6) d->items[6].hidden=(uint8_t)!tools;
     snprintf(d->text,sizeof(d->text),"%s",tools ?
-        (a->backup_call ? "Error-checking\nCheck Now checks this drive for errors with ScanDisk.\n\nBackup\n\n\nDefragmentation\nUse Defragment Now below." : "Error-checking\nCheck Now checks this drive for errors with ScanDisk.\n\nBackup\nBackup Now: Backup is not installed.\n\nDefragmentation\nUse Defragment Now below.") : version ? a->property_version : a->property_drive>=0 ? "" : a->property_text);
+        (a->backup_call ? "Error-checking\nCheck Now checks this drive for errors with ScanDisk.\n\nBackup\n\n\nDefragmentation\nUse Defragment Now below." : "Error-checking\nCheck Now checks this drive for errors with ScanDisk.\n\nBackup\nBackup Now: Backup is not installed.\n\nDefragmentation\nUse Defragment Now below.") : version ? a->property_version :
+        screen ? property_screen_text :
+        a->property_drive>=0 ? "" : a->property_text);
 }
 static void property_changed(struct du_ui *u,const struct du_event *e,void *ctx)
 {
@@ -1484,7 +1595,7 @@ static void property_paint(struct du_ui *u,void *ctx)
     struct du_canvas *c=&u->canvas;
     int drive=a->property_drive;
     int floppy=floppy_drive(a,drive), removable=drive>=3 && (a->media.removable_mask & (1u<<drive));
-    int optical=removable && a->media.type[drive]==CIUKI_MEDIA_OPTICAL;
+    int optical=optical_drive(a,drive);
     const char *icon=floppy ? "place:floppy" : optical ? "place:optical" : removable ? "place:removable" : "place:volume";
     const uint32_t *pixels=named(icon,32);
     if (pixels) du_icon_blit(c,bx+PD_X,by+PD_ICON_Y,pixels,32,DU_ICON_NORMAL);
@@ -1546,22 +1657,33 @@ static int property_accept(struct du_ui *u,int button,void *ctx)
                 error=a->set_label ? a->set_label((unsigned)a->property_drive,label) : -ENOSYS;
                 if (!error) { snprintf(a->property_label,sizeof(a->property_label),"%.11s",label); a->drive_labels[a->property_drive].valid=0; }
             }
-        } else if (a->set_attributes && !u->dialog.items[4].disabled) {
-            uint32_t attributes=0,mask=0;
-            for (unsigned i=0;i<4;i++) {
-                int value=u->dialog.items[4+i].value;
-                if (value!=2 && value!=a->property_attributes[i]) mask|=property_bits[i];
-                if (value==1) attributes|=property_bits[i];
+        } else {
+            if (a->set_attributes && !u->dialog.items[4].disabled) {
+                uint32_t attributes=0,mask=0;
+                for (unsigned i=0;i<4;i++) {
+                    int value=u->dialog.items[4+i].value;
+                    if (value!=2 && value!=a->property_attributes[i]) mask|=property_bits[i];
+                    if (value==1) attributes|=property_bits[i];
+                }
+                for (unsigned k=0;mask && !error && k<a->job.count;k++) {
+                    struct ciuki_file_info current;
+                    error=a->file_info(a->job.sources[k],&current);
+                    if (!error) error=a->set_attributes(a->job.sources[k],(current.attributes & CIUKI_ATTR_SETTABLE & ~mask) | (attributes & mask));
+                }
+                if (!error) for (unsigned i=0;i<4;i++) a->property_attributes[i]=u->dialog.items[4+i].value;
             }
-            for (unsigned k=0;mask && !error && k<a->job.count;k++) {
-                struct ciuki_file_info current;
-                error=a->file_info(a->job.sources[k],&current);
-                if (!error) error=a->set_attributes(a->job.sources[k],(current.attributes & CIUKI_ATTR_SETTABLE & ~mask) | (attributes & mask));
+            if (!error && a->property_have_dos && a->set_dos_usage) {
+                unsigned usage=a->property_dos_usage;
+                for (unsigned k=0;k<4;k++) if (u->dialog.items[PROPERTY_USAGE_SLOT+1+k].value) usage=property_usages[k];
+                if (usage!=a->property_dos_usage) {
+                    error=a->set_dos_usage(a->job.sources[0],usage);
+                    if (!error) a->property_dos_usage=usage;
+                }
             }
-            if (!error) for (unsigned i=0;i<4;i++) a->property_attributes[i]=u->dialog.items[4+i].value;
         }
         if (error) {
-            snprintf(u->dialog.text,sizeof(u->dialog.text),"%.850s\nCannot apply changes: %s",a->property_text,strerror(-error));
+            int screen=a->property_have_dos && u->dialog.items[3].active==1;
+            snprintf(u->dialog.text,sizeof(u->dialog.text),"%.850s\nCannot apply changes: %s",screen ? property_screen_text : a->property_text,strerror(-error));
             return 1;
         }
         scan_submit(a,SCAN_REFRESH,NULL,0);
@@ -1594,8 +1716,9 @@ static void properties_dialog(struct files_app *a)
         j->count==1 ? fm_basename(path) : "Multiple items",kind,parent,size,(unsigned long long)j->bytes,allocated,
         (unsigned long long)j->files,(unsigned long long)j->folders,
         have && j->count==1 && (info->mask & CIUKI_FILE_INFO_SHORT_NAME) ? info->short_name : "-",created,modified,accessed);
-    int version=a->property_have_version;
-    du_property_sheet(a->ui,D_PROPERTIES,title,520,362,version ? version_pages : property_pages,a->property_drive>=0 || version ? 2 : 1);
+    int version=a->property_have_version, dos=a->property_have_dos;
+    du_property_sheet(a->ui,D_PROPERTIES,title,520,362,dos ? screen_pages : version ? version_pages : property_pages,
+                      a->property_drive>=0 || version || dos ? 2 : 1);
     struct du_dialog *d=&a->ui->dialog;
     d->accept=property_accept; d->accept_ctx=a; d->changed=property_changed; d->paint=property_paint; d->sheet_ctx=a;
     d->items[2].disabled=1;
@@ -1626,6 +1749,17 @@ static void properties_dialog(struct files_app *a)
             a->property_attributes[i]=w->value;
             w->disabled=!have || !a->set_attributes || (info->flags & (CIUKI_FILE_INFO_READ_ONLY_MEDIUM | CIUKI_FILE_INFO_VOLUME_ROOT));
             if (w->disabled) du_set_text(w,names[i]+1);
+        }
+        if (dos) {
+            /* Windows 98 Screen tab, Usage (Resource Kit ch. 25, "Running Games"). */
+            static const char *const usages[]={"Full-screen for &graphics (default)","&Full-screen","E&xclusive full-screen","&Window"};
+            du_property_control(a->ui,PROPERTY_USAGE_SLOT,DU_GROUP,PROPERTY_USAGE,(struct du_rect){24,104,472,136},"Usage");
+            for (unsigned k=0;k<4;k++) {
+                struct du_widget *w=du_property_control(a->ui,PROPERTY_USAGE_SLOT+1+k,DU_RADIO,PROPERTY_USAGE+1+(int)k,
+                                                        (struct du_rect){40,126+(int)k*26,420,22},usages[k]);
+                w->total=PROPERTY_USAGE; w->value=property_usages[k]==a->property_dos_usage;
+                w->disabled=!a->set_dos_usage;
+            }
         }
     }
     property_page(a);
@@ -1734,6 +1868,9 @@ static void files_service(struct du_ui *u,void *ctx)
 {
     (void)u; struct files_app *a=ctx;
     scan_poll(a); job_tick(a);
+    /* fx-exeicons: icons the worker published since the rows were built. */
+    unsigned icons=du_file_icons_generation();
+    if (icons!=a->icon_generation) { a->icon_generation=icons; if (!a->loading) files_update(a); }
     disk_service(a);
     if (a->show_folder_options && !a->loading && !a->job_active && !du_dialog_id(a->ui)) { a->show_folder_options=0;folder_options(a); }
     if (a->property_request[0] && !a->loading && !a->job_active && !du_dialog_id(a->ui)) {
@@ -1869,7 +2006,7 @@ static void bin_item_properties(struct files_app *a, unsigned index)
              name, type, where[0] ? where : "(unknown)", deleted[0] ? deleted : "-", size, g, modified[0] ? modified : "-");
     char title[FM_NAME + 32]; snprintf(title, sizeof(title), "%.60s Properties", name);
     du_message(a->ui, D_BIN_ITEM, title, text, DU_DLG_ICON_INFO, NULL, 0, 0, 0);
-    du_dialog_icon(a->ui, icon32(e));
+    du_dialog_icon(a->ui, icon32(a, e));
 }
 /* Recycle Bin Properties: one setting for all drives or one per drive (the
  * Drive button walks Global, C:, D:, ...), "do not move files", the maximum
@@ -2027,7 +2164,9 @@ static void context(struct files_app *a, const struct du_event *e)
             du_popup(a->ui, a->popup, a->popup_count, e->x, e->y, e->id);
             return;
         }
-        popup_add(a, "&Open", C_OPEN, DU_ITEM_DEFAULT);
+        int autoplay = n == 1 ? autoplay_drive(a, (unsigned)e->index) : -1;
+        if (autoplay >= 0) popup_add(a, "Auto&Play", C_AUTOPLAY, DU_ITEM_DEFAULT);
+        popup_add(a, "&Open", C_OPEN, autoplay >= 0 ? 0 : DU_ITEM_DEFAULT);
         if (m->searching) popup_add(a, "Open Containing &Folder", C_FIND_FOLDER, 0);
         int target=removal_target(a);
         if (target>=3) popup_add(a, removal_label(a,target), C_SAFE_REMOVE, 0);
@@ -2174,6 +2313,9 @@ static void command(struct files_app *a, int id)
         if (drive>=0) (void)files_disk_open(a,(unsigned)drive,id==C_FORMAT);
         break;
     }
+    case C_AUTOPLAY:
+        if (!a->loading && fm_selected(m, NULL)==1 && m->active < m->count) autoplay_run(a, autoplay_drive(a, m->active));
+        break;
     case C_SAFE_REMOVE: {
         int d=removal_target(a);
         if (d<3) break;
@@ -2190,7 +2332,8 @@ static void command(struct files_app *a, int id)
             /* Raw/blank-media slots outlive a missing /mnt directory. The
              * acknowledged removal must expire this cached slot immediately. */
             a->media.removable_mask&=~(1u<<(unsigned)d);
-            a->media.type[d]=optical ? CIUKI_MEDIA_NONE : CIUKI_MEDIA_SAFE_REMOVED;
+            /* fx-emptydrive: an ejected CD-ROM drive keeps its letter. */
+            a->media.type[d]=optical ? CIUKI_MEDIA_OPTICAL : CIUKI_MEDIA_SAFE_REMOVED;
             a->model.drive_slots=floppy_slots(a);
             files_navigate(a,FM_COMPUTER); snprintf(a->note,sizeof(a->note),"%s",optical ? "The disc has been ejected." : "It is safe to unplug the USB device."); files_update(a); }
         break;
@@ -2668,7 +2811,11 @@ void files_event(struct du_ui *u, const struct du_event *e, void *arg)
         }
         break;
     case DU_EV_OPEN:
-        if (e->id == W_LIST && e->index >= 0) open_item(a, (unsigned)e->index, 0);
+        /* fx-autorun: double-click/Enter runs a drive's default verb, which
+         * is AutoPlay when its AUTORUN.INF names a program (autoplay_drive). */
+        if (e->id == W_LIST && e->index >= 0 && !a->loading && autoplay_drive(a, (unsigned)e->index) >= 0)
+            autoplay_run(a, autoplay_drive(a, (unsigned)e->index));
+        else if (e->id == W_LIST && e->index >= 0) open_item(a, (unsigned)e->index, 0);
         else if (e->id == W_TREE) toggle_node(a, e->index);
         break;
     case DU_EV_SORT: {

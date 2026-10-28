@@ -4,6 +4,7 @@
 #include <ciuki/kernel.h>
 #include <ciuki/w32_core.h>
 #include <ciuki/w32_objects.h>
+#include <ciuki/security.h>
 #define SNAP_MAX (CIUKI_PROCESS_MAX + CIUKI_THREAD_MAX + 128u)
 struct snap {
   uint32_t count, cursor[3];
@@ -69,6 +70,9 @@ uint32_t w32_snapshot_call(struct proc_thread *t,
     if (a->flags & ~0x8000001fu || a->flags & 1u) {
       a->error = 120;
       return 0;
+    }
+    if ((a->flags & (8|16)) && a->pid && a->pid != t->process->pid) {
+      a->error=5; return 0;
     }
     struct w32_object *o = w32_object_new(W32_OBJ_SNAPSHOT);
     if (!o) {

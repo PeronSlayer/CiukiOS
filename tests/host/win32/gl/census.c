@@ -169,7 +169,17 @@ void gl_census_tests(void) {
     assert(strstr(summary,"candidate_batches=0 candidate_pixel_work=0 max_batch_work=0"));
     gl_census_close(&c);
   }
-  c.stencil_bits=0; c.sw.stencil=0;
+  c.depth_bits=24; c.stencil_bits=8;
+  uint32_t depth24=0; uint8_t stencil24=0;
+  c.sw.depth24=&depth24; c.sw.stencil=&stencil24;
+  c.sw.stencil_test=1; c.sw.stencil_func=GL_EQUAL; c.sw.stencil_ref=17;
+  c.sw.stencil_mask=c.sw.stencil_write_mask=255;
+  c.sw.stencil_fail=c.sw.stencil_zfail=GL_KEEP; c.sw.stencil_zpass=GL_REPLACE;
+  gl_census_open(&c); gl_census_draw(&c,v); c.frames++; gl_census_frame(&c);
+  assert(strstr(last_class,"verdict=admit") && strstr(summary,"framebuffer=24,8,0"));
+  assert(strstr(last_class,"stencil=1,514,17,255,255,7680,7680,7681"));
+  gl_census_close(&c);
+  c.depth_bits=16; c.stencil_bits=0; c.sw.stencil=0; c.sw.depth24=0;
   assert(test_allocations==before);
   assert(!logical_used && !next_part && physical_lines>rows+classes && max_physical==240);
   setting=0; recording=0;

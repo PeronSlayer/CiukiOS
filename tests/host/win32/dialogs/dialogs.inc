@@ -1567,6 +1567,9 @@ static void vise_check_wire(UINT from) {
       if (m->data[1] == DESK_CLOSE)
         sizes[k].closed = 1;
     }
+    /* fx-exeicons: a WINDOW_ICON carries its own size x size icon surface. */
+    if (m->data[1] == DESK_V3_WINDOW_ICON && m->fd_count)
+      info.width = info.height = desk_get32(m->data + 16);
     info.stride = info.width * 4;
     info.allocation_bytes = (info.stride * info.height + 4095u) & ~4095u;
     CHECK(desk_parse(m, 1, &info, &p));

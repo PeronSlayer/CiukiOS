@@ -113,6 +113,7 @@ int32_t w32_ciuki_call(void *record, uint32_t n) {
 /* w32srv registry model: UTF-8 paths under HKLM, ids from 1. */
 static char keys[16][128];
 static DWORD key_root[16], last_access, closes, deletes;
+static int standard_user; /* sec-user-05: the sec-k06 policy refuses a Standard user's write mask */
 static uint32_t lookup_key(DWORD id, char *out) {
   if (id == W32R_HKLM) {
     out[0] = 0;
@@ -161,6 +162,10 @@ uint32_t w32_server_exchange(const void *in, uint32_t n, void *out, uint32_t cap
       goto done;
     if (r.access & ~0xf003fu) {
       reply.error = 87;
+      goto done;
+    }
+    if (standard_user && (r.access & ~0x20019u)) {
+      reply.error = 5;
       goto done;
     }
     if (r.op == W32R_OPEN && !*path && (r.key & 0x80000000u)) {
@@ -280,8 +285,23 @@ static void registry(void) {
   CHECK(NtClose(again) == (NTSTATUS)0xc0000008 && closes == before + 1);
   CHECK(!NtClose((void *)0x40) && closed == 1);
   CHECK(!NtClose(root) && closes == before + 2);
+  /* sec-user-05 (Windows XP): MAXIMUM_ALLOWED is the largest admitted mask;
+   * explicit write rights and new keys stay refused for a Standard user. */
+  standard_user = 1;
+  void *read_only = 0;
+  CHECK(!NtOpenKey(&read_only, 0x02000000, &attr) && read_only && last_access == 0x20019);
+  CHECK(NtOpenKey(&none, 0x20006, &attr) == (NTSTATUS)0xc0000022);
+  CHECK(NtOpenKey(&none, 0x02000000 | 2, &attr) == (NTSTATUS)0xc0000022);
+  void *existing = 0;
+  disposition = 0;
+  CHECK(!NtCreateKey(&existing, 0x02000000, &attr, 0, 0, 0, &disposition) && existing && disposition == 2);
+  UNICODE_STRING fresh = us("\\Registry\\Machine\\Software\\Fresh");
+  struct object_attributes fresh_attr = {sizeof(fresh_attr), 0, &fresh, 0, 0, 0};
+  CHECK(NtCreateKey(&none, 0x02000000, &fresh_attr, 0, 0, 0, &disposition) == (NTSTATUS)0xc0000022);
+  standard_user = 0;
+  CHECK(!NtClose(read_only) && !NtClose(existing));
   CHECK(!heap_blocks);
-  puts("PASS ntdll upper NT registry paths access rights dispositions close routing");
+  puts("PASS ntdll upper NT registry paths access rights dispositions close routing, XP MAXIMUM_ALLOWED");
 }
 static void native(void) {
   void *base = 0;

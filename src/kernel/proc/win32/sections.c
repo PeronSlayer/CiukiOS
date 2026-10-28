@@ -10,6 +10,20 @@
 #define SECTION_COW_BIND 0x80000000u
 #define COW_PROMISE (UINT32_MAX-1u)
 extern int file_section_io_locked(struct file_description *,void *,size_t,bool,bool,uint64_t,size_t *);
+/* sec-k03: weak only so the personality RAM fixture can model its file;
+ * the kernel always links fdtable.c (H04 checks the definition). */
+extern int file_description_authorize_locked(struct file_description *, unsigned) __attribute__((weak));
+/* A file-backed section or a new view needs the caller's current rights on
+ * the source object: read, plus write for a shared writable mapping. Paging
+ * and writeback then run under that admission (fdtable.c). */
+static int section_authorize(struct file_description *d, bool write)
+{
+    if (!file_description_authorize_locked || !d || !d->node) return 0;
+    vfs_lock(d->node->space->vfs, 0);
+    int err = file_description_authorize_locked(d, POLICY_READ | (write ? POLICY_WRITE : 0));
+    vfs_unlock(d->node->space->vfs);
+    return err;
+}
 
 struct section_data {
     struct w32_object *object, *file;
@@ -310,6 +324,10 @@ static int map_view(struct process *p, struct w32_object *o, uint32_t *address, 
         return -EACCES;
     if (s->file && write && !cow && s->writer && s->writer != p->pid)
         return -EACCES;
+    if (s->file) {
+        int allowed = section_authorize(s->file->u.file.description, write && !cow);
+        if (allowed) return allowed;
+    }
     struct w32_view *v = w32_alloc(sizeof(*v));
     if (!v)
         return -ENOMEM;
@@ -597,7 +615,8 @@ uint32_t w32_section_call(struct proc_thread *t, struct ciuki_w32_section_args *
             return 0;
         }
         uint32_t mode = file->u.file.description->flags & O_ACCMODE;
-        if (mode == O_WRONLY || (shared_write && mode != O_RDWR)) {
+        if (mode == O_WRONLY || (shared_write && mode != O_RDWR) ||
+            section_authorize(file->u.file.description, shared_write)) {
             a->error = 5;
             return 0;
         }

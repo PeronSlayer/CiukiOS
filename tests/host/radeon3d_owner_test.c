@@ -8,6 +8,7 @@
 #undef main
 #include <stdlib.h>
 #include <ciuki/mm.h>
+#include <ciuki/desktop.h>
 #include "../../src/kernel/drivers/video/radeon2d/radeon3d.h"
 #define THREE_KEY "C:/system/settings/accel-3d-radeon-1002-5159.cfg"
 struct ciuki_boot_info g_boot;
@@ -22,23 +23,48 @@ static unsigned variant3, claimed3, released3, quarantined3, locked3, stores3, p
 static bool prepared3;
 static void *allocations3[32];
 static unsigned allocations_count3, reserves3;
+static uint32_t page_sizes3[32], page_bytes3;
 void klog(const char *fmt,...)
 {
     assert(!locked3); logs3++;
     char line[512]; va_list ap; va_start(ap,fmt); vsnprintf(line,sizeof(line),fmt,ap); va_end(ap);
     assert(strstr(line,"[3d] probe") || strstr(line,"[3d] fullsize") || strstr(line,"[3d] precision") || strstr(line,"[accel] retry "));
 }
-void *kmalloc(size_t bytes)
+static void *backing_alloc3(size_t bytes)
 {
     assert(!locked3);
     if (variant3==9 && allocations_count3==2) return 0;
     void *p=calloc(1,bytes); assert(p && allocations_count3<32);
     allocations3[allocations_count3++]=p; return p;
 }
+void *(kmalloc)(size_t bytes)
+{ return bytes>KHEAP_MAX_REQUEST ? 0 : backing_alloc3(bytes); }
+void *desktop_buffer_alloc(uint32_t bytes,enum mm_owner owner)
+{
+    assert(!locked3 && bytes && owner==MM_IO_REQUEST);
+    void *p=backing_alloc3(bytes);
+    if (p) {
+        page_sizes3[allocations_count3-1]=bytes;
+        page_bytes3+=(bytes+PAGE_SIZE-1)&~(PAGE_SIZE-1);
+        assert(page_bytes3+radeon3d_backend()->resident_bytes<=R3D_RAM_LIMIT);
+    }
+    return p;
+}
+void desktop_buffer_free(void *p,uint32_t bytes,enum mm_owner owner)
+{
+    assert(!locked3 && p && owner==MM_IO_REQUEST);
+    for (unsigned i=0;i<allocations_count3;i++) if (allocations3[i]==p) {
+        assert(page_sizes3[i]==bytes);
+        page_sizes3[i]=0;
+        page_bytes3-=(bytes+PAGE_SIZE-1)&~(PAGE_SIZE-1);
+        kfree(p); return;
+    }
+    assert(0);
+}
 void kfree(void *p)
 {
     assert(!locked3);
-    for (unsigned i=0;i<allocations_count3;i++) if (allocations3[i]==p) { allocations3[i]=0; free(p); return; }
+    for (unsigned i=0;i<allocations_count3;i++) if (allocations3[i]==p) { assert(!page_sizes3[i]); allocations3[i]=0; free(p); return; }
     assert(!p);
 }
 const struct pci_func *display_driver_owner(void) { return &pci3; }
@@ -82,7 +108,7 @@ int registry_quarantine(int h,gen_t generation)
     assert(h>=0 && (unsigned)h<claimed3 && generation==claims3[h].generation);
     claims3[h].state=RS_QUARANTINED; quarantined3++; return 0;
 }
-void *vmm_reserve_mmio(uint32_t bytes) { reserves3++; return kmalloc(bytes); }
+void *vmm_reserve_mmio(uint32_t bytes) { reserves3++; return backing_alloc3(bytes); }
 void *vmm_replace_mmio(void *p,uint32_t capacity,uint32_t phys,uint32_t bytes)
 {
     assert(!locked3 && capacity>=bytes && phys==0xe0300000);
@@ -150,6 +176,7 @@ int main(int argc,char **argv)
         assert(!display_attempt_prepare(&storage,&declaration,&pci3,&retained));
         assert(!retained && !size_of(THREE_KEY) && size_of(other)==14);
     }
+    if (!engine3.quarantined) assert(!page_bytes3);
     /* Destroy the emulated device/boot, then free all retained allocations.
      * This is fixture teardown, not a production quarantine-release path. */
     for (unsigned i=0;i<allocations_count3;i++) free(allocations3[i]);

@@ -8,7 +8,7 @@ from scripts.win32 import user32
 ROOT=Path(__file__).resolve().parents[4]
 HERE=Path(__file__).resolve().parent
 
-def build_fixture(out):
+def build_fixture(out, gl=False):
     """Production USER, gdi32 and DirectDraw (native adapter included) with the
     fixture transports. Returns the ASan/UBSan binary."""
     from scripts.win32 import ddraw, gdi32
@@ -27,11 +27,13 @@ def build_fixture(out):
         # GetProcAddress binding calls exports through the importer's own
         # prototype (DWORD gdi32 handles), exactly as the PE32 build does.
         '-fno-sanitize=function','-I'+str(ROOT/'src/kernel/include')]
+    if gl:
+        flags += ['-DU32_TEST_GL','-Wno-unused-function','-I'+str(ROOT/'sdk/libgl/vendor/include')]
     bridge=out/'kernel.o'
     subprocess.run([*flags,'-c',str(ROOT/'tests/host/win32/user32/kernel_bridge.c'),'-o',str(bridge)],check=True)
     objects=[bridge]
     sources=sorted((ROOT/'sdk/win32/user32').glob('*.c'))+[
-        ROOT/'apps/libdeskui/v3.c',ROOT/'apps/libdeskui/clipstore.c',ROOT/'apps/desktop/protocol.c',ROOT/'apps/desktop/keymap.c',
+        ROOT/'apps/libdeskui/v3.c',ROOT/'apps/libdeskui/iconx.c',ROOT/'apps/libdeskui/clipstore.c',ROOT/'apps/desktop/protocol.c',ROOT/'apps/desktop/keymap.c',
         ROOT/'sdk/win32/services/bytes.c',HERE/'user32_test.c',
         *[ROOT/'apps/w32srv'/n for n in ('registry.c','storage.c','directory.c','defaults.c','protocol.c','posix_io.c','progman.c','restart.c','shell_fs.c')]]
     for i,source in enumerate(sources):
@@ -42,7 +44,14 @@ def build_fixture(out):
     # name USER also defines (FillRect, FrameRect...) stays private to them.
     engine=[ROOT/'sdk/win32/gdi32'/n for n in gdi32.SOURCES if not n.startswith('compiler')]
     engine+=[ROOT/'sdk/win32/ddraw'/n for n in ddraw.SOURCES]
-    engine+=[ROOT/'tests/host/win32/ddraw/shim.c',HERE/'gdi_host.c',HERE.parent/'gdi_support.c',HERE/'ddraw_seam.c']
+    engine+=[ROOT/'tests/host/win32/ddraw/shim.c',HERE/'gdi_host.c',HERE.parent/'gdi_support.c',HERE.parent/'no_environment.c',HERE/'ddraw_seam.c']
+    if gl:
+        import importlib.util
+        spec=importlib.util.spec_from_file_location('q3gl',ROOT/'sdk/libgl/build.py')
+        module=importlib.util.module_from_spec(spec);spec.loader.exec_module(module)
+        gl_library=module.host_tinygl(sanitize=True)
+        engine += sorted((ROOT/'sdk/win32/opengl32').glob('*.c'))
+        engine += [ROOT/'sdk/libgl/software/renderer.c',HERE/'gl_host.c']
     defined=set()
     for obj in objects:
         nm=subprocess.run(['llvm-nm','--defined-only','--extern-only','-j',str(obj)],capture_output=True,text=True,check=True)
@@ -58,7 +67,8 @@ def build_fixture(out):
     binary=out/'user32'
     subprocess.run([*flags,'-no-pie','-Wl,--gc-sections',*map(str,objects),
         str(ROOT/'src/kernel/fs/path.c'),str(ROOT/'tests/host/proc/signal_legacy.c'),
-        str(ROOT/'tests/host/proc/desktop_legacy.c'),'-pthread','-o',str(binary)],check=True)
+        str(ROOT/'tests/host/proc/desktop_legacy.c'),*([str(gl_library),'-lm'] if gl else []),
+        '-pthread','-o',str(binary)],check=True)
     return binary
 
 def run_fixture(out,binary):
@@ -73,6 +83,26 @@ def run_fixture(out,binary):
     return result.returncode,trace.read_text()
 
 class User32Tests(unittest.TestCase):
+    def test_rectangular_icon_parser(self):
+        out=ROOT/'build/host/win32/classaudit-icon'; out.mkdir(parents=True,exist_ok=True)
+        user32.icon_header(out)
+        binary=out/'icon'
+        subprocess.run(['clang','-std=c17','-O1','-g','-Wall','-Wextra','-Werror',
+                        '-DW32_HOST_MODEL','-ffunction-sections','-fdata-sections','-Wl,--gc-sections',
+                        '-fsanitize=address,undefined','-fno-sanitize-recover=all',
+                        '-I'+str(ROOT/'src/kernel/include'),'-I'+str(ROOT/'sdk/win32/include'),'-I'+str(out),
+                        str(HERE/'classaudit_icon.c'),str(ROOT/'sdk/win32/services/bytes.c'),
+                        '-o',str(binary)],check=True)
+        result=subprocess.run([str(binary)],capture_output=True,text=True)
+        self.assertEqual(result.returncode,0,result.stdout+result.stderr)
+        self.assertIn('PASS rectangular ICO',result.stdout)
+
+    def test_gl_lease_failure(self):
+        out=ROOT/'build/host/win32/user32-gl'
+        code,output=run_fixture(out,build_fixture(out,gl=True))
+        self.assertEqual(code,0,output)
+        self.assertIn('TRACE fx-q3hang production GL',output)
+        print(output,end='')
     def test_production_user32(self):
         out=ROOT/'build/host/win32/user32'
         code,output=run_fixture(out,build_fixture(out))

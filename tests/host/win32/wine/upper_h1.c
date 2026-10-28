@@ -658,8 +658,10 @@ static int run_fixture(void) {
 int host_main(int argc, char **argv) {
     int exec = argc == 4 && !w32_strcmp(argv[1], "exec");
 #ifdef H1_INSTALLERS
-    game_exec = argc == 5 && !w32_strcmp(argv[1], "game-exec");
-    installer_exec = argc == 5 && (game_exec || !w32_strcmp(argv[1], "installer-exec"));
+    /* game-exec IMAGE COMMAND [OPTIONS] FD: OPTIONS are harness settings
+     * (h1_game_options), never part of the program's command line. */
+    game_exec = (argc == 5 || argc == 6) && !w32_strcmp(argv[1], "game-exec");
+    installer_exec = game_exec || (argc == 5 && !w32_strcmp(argv[1], "installer-exec"));
     installer_fixture = argc == 3 && !w32_strcmp(argv[1], "installer-fixture");
     exec = exec || installer_exec;
 #endif
@@ -685,13 +687,15 @@ int host_main(int argc, char **argv) {
     }
 #ifdef H1_INSTALLERS
     h1_installer_providers(h1_store,sizeof(h1_store)/sizeof(h1_store[0]));
-    if ((installer_exec && !h1_installer_init(argv[4])) ||
+    if ((installer_exec && !h1_installer_init(argv[argc - 1])) ||
         (installer_fixture && !h1_installer_init(argv[2])))
         return 9;
     host.services.report = installer_report;
     if (game_exec) {
         h1_game_init(h1_kernel);
         h1_game_script(argv[3]);   /* +set ciuki_keys "..." in the game's command line */
+        if (argc == 6)
+            h1_game_options(argv[4]);
         host_exec_heap = 1;
     }
 #endif

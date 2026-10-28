@@ -317,7 +317,7 @@ static int validate(void *device,const struct render3d_request *q,struct render3
         (uint64_t)d->engine->local_base+d->heap.first+d->heap.bytes>0xffffffffu ||
         (uint64_t)d->heap.first+d->heap.bytes>256u*1024*1024 || d->heap.bytes<=RADEON3D_TEXTURE_MIN ||
         (d->texture_bytes && ((d->texture_bytes&4095u) || d->texture_bytes<RADEON3D_TEXTURE_MIN || d->texture_bytes>=d->heap.bytes)) ||
-        !q || !r || !q->flags || (q->flags&~R3D_ALL_FEATURES) ||
+        !q || !r || !q->flags || (q->flags&~RADEON3D_FEATURES) ||
         render3d_validate_state(q) || q->count>(fullsize(d) ? R3D_VERTICES : 3u) || q->count%3 || q->clear_depth>65535 ||
         !extent(d,r[0]) || r[0]->kind!=R3D_COLOR) return -EINVAL;
     for (unsigned i=0;i<R3D_REFS;i++) if (r[i]) {
@@ -745,12 +745,12 @@ static uint32_t texture_pool_bytes(void *owner)
 const struct render3d_backend *radeon3d_backend(void)
 {
     static const struct ciuki_r3d_caps capabilities={
-        .version=CIUKI_R3D_VERSION,.features=R3D_ALL_FEATURES,.max_size=64,
+        .version=CIUKI_R3D_VERSION,.features=RADEON3D_FEATURES,.max_size=64,
         .max_vertices=3,.texture_units=2,.max_texture_size=64,
         .depth_formats=CIUKI_R3D_D16,.color_formats=CIUKI_R3D_ARGB8888,
         .texture_formats=63,.depth_functions=255,.alpha_functions=255,
         .blend_factors=15,.combine_modes=15,.filters=31,.max_pixel_work=4096};
-    static const struct render3d_backend backend={.features=R3D_ALL_FEATURES,.qualified=qualified,
+    static const struct render3d_backend backend={.features=RADEON3D_FEATURES,.qualified=qualified,
         .layout=layout,.validate=validate,.enter=enter,.leave=leave,.execute=execute,
         .idle=idle,.quarantine=quarantine,.attach=radeon3d_owner_attach,.max_size=64,.detach=detach,
         .texture_pool_bytes=texture_pool_bytes,.capabilities=&capabilities,.query_caps=query_caps,

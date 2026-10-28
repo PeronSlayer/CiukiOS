@@ -139,7 +139,7 @@ blend and alpha test. All unimplemented entries select software. The existing
 | 9 mach64 | Mesa 7.11.2 `mach64`, historical out-of-tree DRM `mach64`, [Utah-GLX](https://utah-glx.sourceforge.net/) | Rage Pro: Mesa exposes 2 stages, 1024 textures, D16, B/A; one uploaded mip level | MMIO/GUI FIFO/DMA; not implemented; chips without triangle setup stay software |
 | 10 unichrome | Mesa 7.11.2 `unichrome`, Linux `via` | 2 units, default 512 textures (1024 with excess_mipmap), D16/D24S8/D32, B/A | MMIO/AGP command regulator; not implemented |
 | 11 sis | Mesa 7.11.2 `sis`, Linux `sis` | SiS300 2 units, 1024 textures, D16/D24/D32, B/A; 315 is not covered by this driver | MMIO/AGP queue; neither generation implemented |
-| 12 nv2d | Mesa classic `nouveau` nv04/nv10/nv20, Linux `nouveau`; 21.3 mainline then Amber | TNT 2 / GeForce1–2 2 / GeForce3–4 4 units; 1024/2048/4096 textures, D16/D24S8, B/A | PFIFO PIO/DMA push buffers; not implemented |
+| 12 nv2d | Mesa classic `nouveau` nv04/nv10/nv20, Linux `nouveau`; 21.3 mainline then Amber | TNT 2 / GeForce1–2 2 / GeForce3–4 4 units; 1024/2048/4096 textures, D16/D24S8, B/A | PFIFO PIO/DMA push buffers; software-only under f7-26, complete PIO 3D/context lifecycle not established ([evidence](f7-family-nvidia-nv04-nv20.md)) |
 | 13 riva128 | [Utah-GLX](https://utah-glx.sourceforge.net/), NVIDIA public NV3 class references; no Mesa classic DRI shipping claim | 1 unit, 1024 textures, D16, B/A restrictions need qualification | PIO FIFO; not implemented |
 | 14 i740 | Utah-GLX i740; no supported Mesa classic DRI/Linux DRM pairing established here | 1 unit, 1024 textures, D16, B/A restrictions need qualification | MMIO/FIFO/AGP; not implemented |
 | 15 s3virge | historical Mesa `s3v` / Utah-GLX; no maintained Linux DRM module; last release not established | 1 unit, 128/256 texture limits depend on revision, D16, restricted B/A | MMIO FIFO; not implemented |
@@ -318,6 +318,24 @@ Mesa 7.7 `savageDDDepthFunc_s4`, `savage_3d_reg.h`, `tileInfo_pro` and X.Org
 2.3.9 `SAVAGEDRISetupTiledSurfaceRegs`/`GetTileAperturePitch`, pinned above.
 No additional register writes, hardware caps or silicon qualification follow
 from this host-model coverage.
+
+### f7-14 implementation note (2026-10-26): native API and Graphics Demo consumer
+
+[f7-14](../directives/f7-14-native-gl-hardware.md) implements the native half
+of section 7 and the f7-05 consumer with the native OpenGL library instead of
+a separate `ciuki3d_` API: `libgl` builds the opengl32 engine, journal,
+admission and provider sources, so native and Win32 programs share one GL
+semantics, capability snapshot and whole-context fallback (7.2). The backend
+policy of 7.1 is `ciuki_gl_set_backend` (automatic, software, hardware with
+`-ENODEV` when unavailable); completion accounting is `ciuki_gl_status`;
+full screen is the common lease of section 6 (v2 `DESK_LEASE`, kernel grant
+to the desktop's channel peer) presented by `ciuki_gl_present` as `gpu-copy`
+or `cpu-copy`. Graphics Demo gains the backend, native-resolution and
+full-screen controls and logs completed-copy FPS with GPU/CPU frame counts,
+refusals and fallbacks. Decisions and evidence:
+[opengl-software.md](opengl-software.md), [graphics-demo.md](graphics-demo.md),
+[f7-14 validation](../validation/f7-14-native-gl.md). The T2 textured scene
+(floor, wall, eight cubes) is not part of f7-14.
 
 Research and repository comparison: **2026-10-14**. Directive:
 [f7-00](../directives/f7-00-3d-acceleration-contract.md). Status: original research contract; the amendments above record the f7-02 implementation
@@ -983,3 +1001,20 @@ for speculative writes.
 F7-00 is complete when this source-backed contract and its handoff report are
 available. Lead cross-review/integration, production implementation, canonical
 builds, QEMU and physical T23 performance evidence remain subsequent work.
+
+
+## ATI Radeon R100/R200 family (f7-24)
+
+The `radeon2d` descriptor nominates the R100/R200 backend as
+`R3D_UNQUALIFIED`: hardware admission requires the boot minimum, full-size and
+precision probes. R300/R4xx devices matched by the 2D driver remain in
+software. Submission uses the bounded MMIO register FIFO with CP disabled,
+claimed offscreen VRAM and state restoration; no DMA or firmware activation
+is introduced. See [the Radeon family design](f7-family-ati-radeon.md) for
+PCI IDs, source hashes, register citations, supported state and gates.
+
+The independent Radeon host decoder and H1 GL replay establish model
+behavior only. They provide no silicon qualification, T23 evidence, or
+Savage format/scanout qualification for this family. Integration 6's Savage
+implementation, precision checkpoints, RGB565/D24 tests and T23 lease fixture
+remain authoritative and unchanged in the default host build.

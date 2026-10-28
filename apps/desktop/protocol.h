@@ -25,6 +25,8 @@
 #define DESK_V3_CLIP 2u
 #define DESK_V3_RELATIVE 4u
 #define DESK_V3_HIDDEN 8u
+/* Internal CDS preflight: one carrier-to-drawable focus handoff. */
+#define DESK_V3_LEASE_CARRIER 2u
 /* WINDOW_ORDER flags; order targets occupy a separate namespace from ids. */
 #define DESK_V3_ORDER_Z 1u
 #define DESK_V3_ORDER_OWNER 2u
@@ -39,7 +41,7 @@
  * TITLE: byte-count,UTF-8; CURSOR: shape,id,visibility-count;
  * CURSOR_BITMAP: id,hot-x,hot-y + one 32x32 ARGB8888 surface fd;
  * POINTER: flags,clip-x,clip-y,clip-w,clip-h; WARP: logical client x,y;
- * LEASE: action (0 release,1 request),w,h,bpp;
+ * LEASE: action (0 release,1 request,2 CDS carrier request),w,h,bpp;
  * RESULT: request-opcode,signed errno; CONFIGURE: w,h,scale,configure-serial,physical-client-x,physical-client-y,show,style;
  * ACTIVATE: focus,active; LEASE_EVENT: state,generation,w,h,bpp;
  * additive 72-byte LEASE_EVENT: above + token,fb-generation,mode,scale,
@@ -88,7 +90,13 @@ enum desk_v3_opcode {
      * no reply: like DAMAGE it only needs the window tuple of an open window. */
     DESK_V3_SOUND = 92,
     /* G19: desktop-owned Control Panel action request from a v3 client. */
-    DESK_V3_LAUNCH = 93
+    DESK_V3_LAUNCH = 93,
+    /* fx-exeicons WINDOW_ICON: client to desktop, 4 bytes: size (16 or 32)
+     * with one size x size ARGB8888 surface (straight alpha in the high byte),
+     * or 0 without a surface to drop the window's icons. The icon the window
+     * shows in its caption, taskbar button and Alt+Tab: WM_SETICON, else its
+     * class icon, else its executable's first icon group. */
+    DESK_V3_WINDOW_ICON = 97
 };
 /* G12: shared settings, v2/v3; no fds. Request: key (0=query), value,
  * flags (SPIF_UPDATEINIFILE=1, SENDCHANGE=2). Snapshot: 11 u32 values, changed key, flags.
@@ -219,7 +227,18 @@ enum desk_opcode {
      *   items: count u32 formats, or count name bytes for a NAME reply.
      *   A successful GET reply with bytes carries one read-only surface. */
     DESK_CLIPBOARD = 92, DESK_CLIPBOARD_EVENT = 93,
-    DESK_DOS_CLIPBOARD = 94 /* v2 desktop to DOS window: u32 action 1 Mark, 2 Copy, 3 Paste, 4 toggle QuickEdit, 5 toggle Exclusive mode */
+    DESK_DOS_CLIPBOARD = 94 /* v2 desktop to DOS window: u32 action 1 Mark, 2 Copy, 3 Paste, 4 toggle QuickEdit, 5 toggle Exclusive mode */,
+    /* f7-14: the common present lease for native (v2) clients, with the v3
+     * LEASE/LEASE_EVENT payloads after the 4-byte header (DESK_SHELL_VERSION).
+     * LEASE (client to desktop, 20 bytes): action (0 release, 1 request),
+     *   w, h, bpp. The focused window of the client is the lease window.
+     * LEASE_EVENT (desktop to client, 76 bytes): the additive 72-byte v3
+     *   event: state (0 refused/ended, 1 granted, 2 pending, 3 revoked),
+     *   generation, w, h, bpp, token, fb-generation, mode, scale, source
+     *   w/h/pitch/size/format, native w/h/bpp, signed error. The holder
+     *   presents through W32_DISPLAY_FRAME or the render3d GPU copy with
+     *   the token and fb-generation (ciuki_gl_present). */
+    DESK_LEASE = 95, DESK_LEASE_EVENT = 96
 };
 enum desk_clip_op { DESK_CLIP_QUERY = 1, DESK_CLIP_EMPTY, DESK_CLIP_PUT, DESK_CLIP_CLOSE,
                     DESK_CLIP_GET, DESK_CLIP_WATCH, DESK_CLIP_REGISTER, DESK_CLIP_NAME, DESK_CLIP_OPEN, DESK_CLIP_RELEASE, DESK_CLIP_DISPLAY, DESK_CLIP_DISPLAY_REPLY };

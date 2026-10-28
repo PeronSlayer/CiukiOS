@@ -10,8 +10,12 @@
 #include "matches.h"
 
 #include "../render3d.h"
+/* f7-26: nouveau_vieux requires channel/PGRAPH context machinery absent
+ * from this 2D PIO owner. No source-proven complete 3D PIO lifecycle yet:
+ * docs/design/f7-family-nvidia-nv04-nv20.md. Potential values describe the
+ * broader 2D match table, never application caps. No probe/provider hook. */
 static const struct render3d_family render_family = {
-    .status=R3D_NOT_IMPLEMENTED, .potential_units=4, .potential_texture_size=4096
+    .status=R3D_SOFTWARE_ONLY, .potential_units=4, .potential_texture_size=4096
 };
 
 /* f2-104 amendment 1 approves NV4-NV2x PIO; f2-105 amendment 1

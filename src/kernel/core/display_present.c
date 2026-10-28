@@ -8,6 +8,17 @@
 #include <ciuki/win32.h>
 #include "../vm/vga_presenter.h"
 extern bool w32_service_desktop_client(struct process *, uint32_t);
+extern bool channel_connected(const struct process *, const struct process *);
+/* f7-14: a Win32 client holds a desktop service link; a native client holds
+ * a channel with the desktop (libdeskui). Both may be granted the lease. */
+static bool present_client(struct process *desktop, uint32_t pid)
+{
+    struct process *p=proc_find(pid);
+    if (!p || p->state!=PROC_LIVE || !desktop) return false;
+    if (p->personality==PROC_WIN32) return w32_service_desktop_client(desktop,pid);
+    return p->personality==PROC_NATIVE && desktop->pid==supervisor_desktop_pid() &&
+        desktop->state==PROC_LIVE && channel_connected(desktop,p);
+}
 
 /* Lock order: lease -> framebuffer presenter. Mode transactions NEVER hold
  * either mutex across firmware. transfer excludes all new operations there.
@@ -24,6 +35,15 @@ static uint64_t next_frame;
 static bool frame_running;
 static bool awaiting_first_frame;
 static uint64_t first_frame_deadline;
+/* fx-q3vise: the grant's tick, for the first frame's record. On the T23
+ * (image 6c3b7800) a Quake III lease was granted and the log ended three
+ * seconds later with no trace of whether any frame had reached the panel. */
+static uint64_t granted_ticks;
+static void first_frame_record(uint32_t pid, uint32_t lease, const char *path)
+{
+    klog("[display] present_lease=first-frame pid=%u token=%u ms=%llu path=%s",
+         pid,lease,(unsigned long long)(g_ticks-granted_ticks),path);
+}
 
 bool display_present_active(void) { return active || transfer; }
 static bool owner_live(uint32_t pid)
@@ -76,15 +96,16 @@ void display_present_poll(void)
     uint32_t key=token, generation=fb_generation, pid=holder;
     bool needed=active && (!owner_live(holder) || !owner_live(desktop_pid) ||
         !grants_display_owner(proc_find(desktop_pid)) ||
-        !w32_service_desktop_client(proc_find(desktop_pid),holder) ||
+        !present_client(proc_find(desktop_pid),holder) ||
         (awaiting_first_frame && deadline_passed(first_frame_deadline)));
     kmutex_unlock(&lease_lock);
     if (needed) (void)revoke(key,generation,pid);
 }
+extern int render3d_native_prepare(void) __attribute__((weak));
 static int grant(struct process *d, struct ciuki_w32_display_args *a)
 {
     struct process *p=proc_find(a->pid);
-    if (!p || p->personality!=PROC_WIN32 || p->state!=PROC_LIVE) return -ESRCH;
+    if (!p || (p->personality!=PROC_WIN32 && p->personality!=PROC_NATIVE) || p->state!=PROC_LIVE) return -ESRCH;
     if (!cvp_surface_valid(&a->surface) || a->scale>3 || a->mode>UINT16_MAX) return -EINVAL;
     kmutex_lock(&lease_lock);
     if (active || transfer || frame_running || display_fullscreen_active()) {
@@ -101,13 +122,20 @@ static int grant(struct process *d, struct ciuki_w32_display_args *a)
     bool suspended=false;
     if (!e) { e=grants_display_suspend(true); suspended=!e; }
     if (!e) fbdev_cursor_hide();
-    if (!e) e=display_set_for_present(d,(uint16_t)a->mode,true);
+    if (!e) e=supervisor_interactive_test(&g_boot) ? -EIO : display_set_for_present(d,(uint16_t)a->mode,true);
     const struct fb_device *f=fbdev_get();
     unsigned chosen=cvp_surface_scale(&a->surface,f->width,f->height,a->scale);
     if (!e && (!chosen || (f->bpp!=16 && f->bpp!=32))) e=-EOPNOTSUPP;
+    /* Retained target evidence is rebound before publishing the new lease.
+     * This may wait for 2D activation/marker I/O outside all display locks;
+     * it does not consume a later GL QUERY's unchanged 2 s wire deadline.
+     * A clean 3D refusal retains the ordinary software-capable lease. */
+    uint32_t prepared_generation=f->generation;
+    if (!e && render3d_native_prepare) (void)render3d_native_prepare();
+    if (!e && (!f->present || f->generation!=prepared_generation)) e=-EAGAIN;
     /* Transactions can yield; re-prove both process identities on publication. */
     if (!e && (!owner_live(a->pid) || !owner_live(d->pid))) e=-ESRCH;
-    if (!e && !w32_service_desktop_client(d,a->pid)) e=-EPERM;
+    if (!e && !present_client(d,a->pid)) e=-EPERM;
     if (e) {
         if (suspended && f->mode_id!=saved_mode) {
             int rollback=display_set_for_present(d,saved_mode,true);
@@ -123,7 +151,7 @@ static int grant(struct process *d, struct ciuki_w32_display_args *a)
     if (!e) {
         holder=a->pid; desktop_pid=d->pid; token=fresh; fb_generation=f->generation;
         scale=chosen; layout=a->surface; next_frame=0;
-        awaiting_first_frame=true; first_frame_deadline=deadline_after_ms(10000);
+        awaiting_first_frame=true; first_frame_deadline=deadline_after_ms(10000); granted_ticks=g_ticks;
         for (unsigned i=0;i<256;++i) {
             palette[i]=0;
             gamma.red[i]=gamma.green[i]=gamma.blue[i]=(uint16_t)(i*257);
@@ -207,25 +235,31 @@ static int frame(struct proc_thread *t, struct ciuki_w32_display_args *a)
     }
     kmutex_lock(&lease_lock);
     if (!e && !valid(p,a)) e=-EACCES;
+    bool first=false;
     if (!e) {
         next_frame=cvp_present_deadline(g_ticks*UINT64_C(1000000));
+        first=awaiting_first_frame;
         awaiting_first_frame=false;
     }
     kmutex_unlock(&lease_lock);
+    if (first) first_frame_record(p->pid,a->token,"copy");
     t->cleanup=0; t->operation=0; frame_cleanup(&op);
     return e;
 }
-/* F7: presentation of a completed, owned linear render3d copy. Conversion
- * into that buffer used the GPU; scanout upload uses the existing CPU/gamma
- * presenter. This is deliberately reported as gpu-copy + cpu-present. */
-int display_present_render3d(void *unused, uint32_t pid,
+/* Completed owned-copy presentation. A matching tiled receipt can go
+ * directly to the authorized native scanout; conversion/gamma uses CPU. */
+struct render3d_service;
+extern int render3d_scanout(struct render3d_service *,uint32_t,const struct ciuki_w32_render3d_args *,
+                           const struct fb_device *) __attribute__((weak));
+int display_present_render3d(void *service, uint32_t pid,
     const struct ciuki_w32_render3d_args *r, const void *pixels, uint32_t bytes)
 {
-    (void)unused;
     struct ciuki_w32_display_args a={.token=r->token,.generation=r->generation};
     struct process *p=proc_find(pid);
-    uint32_t page=pmm_alloc();
-    if (!page) return -ENOMEM;
+    /* NULL pixels: the frame is GPU-resident; only the direct native path
+     * may run, -EOPNOTSUPP asks the caller for the read-back CPU copy. */
+    uint32_t page=pixels ? pmm_alloc() : 0;
+    if (pixels && !page) return -ENOMEM;
     kmutex_lock(&lease_lock);
     int e=!valid(p,&a) ? -EACCES : frame_running ? -EBUSY : 0;
     struct ciuki_present_surface s=layout;
@@ -233,9 +267,29 @@ int display_present_render3d(void *unused, uint32_t pid,
     unsigned n=scale;
     if (!e && (s.format!=CIUKI_PRESENT_XRGB8888 || s.width!=r->width ||
         s.height!=r->height || s.pitch!=r->pitch || s.size!=bytes)) e=-EOPNOTSUPP;
+    bool direct=n==1 && s.width<=f.width && s.height<=f.height && service && render3d_scanout;
+    const char *how="render3d-copy";
+    if (!e && !pixels && !direct) e=-EOPNOTSUPP;
     if (!e) frame_running=true;
     kmutex_unlock(&lease_lock);
-    if (e) { pmm_free(page); return e; }
+    if (e) { if (page) pmm_free(page); return e; }
+    if (direct) {
+        /* A passing presenter/drawing conflict (2D activation, a cursor or
+         * console write) is retried briefly outside the lease lock: one busy
+         * moment must not fail SwapBuffers, which Quake III treats as fatal. */
+        for (unsigned attempt=0;attempt<20;attempt++) {
+            if (attempt) task_sleep_ms(1);
+            kmutex_lock(&lease_lock);
+            bool identity=true;
+            for (unsigned i=0;i<256 && identity;i++)
+                if (gamma.red[i]!=i*257u || gamma.green[i]!=i*257u || gamma.blue[i]!=i*257u) identity=false;
+            e=!valid(proc_find(pid),&a) ? -EACCES : !identity ? -EOPNOTSUPP : render3d_scanout(service,pid,r,&f);
+            kmutex_unlock(&lease_lock);
+            if (e!=-EBUSY) break;
+        }
+        if (e!=-EOPNOTSUPP || !pixels) { how="render3d"; goto complete; }
+        e=0;
+    }
     uint8_t *out=P2V(page);
     cvp_format fmt={.pitch=f.pitch,.width=(uint16_t)f.width,.height=(uint16_t)f.height,
         .bytes=f.bpp/8,.red_size=f.red_size,.red_pos=f.red_pos,.green_size=f.green_size,
@@ -259,15 +313,20 @@ int display_present_render3d(void *unused, uint32_t pid,
         kmutex_unlock(&lease_lock);
         kpreempt_point();
     }
+complete:
     kmutex_lock(&lease_lock);
     if (!e && !valid(proc_find(pid),&a)) e=-EACCES;
+    bool first=false;
     if (!e) {
         next_frame=cvp_present_deadline(g_ticks*UINT64_C(1000000));
+        first=awaiting_first_frame;
         awaiting_first_frame=false;
     }
     frame_running=false;
     kmutex_unlock(&lease_lock);
-    pmm_free(page); return e;
+    if (first) first_frame_record(pid,a.token,how);
+    if (page) pmm_free(page);
+    return e;
 }
 uint32_t w32_display_call(struct proc_thread *t, struct ciuki_w32_display_args *a)
 {
@@ -275,7 +334,7 @@ uint32_t w32_display_call(struct proc_thread *t, struct ciuki_w32_display_args *
     int e=0;
     if (a->action==W32_DISPLAY_GRANT || a->action==W32_DISPLAY_REVOKE) {
         if (p->pid!=supervisor_desktop_pid() || !grants_display_owner(p)) e=-EPERM;
-        else if (a->action==W32_DISPLAY_GRANT && !w32_service_desktop_client(p,a->pid)) e=-EPERM;
+        else if (a->action==W32_DISPLAY_GRANT && !present_client(p,a->pid)) e=-EPERM;
         else if (a->action==W32_DISPLAY_GRANT) e=grant(p,a);
         else {
             e=a->token ? revoke(a->token,a->generation,a->pid) : -EACCES;

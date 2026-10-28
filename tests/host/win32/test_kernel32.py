@@ -146,6 +146,7 @@ class Kernel32Files(unittest.TestCase):
         result=subprocess.run([program,ROOT/'build/host/fs/fat32.img',ROOT/'build/host/fs/fat16.img'],env=env,capture_output=True,text=True,timeout=60)
         self.assertEqual(result.returncode,0,result.stdout+result.stderr)
         self.assertIn('PASS kernel32 production VFS',result.stdout)
+        self.assertIn('PASS fx-emptydrive administrator and Standard user',result.stdout)
     def test_f7_hardware_64bit_division_helpers(self):
         """f7: __aulldiv/__aullrem/__alldiv/__allrem use DIVL (the bit loop
         took 81% of Quake III's menu CPU time); i386 stdcall when the host

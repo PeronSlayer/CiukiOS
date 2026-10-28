@@ -50,7 +50,7 @@
     },
     "gcc": {
       "path": "/usr/bin/gcc",
-      "sha256": "c348a945846fa0e76c17c4df61f326b5323b5b527f432abb1f1f5ed787e2e68a"
+      "sha256": "585673b6f1d2b1f58bf33174ddea5ac9be0cfbf043f1bf6b41c160f2e0943a45"
     },
     "make": {
       "path": "/usr/bin/make",
@@ -82,11 +82,11 @@
     },
     "cc1": {
       "path": "/usr/lib/gcc/x86_64-pc-linux-gnu/16/cc1",
-      "sha256": "0f013970c9ff3f058a66e5d075884a9499e8ccb0902dc83d21bccb69e1490e3a"
+      "sha256": "c3f461c871e5f1fa18d713c3f3aebec1739590df2fdb34a7d52fcf846af3d919"
     },
     "collect2": {
       "path": "/usr/lib/gcc/x86_64-pc-linux-gnu/16/collect2",
-      "sha256": "d32bc494c707259e3ef7bf671ded789d6a25a211fa49e5476ade9e8ddd08f1e8"
+      "sha256": "86f3abf3d3785810773a6b9e80f01ec97ac782e59fa8ddf73796703cd89653e2"
     },
     "crtbegin.o": {
       "path": "/usr/lib/gcc/x86_64-pc-linux-gnu/16/crtbegin.o",

@@ -27,9 +27,9 @@ static unsigned nres;
 
 static int zone_of(uint32_t pfn)
 {
-    if (pfn < 256)
+    if (pfn < PMM_DMA_START_PFN)
         return ZONE_LOW;
-    if (pfn < 4096)
+    if (pfn < PMM_NORMAL_START_PFN)
         return ZONE_DMA;
     return ZONE_NORMAL;
 }
@@ -67,7 +67,7 @@ static bool in_ram(uint32_t phys)
 
 bool pmm_is_reserved(uint32_t phys)
 {
-    if (phys < 0x100000u || !in_ram(phys))
+    if (phys < PMM_DMA_START_PFN*PAGE_SIZE || !in_ram(phys))
         return true;
     for (unsigned i = 0; i < nres; i++)
         if (phys + PAGE_SIZE > res[i].start && phys < res[i].end)
@@ -88,7 +88,7 @@ void pmm_init(void)
     memset(zone_total, 0, sizeof(zone_total));
     ledger_init();
     nres = 0;
-    add_res(0, 0x100000u, "first_mib_ivt_bda_ebda_rom");
+    add_res(0, PMM_DMA_START_PFN*PAGE_SIZE, "first_mib_ivt_bda_ebda_rom");
     uint32_t ks = g_boot.kernel_start, ke = g_boot.kernel_end;
     uint32_t ls = V2P(__kernel_start), le = V2P(__kernel_end);
     add_res(ks < ls ? ks : ls, PAGE_ALIGN_UP(ke > le ? ke : le), "kernel_image");
@@ -105,7 +105,7 @@ void pmm_init(void)
     if (top>(uint64_t)PMM_MAX_PAGES*PAGE_SIZE) top=(uint64_t)PMM_MAX_PAGES*PAGE_SIZE;
     uint32_t count=(uint32_t)((top+0x3fffffu)&~(uint64_t)0x3fffffu)/PAGE_SIZE;
     uint32_t bytes=PAGE_ALIGN_UP(count*sizeof(*descriptors)), run=0;
-    uint32_t begin=res[1].end>0x1000000u ? res[1].end : 0x1000000u;
+    uint32_t begin=res[1].end>PMM_NORMAL_START_PFN*PAGE_SIZE ? res[1].end : PMM_NORMAL_START_PFN*PAGE_SIZE;
     for (uint32_t p=begin; bytes && (uint64_t)p+PAGE_SIZE<=top; p+=PAGE_SIZE) {
         if (pmm_is_reserved(p)) run=0; else run+=PAGE_SIZE;
         if (run==bytes) { descriptor_start=p+PAGE_SIZE-bytes; break; }
@@ -125,7 +125,7 @@ void pmm_init(void)
         uint64_t t = (e->base + e->length) >> 12;
         if (t > PMM_MAX_PAGES)
             t = PMM_MAX_PAGES;
-        for (uint64_t pfn = s < 256 ? 256 : s; pfn < t; pfn++)
+        for (uint64_t pfn = s < PMM_DMA_START_PFN ? PMM_DMA_START_PFN : s; pfn < t; pfn++)
             if (descriptors) set_free((uint32_t)pfn);
     }
     /* Non-RAM descriptors win over overlapping RAM (loader already
@@ -156,8 +156,8 @@ void pmm_init(void)
             ledger_boot_page(pfn, owner, !used(pfn));
         }
     hint[ZONE_LOW] = 0;
-    hint[ZONE_DMA] = 256;
-    hint[ZONE_NORMAL] = 4096;
+    hint[ZONE_DMA] = PMM_DMA_START_PFN;
+    hint[ZONE_NORMAL] = PMM_NORMAL_START_PFN;
     ledger_boot_done();
     ledger_reconcile();
     klog("[mm] PFN descriptors entries=%u bytes=%u phys=%08x ready=%u",
@@ -166,7 +166,8 @@ void pmm_init(void)
 
 static uint32_t alloc_zone(int zone)
 {
-    static const uint32_t lo[3] = { 0, 256, 4096 }, hi[3] = { 256, 4096, PMM_MAX_PAGES };
+    static const uint32_t lo[3] = { 0, PMM_DMA_START_PFN, PMM_NORMAL_START_PFN },
+                          hi[3] = { PMM_DMA_START_PFN, PMM_NORMAL_START_PFN, PMM_MAX_PAGES };
     if (zone < ZONE_DMA || zone > ZONE_NORMAL || !zone_free[zone]) return 0;
     for (unsigned pass = 0; pass < 2; pass++) {
         uint32_t start = pass ? lo[zone] : hint[zone];
@@ -185,17 +186,26 @@ static uint32_t alloc_zone(int zone)
     return 0;
 }
 
+/* fx-selftest: public allocations that returned 0 (no frame/run). */
+static uint32_t refusals;
+static uint32_t counted(uint32_t phys)
+{
+    if (!phys) __atomic_add_fetch(&refusals, 1, __ATOMIC_RELAXED);
+    return phys;
+}
+uint32_t pmm_refusals(void) { return __atomic_load_n(&refusals, __ATOMIC_RELAXED); }
+
 uint32_t pmm_alloc_zone(int zone)
 {
     if (ledger_assert_pinned_context) ledger_assert_pinned_context(true,(uintptr_t)__builtin_return_address(0));
-    return alloc_zone(zone);
+    return counted(alloc_zone(zone));
 }
 
 uint32_t pmm_alloc(void)
 {
     if (ledger_assert_pinned_context) ledger_assert_pinned_context(true,(uintptr_t)__builtin_return_address(0));
     uint32_t p = alloc_zone(ZONE_NORMAL);
-    return p ? p : alloc_zone(ZONE_DMA);
+    return counted(p ? p : alloc_zone(ZONE_DMA));
 }
 
 /* Physically contiguous run for mount-time parser workspaces (f4-04). NORMAL
@@ -207,8 +217,8 @@ uint32_t pmm_alloc(void)
  * in bounded chunks too; never scan/reserve a whole zone with IF clear. */
 static uint32_t alloc_run(int zone, uint32_t pages, uint32_t alignment)
 {
-    uint32_t low = zone == ZONE_DMA ? 256 : 4096;
-    uint32_t high = zone == ZONE_DMA ? 4096 : PMM_MAX_PAGES;
+    uint32_t low = zone == ZONE_DMA ? PMM_DMA_START_PFN : PMM_NORMAL_START_PFN;
+    uint32_t high = zone == ZONE_DMA ? PMM_NORMAL_START_PFN : PMM_MAX_PAGES;
     if (pages > high - low || zone_free[zone] < pages) return 0;
     uint32_t start = (low + alignment - 1) & ~(alignment - 1);
     while (start <= high - pages) {
@@ -254,20 +264,20 @@ uint32_t pmm_alloc_contig(uint32_t pages)
     if (ledger_assert_pinned_context) ledger_assert_pinned_context(true,(uintptr_t)__builtin_return_address(0));
     if (!pages) return 0;
     uint32_t p = alloc_run(ZONE_NORMAL, pages, 1);
-    return p ? p : alloc_run(ZONE_DMA, pages, 1);
+    return counted(p ? p : alloc_run(ZONE_DMA, pages, 1));
 }
 
 uint32_t pmm_alloc_dma_run(uint32_t pages, uint32_t alignment)
 {
     if (ledger_assert_pinned_context) ledger_assert_pinned_context(true,(uintptr_t)__builtin_return_address(0));
-    if (!pages || pages > 3840 || !alignment || alignment > 4096 || (alignment & (alignment - 1))) return 0;
-    return alloc_run(ZONE_DMA, pages, alignment);
+    if (!pages || pages > PMM_NORMAL_START_PFN-PMM_DMA_START_PFN || !alignment || alignment > PMM_NORMAL_START_PFN || (alignment & (alignment - 1))) return 0;
+    return counted(alloc_run(ZONE_DMA, pages, alignment));
 }
 
 void pmm_free(uint32_t phys)
 {
     uint32_t pfn = phys >> 12;
-    if (pfn >= PMM_MAX_PAGES || pfn < 256 || pmm_is_reserved(phys))
+    if (pfn >= PMM_MAX_PAGES || pfn < PMM_DMA_START_PFN || pmm_is_reserved(phys))
         panic("pmm_free: invalid page %08x", phys);
     uint32_t f = irq_save();
     if (descriptors[pfn].pins || ledger_page_pinned(pfn)) {

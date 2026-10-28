@@ -65,6 +65,7 @@ class NtfsVfs(unittest.TestCase):
                                 env={**os.environ, "ASAN_OPTIONS": "detect_leaks=0:halt_on_error=1",
                                      "UBSAN_OPTIONS": "halt_on_error=1"})
         self.assertEqual(result.returncode, expect, result.stdout + "\n" + result.stderr)
+        self.last_stderr=result.stderr
         self.assertEqual(before, (FIX.sha(disk), FIX.sha(OUT / self.fixtures[kind]["image"])), "read-only image changed")
         return result.stdout
 
@@ -131,11 +132,21 @@ class NtfsVfs(unittest.TestCase):
                 self.assertIn("PASS behavior " + kind, self.run_mode(kind, "behavior", kind))
 
     def test_mount_refusals_carry_distinct_reasons_and_never_attach(self):
-        for kind in ("dirty", "recovery", "hibernated", "fixup", "index", "sequence", "bitmap",
+        for kind in ("recovery", "hibernated", "dirty-log-recovery", "dirty-hibernated", "fixup", "index", "sequence", "bitmap",
                      "log-recovery", "log-hibernated", "log-fixup", "index-fixup", "index-vcn"):
             with self.subTest(kind=kind):
                 out = self.run_mode(kind, "refusal")
                 self.assertIn("R\t%d\t%s" % REFUSALS[self.fixtures[kind]["reason"]], out.splitlines())
+
+    def test_dirty_clean_journal_attaches_read_only(self):
+        for kind in ("dirty", "dirty-clean-log"):
+            with self.subTest(kind=kind):
+                actual=self.tree(kind)
+                self.assertEqual((actual["M"]["error"],actual["M"]["diagnostic"]),(0,"ntfs"))
+                self.assertIn("dirty flag: accepted read-only",self.last_stderr)
+                actual=actual["F"]["/resident.txt"]
+                self.assertEqual({"size":actual["size"],"sha256":actual["sha256"]},
+                                 self.fixtures["clean"]["files"]["/resident.txt"])
 
     def test_unmount_remount_stale_handles_and_generations(self):
         self.assertIn("PASS lifecycle", self.run_mode("clean", "lifecycle"))

@@ -31,7 +31,7 @@ class DesktopFolderTests(unittest.TestCase):
                     *icon_assets.defines(),'-I',str(ROOT / 'apps/desktop'),'-I',str(ROOT / 'src/kernel/include')]
             sources=['tests/host/desktop/desktop_folder_test.c','tests/host/desktop/fake.c','tests/host/desktop/fake_vfs.c',
                      *('apps/desktop/'+n+'.c' for n in ('client','protocol','input','compositor','theme','shell','autoplay','autoplay_content','settings','power_policy','wallpaper','keymap','folder')),
-                     'apps/files/model.c','apps/files/transfer.c','apps/libdeskui/draw.c','apps/libdeskui/widgets.c','apps/libdeskui/list.c','apps/libdeskui/menu.c','apps/libdeskui/dialog.c', 'apps/libdeskui/controls.c', 'apps/libdeskui/commdlg.c','apps/libdeskui/textarea.c','apps/libdeskui/icons.c','apps/libdeskui/icon_map.c']
+                     'apps/files/model.c','apps/files/transfer.c','apps/libdeskui/draw.c','apps/libdeskui/widgets.c','apps/libdeskui/list.c','apps/libdeskui/menu.c','apps/libdeskui/dialog.c', 'apps/libdeskui/controls.c', 'apps/libdeskui/commdlg.c','apps/libdeskui/textarea.c','apps/libdeskui/icons.c','apps/libdeskui/icon_map.c','apps/libdeskui/iconx.c','apps/libdeskui/fileicon.c']
             objects=[]
             for i,source in enumerate(sources):
                 target=folder / f'{i}.o'

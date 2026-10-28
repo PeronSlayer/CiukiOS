@@ -21,9 +21,9 @@ class GLTests(unittest.TestCase):
  def build(cls,sanitize,profile=True,gamma_hooks=True,kernel_family=None):
   out=ROOT/'build/host/win32/gl';out.mkdir(parents=True,exist_ok=True);cls.out=out
   spec=importlib.util.spec_from_file_location('glbuild',ROOT/'sdk/libgl/build.py');gl=importlib.util.module_from_spec(spec);spec.loader.exec_module(gl)
-  lib=gl.host(sanitize=sanitize)
+  lib=gl.host_tinygl(sanitize=sanitize)
   units=[ROOT/'sdk/win32/gdi32'/n for n in gdi32.SOURCES if n not in ('compiler.c','compiler.S')]
-  units += [ROOT/'sdk/win32/services/bytes.c',ROOT/'tests/host/win32/gdi32/support.c',HERE/'engine.c',HERE/'census.c',HERE/'amendment.c',HERE/'review.c',HERE/'amendment2.c',HERE/'transport.c',HERE/'fixture.c',HERE/'quake3.c',HERE/'raster.c',HERE/'raster_reference.c']
+  units += [ROOT/'sdk/win32/services/bytes.c',ROOT/'tests/host/win32/gdi32/support.c',ROOT/'tests/host/win32/no_environment.c',HERE/'engine.c',HERE/'census.c',HERE/'amendment.c',HERE/'review.c',HERE/'amendment2.c',HERE/'transport.c',HERE/'fixture.c',HERE/'quake3.c',HERE/'raster.c',HERE/'raster_reference.c']
   units += list((ROOT/'sdk/win32/opengl32').glob('*.c'))+[ROOT/'sdk/libgl/software/renderer.c']
   fixture_source=(ROOT/'tests/host/savage3d_backend_test.c').read_text()
   (out/'savage3d_backend_fixture.inc').write_text(fixture_source.replace('int main(int argc,char **argv)','int frozen_3d_main(int argc,char **argv)'))
@@ -97,7 +97,7 @@ class GLTests(unittest.TestCase):
  def build_compositor(cls,sanitize=True):
   from tests.host.desktop.test_desktop import SHELL_SOURCES
   sources=[ROOT/'apps/desktop'/n for n in ('protocol.c','client.c','input.c','compositor.c','theme.c','gl_present.c')]
-  sources+=SHELL_SOURCES+[ROOT/'apps/libdeskui'/n for n in ('icons.c','icon_map.c','v3.c')]
+  sources+=SHELL_SOURCES+[ROOT/'apps/libdeskui'/n for n in ('icons.c','icon_map.c','iconx.c','fileicon.c','v3.c')]
   sources+=[ROOT/'tests/host/desktop'/n for n in ('fake.c','v3_test.c')]
   binary=cls.out/('compositor' if sanitize else 'compositor-benchmark')
   subprocess.run(['clang','-std=c17','-D_POSIX_C_SOURCE=200809L','-O1','-g','-Wall','-Wextra','-Werror',
@@ -146,21 +146,21 @@ class GLTests(unittest.TestCase):
   self.assertIsNotNone(row);self.assertGreater(int(row[2]),10000)
   self.assertLess(int(row[1])*3,int(row[2]))
   self.assertEqual(len(re.findall(r'^GL_HW_REPLAY .* frames=4 ',p.stdout,re.M)),4)
-  rows=re.findall(r'^GL_SAVAGE_H1 scope=(\S+) width=(\d+) height=(\d+) frame=(\d+) gpu_draws=(\d+) gpu_fragments=(\d+) cpu_draws=(\d+) cpu_fragments=(\d+) eligible_world=(\d+)/(\d+) eligible_entities=(\d+)/(\d+).* switches=(\d+) ',p.stdout,re.M)
-  self.assertEqual(len(rows),12)
-  for scope,w,h,frame,gpu,fragments,cpu,cpu_fragments,world,total_world,entities,total_entities,switches in rows:
-   self.assertIn((w,h),(('640','480'),('1024','768')))
-   self.assertGreaterEqual(int(world)*100,int(total_world)*95)
-   self.assertGreaterEqual(int(entities)*100,int(total_entities)*95)
-   self.assertEqual(int(switches),0)
-   self.assertIn(scope,('complete','complete-multipass'))
-   self.assertEqual(int(gpu),4600 if scope=='complete-multipass' else 3000)
-   self.assertEqual(int(cpu),0)
-   self.assertGreater(int(fragments),0)
+  check_savage_h1(p.stdout)
+  self.assertEqual(len(re.findall(r'^GL_T23_LEASE .* retained_targets=1 minimum_recheck=1 PASS$',p.stdout,re.M)),2)
+  check_lease_flow(p.stdout,16)
  def test_hardware_quake3_default_format_replay(self):
-  p=subprocess.run([str(self.binary),'--hardware-quake3-default'],capture_output=True,text=True,timeout=120)
+  p=subprocess.run([str(self.binary),'--hardware-quake3-default'],capture_output=True,text=True,timeout=900)
   print(p.stdout,end='');self.assertEqual(p.returncode,0,p.stdout+p.stderr)
   check_quake3(p.stdout,sanitize=True,default_format=True)
+  check_savage_h1(p.stdout)
+  self.assertEqual(len(re.findall(r'^GL_T23_LEASE .* retained_targets=1 minimum_recheck=1 PASS$',p.stdout,re.M)),2)
+  check_lease_flow(p.stdout,24)
+  formats=re.findall(r'^GL_SAVAGE_FORMAT width=(\d+) height=(\d+) request=24/8 selected=(\d+) depth=(\d+) stencil=(\d+)',p.stdout,re.M)
+  self.assertEqual(len(formats),4)
+  self.assertEqual(sorted(w for w,h,selected,depth,stencil in formats),['1024','1024','640','640'])
+  for w,h,selected,depth,stencil in formats:
+   self.assertEqual((selected,depth,stencil),('9','24','8'))
  def test_quake3_default_format_replay(self):
   p=subprocess.run([str(self.binary),'--quake3-default'],capture_output=True,text=True,timeout=120)
   print(p.stdout,end='');self.assertEqual(p.returncode,0,p.stdout+p.stderr)
@@ -190,10 +190,41 @@ class GLTests(unittest.TestCase):
     self.assertNotRegex(body,r'\b(?:sdiv|udiv|srem|urem) i64\b',name)
     pending += [n for n in re.findall(r'\bcall\b[^\n]*@([\w.]+)\(',body) if n in bodies]
 
+def check_lease_flow(output,depth):
+ # f7-15 review: context in the desktop generation, the first SwapBuffers'
+ # lease switches mode; hardware is regained and frames stay GPU-resident.
+ assert len(re.findall(r'^GL_T23_SWITCH desktop=1024x768 lease=640x480 generation=42->43 .* PASS$',output,re.M))==1
+ rows=re.findall(r'^GL_T23_SWAP depth=(\d+) frame=(\d+) generation=(\d+) gpu_draws=(\d+) reads=(\d+) uploads=(\d+) direct=(\d+) vram_accesses=(\d+)$',output,re.M)
+ assert [int(r[1]) for r in rows]==[0,1,2,3],rows
+ for d,frame,generation,gpu,reads,uploads,direct,vram in rows:
+  assert int(d)==depth and generation=='43' and gpu==('3003' if frame=='0' else '3000')
+  if frame=='0': assert (reads,uploads,direct)==('2','2' if depth==24 else '0','0')
+  else:
+   assert reads=='0' and direct=='1'
+   assert uploads==('2' if frame=='1' and depth==24 else '0')
+   if int(frame)>1: assert int(vram)<4096
+ assert len(re.findall(r'^GL_T23_LEASE_FLOW depth=%d .* PASS$'%depth,output,re.M))==1
+
+def check_savage_h1(output):
+ rows=re.findall(r'^GL_SAVAGE_H1 scope=(\S+) width=(\d+) height=(\d+) frame=(\d+) gpu_draws=(\d+) gpu_fragments=(\d+) cpu_draws=(\d+) cpu_fragments=(\d+) eligible_world=(\d+)/(\d+) eligible_entities=(\d+)/(\d+).* switches=(\d+) ',output,re.M)
+ assert len(rows)==12,rows
+ assert {(r[0],r[1],r[2],r[3]) for r in rows} == {
+  (scope,w,h,str(frame)) for scope in ('complete','complete-multipass')
+  for w,h in (('640','480'),('1024','768')) for frame in range(3)}
+ for scope,w,h,frame,gpu,fragments,cpu,cpu_fragments,world,total_world,entities,total_entities,switches in rows:
+  assert (w,h) in (('640','480'),('1024','768'))
+  assert int(total_world)>0 and int(total_entities)>0
+  assert int(world)*100>=int(total_world)*95 and int(entities)*100>=int(total_entities)*95
+  assert scope in ('complete','complete-multipass')
+  assert int(gpu)==(4600 if scope=='complete-multipass' else 3000)
+  assert int(cpu)==0 and int(cpu_fragments)==0 and int(switches)==0 and int(fragments)>0
+
 def check_quake3(output,sanitize=False,default_format=False):
  expected=json.loads((HERE/'quake3-goldens.json').read_text())
  rows=re.findall(r'GL_Q3 width=(\d+) height=(\d+) passes=(\d+) triangles=(\d+) frames=(\d+) checksum=(\d+) ns_frame=(\d+) ns_pixel=([\d.]+)',output)
  assert len(rows)==4,output
+ assert {(r[0],r[1],r[2]) for r in rows} == {
+  (w,h,str(passes)) for w,h in (('320','240'),('640','480')) for passes in (1,2)}
  attachments=re.findall(r'GL_Q3 .* depth=(\d+) stencil=(\d+)',output)
  assert attachments==([('24','8')]*4 if default_format else [('16','0')]*4),attachments
  for w,h,passes,triangles,frames,checksum,ns_frame,ns_pixel in rows:

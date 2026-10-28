@@ -4,6 +4,7 @@
 #define DESK_SHORTCUT_IO_H
 #include "shell_link.h"
 #include "settings_io.h"
+#include "../libdeskui/deskui.h"
 #include <errno.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -71,15 +72,21 @@ static inline int desk_shortcut_native_path(const char *path,char out[260])
     for(size_t i=0;i<=n;i++)out[i]=path[i+skip]=='\\' ? '/' : path[i+skip];
     return 1;
 }
-static inline int desk_shortcut_icon_load(const struct desk_launch_record *r,uint32_t *pixels)
+/* fx-exeicons: a shortcut's own icon at 16 and 32 px through libdeskui's
+ * file icon service (fileicon.c): its IconLocation (an .ico, .exe, .dll,
+ * .icl at any index, negative resource IDs included) or else its target
+ * program's icon. fallback receives the default object (the target's type)
+ * for a shortcut without one. Runs on the shortcut worker, never painting. */
+static inline int desk_shortcut_icon_load(const char *source,uint32_t *pixels,char *fallback,size_t cap)
 {
-    char path[260];size_t len=strlen(r->icon);
-    if(len<4 || strcasecmp(r->icon+len-4,".ico") || r->icon_index || !desk_shortcut_native_path(r->icon,path))return 0;
-    FILE *f=fopen(path,"rb");if(!f)return 0;
-    uint8_t *bytes=malloc(DESK_SHORTCUT_ICO_BYTES+1);if(!bytes){fclose(f);return 0;}
-    size_t n=fread(bytes,1,DESK_SHORTCUT_ICO_BYTES+1,f);int bad=ferror(f);if(fclose(f))bad=1;
-    int ok=!bad && n<=DESK_SHORTCUT_ICO_BYTES && desk_ico_decode(bytes,(unsigned)n,pixels,16) && desk_ico_decode(bytes,(unsigned)n,pixels+16*16,32);
-    free(bytes);return ok;
+    struct du_icon_source *s=malloc(sizeof(*s));
+    if(fallback && cap)snprintf(fallback,cap,"%s","application-x-executable");
+    if(!s)return 0;
+    int own=du_file_icon_resolve(source,0,s)>0;
+    if(fallback && cap && s->fallback[0])snprintf(fallback,cap,"%s",s->fallback);
+    unsigned sizes[2]={16,32};uint32_t *outs[2]={pixels,pixels+16*16};
+    int ok=own && !du_file_icon_extract(s->file,s->index,sizes,outs,2);
+    free(s);return ok;
 }
 static inline int desk_shortcut_write(const char *path,const struct desk_launch_record *r)
 {

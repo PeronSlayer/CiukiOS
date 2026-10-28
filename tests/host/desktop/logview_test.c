@@ -55,7 +55,8 @@ int main(int argc, char **argv)
 
     /* Tail: bounded, starts on a line, CR LF folded, size reported. */
     char tail[4096]; size_t got; unsigned long total;
-    assert(!lv_read_tail(list.entry[0].path, tail, sizeof(tail), &got, &total));
+    assert(list.entry[0].scope == LV_MACHINE && !strcmp(list.entry[0].name, "BOOT.LOG") && !strcmp(list.entry[0].path, "C:\\SYSTEM\\LOGS\\BOOT.LOG"));
+    assert(!lv_read_entry(&list.entry[0], tail, sizeof(tail), &got, &total));
     assert(total == length && got > 3000 && got < sizeof(tail) && tail[0] == '[' && !memchr(tail, '\r', got));
     assert(tail[got - 1] == '\n');
     char last[32]; snprintf(last, sizeof(last), "[%06u] boot line\n", (unsigned)(total / 20 - 1));
@@ -110,6 +111,26 @@ int main(int argc, char **argv)
     du_render(&ui); assert(large[760 * 520] == 0xdeadbeef);
     du_resize(&ui, pixels, LV_W, LV_H); free(large);
     lv_detach(&app);
+
+    /* sec-sysvc: the user's own logs (the per-user log folder of the SYSTEM
+     * log service; <root>/user/logs here) beside the system logs: NetSurf's
+     * log, native and Win32 crash reports, and maintenance logs. */
+    dir(root, "/user"); dir(root, "/user/logs");
+    const char *ns = "2026-10-28T10:00:00Z [netsurf] exit reason=quit\n";
+    put(root, "/user/logs/NETSURF.LOG", ns, strlen(ns));
+    crash(root, "/user/logs/CRASH0.TXT", 9, "user-native");
+    char w32[160]; int w = snprintf(w32, sizeof(w32), "CiukiOS crash sequence=1\nExecutable: game.exe\nPID: 3 TID: 4\nException: c0000005\n");
+    put(root, "/user/logs/WCRASH0.TXT", w32, (size_t)w);
+    put(root, "/system/logs/SCANDISK.LOG", "ScanDisk: no errors\n", 20);
+    lv_scan(&list, root);
+    assert(list.count == 11);
+    assert(list.entry[1].kind == LV_NETSURF && list.entry[1].scope == LV_USER &&
+           strstr(list.entry[1].path, "Local Settings\\Application Data\\CiukiOS\\Logs\\NETSURF.LOG"));
+    assert(list.entry[3].kind == LV_SYSTEM && !strcmp(list.entry[3].title, "ScanDisk log") && list.entry[3].scope == LV_MACHINE);
+    assert(!strcmp(list.entry[4].title, "Crash 9: user-native") && list.entry[4].scope == LV_USER);
+    assert(!strcmp(list.entry[10].title, "Win32 crash 1: game.exe") && list.entry[10].scope == LV_USER);
+    assert(!lv_read_entry(&list.entry[1], tail, sizeof(tail), &got, &total) && total == strlen(ns) && strstr(tail, "exit reason=quit"));
+    assert(!lv_read_entry(&list.entry[3], tail, 8, &got, &total) && total == 20 && got <= 8);
     puts("logview: PASS");
     return 0;
 }

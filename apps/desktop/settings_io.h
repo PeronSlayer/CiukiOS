@@ -50,5 +50,7 @@ void cfg_writer_stop(struct cfg_writer *);
 /* Durable destination-aware file writer shared with offline Setup.
  * Paths may include a target volume prefix. Returns 0 or positive errno. */
 int cfg_write_at(const char *path, const char *temporary, const char *, size_t);
+/* Complete bounded snapshot: positive errno on failure, length stays zero. */
+int cfg_read_at(const char *path, char *, size_t, size_t *length);
 int cfg_write_file(struct cfg_writer *, const char *, size_t);
 #endif

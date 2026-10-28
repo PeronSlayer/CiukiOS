@@ -28,4 +28,18 @@ extern void px_volume_detached(struct vfs *, unsigned) __attribute__((weak));
  * media_dev.c wakes /dev/media pollers (the tray's media notification). */
 extern void vfs_namespace_changed(void) __attribute__((weak));
 static inline void namespace_changed(void) { if (vfs_namespace_changed) vfs_namespace_changed(); }
+/* ---- sec-k03: legacy-table authorization (one block) -----------------
+ * Implemented by the native namespace (proc/posixpath.c) with the same
+ * resolver and decision as native/Win32 calls. The target names the
+ * authorized identity so the legacy frontend confirms that its own lookup
+ * reached that object; a mismatch is retried, never authorized. Absent
+ * hooks deny every subject table (kernel tables carry no subject). */
+struct vfs_table;
+struct security_subject;
+struct vfs_policy_target; /* vfs.h */
+extern int px_table_authorize_locked(struct vfs_table *, const char *, unsigned flags, unsigned access,
+                                     struct vfs_policy_target *) __attribute__((weak));
+extern int px_table_rename_locked(struct vfs_table *, const char *, const char *,
+                                  struct vfs_policy_target *, struct vfs_policy_target *) __attribute__((weak));
+/* ---- end sec-k03 ----------------------------------------------------- */
 #endif

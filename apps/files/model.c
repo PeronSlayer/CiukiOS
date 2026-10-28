@@ -190,6 +190,10 @@ int fm_entry_path(const struct fm_model *m, unsigned index, char *out)
         if (!item || rb_dir(item->drive, dir)) return -ENOENT;
         return fm_join(out, dir, item->stored);
     }
+    if (m->path[0] && m->fs.physical) {   /* sec-user-05: merged view */
+        char view[FM_PATH]; int r = fm_join(view, m->path, m->entries[index].name);
+        return r ? r : m->fs.physical(m->fs.ctx, view, out);
+    }
     return m->path[0] ? fm_join(out, m->path, m->entries[index].name) : fm_posix_path(out, m->entries[index].name);
 }
 

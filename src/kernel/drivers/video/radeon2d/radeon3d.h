@@ -5,6 +5,8 @@
 #define CIUKI_RADEON3D_PRIVATE_H
 #include "../render3d.h"
 #include "engine.h"
+/* D16 pipeline only: shared stencil flags are not implemented here. */
+#define RADEON3D_FEATURES (R3D_FEATURES | R3D_TEXTURE1)
 #define RADEON3D_TEXTURE_MIN (256u * 1024u)
 #define RADEON3D_GUARD 4096u
 #define RADEON3D_WORDS_PER_TRIANGLE 28u /* SE_VF_CNTL + 3 x 9 vertex dwords */

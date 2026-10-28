@@ -43,7 +43,7 @@ static void differential3d(bool r200)
     unsigned cases=0;
     for(unsigned depth=0;depth<8;depth++) for(unsigned filter=0;filter<5;filter++) for(unsigned combine=0;combine<4;combine++)
     for(unsigned state=0;state<8;state++) {
-        q=(struct render3d_request){.flags=R3D_ALL_FEATURES,.count=3,.clear_depth=32768,.clear_color=0x80406080,
+        q=(struct render3d_request){.flags=RADEON3D_FEATURES,.count=3,.clear_depth=32768,.clear_color=0x80406080,
             .state={.depth_func=depth,.flat=state&1,.blend=(state>>1)&1,.source=R3D_SRC_ALPHA,.destination=R3D_INV_SRC_ALPHA,
                 .alpha_test=(state>>2)&1,.alpha_func=depth,.alpha_ref=128}};
         for(unsigned t=0;t<2;t++) q.state.sampler[t]=(struct render3d_sampler){combine,filter,state&1,state&1};
@@ -111,7 +111,7 @@ static void full_probe3d(bool r200,unsigned w,unsigned h)
 }
 static struct render3d_request basic3d(void)
 {
-    struct render3d_request q={.flags=R3D_ALL_FEATURES,.count=3,.clear_depth=65535,.clear_color=0x80406080};
+    struct render3d_request q={.flags=RADEON3D_FEATURES,.count=3,.clear_depth=65535,.clear_color=0x80406080};
     q.vertices[0]=(struct render3d_vertex){8<<16,8<<16,16384,65536,0xffffffffu,0,0};
     q.vertices[1]=(struct render3d_vertex){56<<16,8<<16,16384,65536,0xffffffffu,65536,0};
     q.vertices[2]=(struct render3d_vertex){8<<16,56<<16,16384,65536,0xffffffffu,0,65536};
@@ -160,6 +160,13 @@ static void fuzz3d(void)
 {
     setup3d(false,64,64);
     struct render3d_resource *r[5];for(unsigned i=0;i<5;i++) r[i]=&scratch3d.contexts[0].resources[i];
+    /* Shared stencil flags must never silently enter this D16 pipeline. */
+    for (unsigned flag=R3D_STENCIL_TEST;flag<=R3D_CLEAR_STENCIL;flag<<=1) {
+        struct render3d_request q=basic3d(); q.flags|=flag;
+        unsigned words=writes3d,mem=memory3d;
+        CHECK(radeon3d_backend()->validate(&gpu3d,&q,r)==-EINVAL);
+        CHECK(writes3d==words && memory3d==mem);
+    }
     uint32_t seed=0x47124001;
     for(unsigned i=0;i<5000;i++) {
         struct render3d_request q=basic3d();seed=seed*1664525+1013904223;
@@ -240,6 +247,7 @@ static void service3d(void)
     gpu3d.qualified=gpu3d.fullsize_qualified=gpu3d.perspective_qualified=true;gpu3d.mode_width=gpu3d.mode_height=64;
     CHECK(!render3d_native_init(&scratch3d,&host3d));
     struct ciuki_r3d_caps caps;radeon3d_backend()->query_caps(&gpu3d,&caps);
+    CHECK(caps.features==RADEON3D_FEATURES && !(caps.features&(R3D_STENCIL_TEST|R3D_CLEAR_STENCIL)));
     CHECK(caps.max_size==64 && caps.max_vertices==768 && caps.sampling_features&CIUKI_R3D_PROJECTIVE_BILINEAR);
     CHECK(!render3d_create_context(&scratch3d,7,R3D_HARDWARE_REQUIRED,&c));
     const unsigned kinds[]={R3D_COLOR,R3D_D16,R3D_LINEAR_COLOR};

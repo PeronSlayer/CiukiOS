@@ -16,12 +16,15 @@ int ciuki_win32_shell_launch_wait(const struct desk_launch_record *);
 int desk_w32_flush(void);
 int desk_w32_ready(void); /* successful read-only registry round trip */
 /* Native binding: PE/DOS prepare off the input thread; ELF hands off to
- * the existing desktop launcher and preserves its launch-owned authority. */
+ * the existing desktop launcher and preserves its launch-owned authority.
+ * DESK_W32_PE is the Win32 personality: PE images and 16-bit Windows NE
+ * programs (fx-autorun, exe_kind.h); DESK_W32_DOS every other MZ/COM/BAT. */
 enum desk_w32_kind { DESK_W32_PE, DESK_W32_ELF, DESK_W32_DOS };
 int desk_w32_launch(enum desk_w32_kind, const struct desk_launch_record *);
 int desk_w32_launch_wait(enum desk_w32_kind, const struct desk_launch_record *);
 int desk_w32_identify(const char *native_path); /* kind or negative errno */
 int desk_w32_native_path(const char *, char *, size_t);
+int desk_w32_windows_path(const char *, char *, size_t); /* "/mnt/d/X" -> "D:\X", "/X" -> "C:\X" */
 int desk_w32_arguments(char *, char **, unsigned);
 /* Supervision is advanced by the desktop service loop, never by clients. */
 struct desk_w32_supervisor {

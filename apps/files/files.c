@@ -16,6 +16,8 @@
 #include <sys/wait.h>
 #include <unistd.h>
 #include "../desktop/tz_env.h"
+#include "../dosbox/program.h"
+#include "../desktop/profile.h" /* sec-user-05 */
 
 #define CHECKPOINT_SERIAL 0xf2310000u
 
@@ -92,7 +94,10 @@ static int launch(struct files_app *a, const char *program, char *const argv[])
     if ((!strcmp(program, "/Programs/ciuknote") || !strcmp(program, "/Programs/control") || (entry && entry->takes_file)) && argv[0] && argv[1] && !argv[2])
         return launch_window(a->user, program + sizeof("/Programs/") - 1, argv[1]);
     char tz[DESK_TZ_ENV_BYTES];
-    char *env[] = {desk_tz_env(tz, sizeof(tz)), "HOME=/Documents", "TMPDIR=/tmp", "PATH=/Programs", NULL};
+    /* sec-user-05: the session's profile home and private temporaries. */
+    struct profile_env profile;
+    char *env[9] = {desk_tz_env(tz, sizeof(tz)), "PATH=/Programs"};
+    env[profile_env_add(&profile, env, 2)] = NULL;
     ciuki_pid_t pid = ciuki_spawn(program, argv, env, NULL, 0, 0);
     return pid < 0 ? -errno : (int)pid;
 }
@@ -162,6 +167,23 @@ static int media_label(unsigned drive,char out[33])
     else memcpy(out,v.label,33);
     return 0;
 }
+/* fx-autorun: the label (AUTORUN.INF label=, else the volume label) and the
+ * AutoPlay verb's launch record of a mounted removable/optical drive. */
+static int media_autoplay(unsigned drive,char out[33],int *autoplay,struct desk_launch_record *record)
+{
+    out[0]=0; *autoplay=0;
+    if (drive==2) return media_label(drive,out);
+    struct ciuki_media_volume v={.version=CIUKI_MEDIA_VERSION,.size=sizeof(v),.drive=drive};
+    int fd=open("/dev/media",O_RDONLY|O_CLOEXEC); if (fd<0) return -errno;
+    int result=ciuki_devctl(fd,MEDIA_GET_VOLUME,&v,sizeof(v)); close(fd);
+    if (result || !v.flags) return media_label(drive,out);
+    struct ap_drive_info *info=calloc(1,sizeof(*info)); if (!info) return -ENOMEM;
+    if (!ap_drive_info(fm_native_vfs(),drive,info)) {
+        memcpy(out,info->label[0] ? info->label : v.label,33);
+        if (info->run_kind==1 || info->run_kind==2) { *autoplay=1; *record=info->record; }
+    } else memcpy(out,v.label,33);
+    free(info); return 0;
+}
 /* No root listing/content read on unchanged media polls. Native lookup is
  * case insensitive on the supported FAT/optical volumes, as is ap_drive_label. */
 static int media_label_key(unsigned drive,struct files_label_key *key)
@@ -185,6 +207,12 @@ static int media_read(struct ciuki_media_state *s)
     *s=(struct ciuki_media_state){.version=CIUKI_MEDIA_VERSION,.size=sizeof(*s)};
     int fd=open("/dev/media",O_RDONLY|O_CLOEXEC); if (fd<0) return -errno;
     int e=ciuki_devctl(fd,MEDIA_GET_STATE,s,sizeof(*s)) ? -errno : 0; close(fd); return e;
+}
+static int ntfs_status(unsigned slot,struct ciuki_ntfs_status *s)
+{
+    *s=(struct ciuki_ntfs_status){.version=CIUKI_MEDIA_VERSION,.size=sizeof(*s),.slot=slot};
+    int fd=open("/dev/media",O_RDONLY|O_CLOEXEC); if (fd<0) return -errno;
+    int e=ciuki_devctl(fd,MEDIA_GET_NTFS_STATUS,s,sizeof(*s)) ? -errno : 0; close(fd); return e;
 }
 static int media_remove(unsigned d,uint32_t generation)
 {
@@ -262,6 +290,29 @@ static int media_blockers(unsigned drive,uint32_t generation,struct ciuki_media_
     int fd=open("/dev/media",O_RDONLY|O_CLOEXEC); if (fd<0) return -errno;
     int e=ciuki_devctl(fd,MEDIA_GET_BLOCKERS,b,sizeof(*b)) ? -errno : 0; close(fd); return e;
 }
+/* fx-dosfull: the Screen usage of an MS-DOS program, from the DOS Box
+ * profile of the command the desktop types for it (apps/dosbox/program.h).
+ * The profile store moves with the DOS Box settings (sec-user-05). */
+static int native_dos_usage(const char *path, unsigned *usage)
+{
+    char key[97];
+    if (dosbox_native_key(path,key)) return -ENOEXEC;
+    int dos=dosbox_dos_program(path);
+    if (dos<0) return -errno;
+    if (!dos) return -ENOEXEC;
+    struct dosbox_profile p;
+    dosbox_profile_default(&p,key);
+    (void)dosbox_profile_load(&p);              /* missing or invalid: the defaults */
+    *usage=p.screen;
+    return 0;
+}
+static int native_set_dos_usage(const char *path, unsigned usage)
+{
+    char key[97];
+    if (dosbox_native_key(path,key)) return -EINVAL;
+    return dosbox_profile_usage_save(key,usage) ? -errno : 0;
+}
+
 int main(int argc, char **argv)
 {
     (void)setlocale(LC_ALL, ""); /* G24: opt into the user's regional formats. */
@@ -323,23 +374,28 @@ int main(int argc, char **argv)
     a->shell_open=shell_open; a->shell_record=shell_record;
     a->shell_paths=shell_paths; a->shell_count=shell_count;
     a->user = m; a->test = test; a->spawn = launch; a->drop=drop; a->drag_begin=drag_begin; a->drag_status=drag_status; a->close = close_window; a->close_declined=close_declined; a->portrait = portrait;
-    a->poll_clipboard=1; a->media_label_key=media_label_key; a->media_label=media_label; a->media_read=media_read; a->media_remove=media_remove; a->media_blockers=media_blockers;
-    a->media_load=media_load; a->media_space=media_space;
+    a->poll_clipboard=1; a->media_label_key=media_label_key; a->media_label=media_label; a->media_autoplay=media_autoplay; a->media_read=media_read; a->media_remove=media_remove; a->media_blockers=media_blockers;
+    a->media_load=media_load; a->media_space=media_space; a->ntfs_status=ntfs_status;
     a->media_defrag=media_defrag; a->media_convert=media_convert; a->media_format=media_format; a->cleanup_fs=fm_native_cleanup_vfs();
     a->backup_call=native_backup; a->media_image=media_image; a->media_format=media_format; a->cleanup_fs=fm_native_cleanup_vfs();
     a->file_info=native_info; a->set_attributes=native_attributes; a->set_label=native_label; a->volume_label=native_volume_label; a->version_info=fm_native_version;
+    a->dos_usage=native_dos_usage; a->set_dos_usage=native_set_dos_usage;
     if (property) snprintf(a->property_request,sizeof(a->property_request),"%s",property);
     if (test) a->checkpoint = checkpoint;
     m->window.close_request = close_request; m->window.message = on_message; m->window.user = a;
     a->show_bin_properties = bin_properties; a->find_initial = find;
     a->show_folder_options=folder_options;
     if (files_setup(a, &m->ui, fm_native_vfs(), path)) { du_window_destroy(&m->window); free(m); return 1; }
+    /* fx-exeicons: own icons are extracted off the UI thread (a CD spinning
+     * up never stalls the window); scripted gate runs extract in line. */
+    if (!test && du_file_icons_start(m->ui.wake, m->ui.wake_ctx)) fprintf(stderr, "Files: icon worker unavailable\n");
     if (shell_action) files_shell_action(a,shell_action,shell_path);
     if (open_document) files_open_document(a,open_document);
     /* Fixed placement keeps the scripted desktop case deterministic. */
     if (test) du_window_move(&m->window, 4, 36);
     int r = du_run(&m->window, idle, a);
     files_destroy(a);
+    du_file_icons_stop();
     du_window_destroy(&m->window);
     free(m);
     return r < 0 ? 1 : 0;

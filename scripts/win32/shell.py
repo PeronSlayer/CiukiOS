@@ -21,6 +21,7 @@ KERNEL = dict(codecs.KERNEL, SetLastError=4, GetLastError=0,
 KERNEL.update(GlobalLock=4, GlobalUnlock=4, GlobalSize=4, GlobalFree=4,
     HeapReAlloc=16, HeapSize=12,
     GetDriveTypeA=4, GetSystemTime=4, SystemTimeToFileTime=8, Sleep=4)   # G2: SHFileOperation's Recycle Bin
+KERNEL.update(GetEnvironmentVariableA=12)   # sec-user-05: USERPROFILE-derived personal folders
 
 def build(out, base, flags):
     out = Path(out)
@@ -33,9 +34,12 @@ def build(out, base, flags):
             'GetPropA':8,'SetPropA':12,'RemovePropA':8,'DefWindowProcA':16,
             'RegisterClassA':4,'CreateWindowExA':48,'ShowWindow':8,'UpdateWindow':4,
             'SetWindowTextA':8,'PeekMessageA':20,'PostQuitMessage':4,
-            'TranslateMessage':4,'DispatchMessageA':4,'DestroyWindow':4}),
+            'TranslateMessage':4,'DispatchMessageA':4,'DestroyWindow':4,
+            'IsWindow':4,'CiukiShellOpenFolder':8,   # fx-q3vise: ShellExecute(Ex) of a folder
+            'CiukiShellIcon':4}),                    # fx-exeicons: SHGetFileInfo's default icons
         codecs.import_library(objdir, 'advapi32', {'RegOpenKeyExA': 20,
-            'RegQueryValueExA': 24, 'RegCloseKey': 4})]
+            'RegQueryValueExA': 24, 'RegCloseKey': 4,
+            'CheckTokenMembership': 12})]   # sec-user-05: IsUserAnAdmin
     # cdecl diagnostic functions are exported by ntdll with plain names.
     definition = objdir/'ntdll.def'
     definition.write_text('LIBRARY ntdll.dll\nEXPORTS\n w32_diag\n w32_report_refusal\n')
@@ -43,7 +47,7 @@ def build(out, base, flags):
     codecs.run(['llvm-dlltool', '-m', 'i386', '-d', definition, '-l', lib])
     libraries.append(lib)
     objects, exports = [], {}
-    for source in [*sorted((ROOT/'sdk/win32/shell').glob('*.c')),
+    for source in [*sorted((ROOT/'sdk/win32/shell').glob('*.c')), ROOT/'apps/libdeskui/iconx.c',
                    ROOT/'sdk/win32/services/bytes.c', ROOT/'sdk/win32/services/stack.S']:
         obj = objdir/(source.stem+'.obj')
         extra = ['-Wno-unused-command-line-argument'] if source.suffix == '.S' else []

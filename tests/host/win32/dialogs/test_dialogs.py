@@ -102,6 +102,16 @@ class DialogTests(unittest.TestCase):
             vectors.append('static const unsigned vk_'+key+'[]={'+','.join(map(str, session['virtual_keys'][key]))+'};')
         (OUT/'session.h').write_text('\n'.join(vectors)+'\n')
         user32.icon_header(OUT)
+        # fx-exeicons: icon files the USER extraction checks copy to C: (upper.inc).
+        sys.path.insert(0, str(ROOT/'tests/host/desktop'))
+        import icon_fixtures as fx
+        red = lambda x, y: (255, 255, 0, 0)  # noqa: E731
+        blue = lambda x, y: (255, 0, 0, 255)  # noqa: E731
+        (OUT/'NEICONS.ICL').write_bytes(fx.ne([(1, [fx.Image(32, 32, blue, bpp=4)]),
+                                               (7, [fx.Image(16, 16, red, bpp=8), fx.Image(32, 32, red, bpp=8)])]))
+        (OUT/'POINT.CUR').write_bytes(fx.ico([fx.Image(32, 32, blue, bpp=4)], cursor=True))
+        (OUT/'BUSY.ANI').write_bytes(fx.ani([fx.ico([fx.Image(32, 32, red, bpp=8)], cursor=True)]))
+        (OUT/'DOSGAME.EXE').write_bytes(fx.dos_exe())
         flags = ['clang', '-std=c17', '-O1', '-g', '-Wall', '-Wextra', '-Werror', '-fno-pie',
                  '-ffunction-sections', '-fdata-sections', '-fsanitize=address,undefined',
                  '-fno-sanitize-recover=all', '-I'+str(ROOT/'src/kernel/include'),
@@ -113,7 +123,7 @@ class DialogTests(unittest.TestCase):
         subprocess.run([*flags, '-c', str(ROOT/'tests/host/win32/user32/kernel_bridge.c'), '-o', str(bridge)], check=True)
         objects.append(bridge)
         user_sources = sorted((ROOT/'sdk/win32/user32').glob('*.c')) + [
-            ROOT/'apps/libdeskui/v3.c', ROOT/'apps/libdeskui/clipstore.c',
+            ROOT/'apps/libdeskui/v3.c', ROOT/'apps/libdeskui/iconx.c', ROOT/'apps/libdeskui/clipstore.c',
             ROOT/'apps/desktop/protocol.c', ROOT/'apps/desktop/keymap.c',
             ROOT/'sdk/win32/services/bytes.c', HERE/'harness.c', EXERCISE/'exercise.c',
             *[ROOT/'apps/w32srv'/n for n in ('registry.c', 'storage.c', 'directory.c', 'defaults.c', 'protocol.c', 'posix_io.c', 'progman.c', 'restart.c', 'shell_fs.c')]]
@@ -137,7 +147,7 @@ class DialogTests(unittest.TestCase):
                      '-I'+str(ROOT/'sdk/win32/include'),
                      '-idirafter', str(ROOT/'sdk/sysroot-overlay/include'), *freetype.includes()]
         gdi_exports = [ROOT/'sdk/win32/gdi32'/n for n in gdi32.SOURCES if n not in ('compiler.c', 'compiler.S')]
-        gdi_sources = [*gdi_exports, ROOT/'sdk/win32/gdi32/native_font.c', HERE/'gdi_host.c', HERE.parent/'gdi_support.c']
+        gdi_sources = [*gdi_exports, ROOT/'sdk/win32/gdi32/native_font.c', HERE/'gdi_host.c', HERE.parent/'gdi_support.c', HERE.parent/'no_environment.c']
         names = set()
         for i, source in enumerate(gdi_sources):
             obj = OUT/f'g{i}.o'

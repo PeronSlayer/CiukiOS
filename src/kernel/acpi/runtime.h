@@ -43,6 +43,9 @@ int acpi_ec_quirk_transfer_counted(bool, uint8_t, uint8_t *, unsigned, unsigned 
 int acpi_ec_firmware_hold(unsigned ms);
 void acpi_ec_firmware_release(void);
 void fw_pm_blocks_capture(void);
+/* fx-acpioff: the evaluated \_S5 for the S5 register fallback. */
+void fw_s5_hint_capture(void);
+int acpi_s5_hint(uint8_t *typa, uint8_t *typb);
 bool acpi_power_can_off(void);
 int acpi_power_off_owned(void);
 int acpi_power_snapshot(struct ciuki_power_status *);

@@ -184,7 +184,7 @@ def h1_program(fixtures, test=None):
         if test is not None:
             test.skipTest(reason)
         raise RuntimeError(reason)
-    if not (ROOT / 'build/apps/win32/builtin-store.json').is_file():
+    if not (upper.CORE / 'builtin-store.json').is_file():
         unavailable('core outputs absent: make CAP= apps')
     if not upper.local_build_matches():
         unavailable('reused PEs do not match the qualified f5-20D record; make CAP= upper')

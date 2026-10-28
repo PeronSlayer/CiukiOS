@@ -2,6 +2,7 @@
  * SPDX-License-Identifier: MIT */
 #include "win32_adapter.h"
 #include "../dosbox/autorun.h"
+#include "profile.h" /* sec-user-05 */
 #include <ciuki/channel.h>
 #include <ciuki/spawn.h>
 #include <errno.h>
@@ -42,18 +43,27 @@ int main(int argc,char **argv)
         char *slash=strrchr(cwd,'/');
         if(slash){ if(slash==cwd)slash[1]=0; else *slash=0; (void)!chdir(cwd); }
     }
-    char command[1600];
+    char command[1600],image[260];
     if(strchr(argv[2],'"')){result=-EINVAL;goto reply;}
-    int len=snprintf(command,sizeof(command),"\"%s\"%s%s",argv[2],argv[3][0]?" ":"",argv[3]);
+    /* fx-autorun: a Windows program gets its image by its Windows name, as
+     * Explorer starts it ("D:\\AUTORUN.EXE"): argv[0] becomes its
+     * GetModuleFileName and the IS5 admission's stub path, and the first
+     * token of its command line. The kernel still opens the native path. */
+    const char *name=argv[2];
+    if(kind==DESK_W32_PE){result=desk_w32_windows_path(path,image,sizeof(image));if(result)goto reply;name=image;}
+    int len=snprintf(command,sizeof(command),"\"%s\"%s%s",name,argv[3][0]?" ":"",argv[3]);
     if(len<0 || len>=(int)sizeof(command)){result=-E2BIG;goto reply;}
-    char *child[34]={path,NULL};unsigned count=1;
+    char *child[34]={kind==DESK_W32_PE ? image : path,NULL};unsigned count=1;
     struct ciuki_spawn_fd map={3,3};unsigned maps=kind!=DESK_W32_PE;
     if(kind==DESK_W32_PE)child[count++]=command;
     else if(kind==DESK_W32_DOS){result=-EOPNOTSUPP;goto reply;}
     child[count]=NULL;
     /* G1: no TZ; the Win32 C runtime reads GetTimeZoneInformation. */
     char state[]="CIUKI_SHELL_SHOW=1";state[sizeof(state)-2]=(char)('0'+show);
-    char *env[]={"LC_ALL=C","PATH=/Programs","HOME=/Documents",state,NULL};
+    /* sec-user-05: forward the session's profile root and temporaries. */
+    struct profile_env profile;char *env[10]={"LC_ALL=C","PATH=/Programs"};
+    unsigned n=profile_env_add(&profile,env,2);   /* HOME at [2], then TMPDIR... */
+    env[n]=env[3];env[3]=state;env[n+1]=NULL;     /* CIUKI_SHELL_SHOW stays at [3] */
     result=ciuki_spawn(path,child,env,maps?&map:NULL,maps,0);if(result<0)result=-errno;
     if(waited && result>0){
         int status=0,pid=result,r;

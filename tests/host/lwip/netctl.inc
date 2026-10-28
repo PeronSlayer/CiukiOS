@@ -34,10 +34,36 @@ static int ctl(unsigned operation,struct ciuki_net_control *record)
     int e=call(CIUKI_SYS_NETCTL,operation,12000,sizeof(*record),0);
     if(!e)memcpy(record,user+12000,sizeof(*record));return e;
 }
+static void security_socket_tests(void)
+{
+    int fd=net_socket_create(&client,AF_INET,SOCK_DGRAM,0);CHECK(fd>=0);
+    struct ciuki_net_socket_list list;
+    security_fixture_identity(&client,1000,1,false,0);
+    net_socket_snapshot(&list);CHECK(list.count==1);
+    security_fixture_identity(&client,1001,1,false,0);
+    net_socket_snapshot(&list);CHECK(!list.count);
+    struct net_socket_ref ref={0};CHECK(net_socket_capture(&client,fd,&ref)==-EACCES && !ref.object);
+    struct ciuki_pollfd foreign={.fd=fd,.events=POLLIN|POLLOUT};
+    CHECK(net_poll(&client,&foreign,1,0,NULL)==1 && foreign.revents==POLLNVAL);
+    security_fixture_identity(&client,1000,2,false,0);
+    net_socket_snapshot(&list);CHECK(!list.count);
+    security_fixture_identity(&client,500,2,true,0);
+    net_socket_snapshot(&list);CHECK(list.count==1);
+    security_fixture_identity(&client,0,0,true,0);
+    int system=net_socket_create(&client,AF_INET,SOCK_DGRAM,0);CHECK(system>=0);
+    security_fixture_identity(&client,500,2,true,0);
+    net_socket_snapshot(&list);CHECK(list.count==1);
+    security_fixture_identity(&client,0,0,true,0);
+    net_socket_snapshot(&list);CHECK(list.count==2);
+    CHECK(!file_close(&client,system) && !file_close(&client,fd));drain();
+    security_fixture_identity(&client,1000,1,true,0);
+    puts("H05 socket scope: uid/session isolation, SYSTEM details hidden from administrator, transferred fd denied PASS");
+}
 static void netctl_tests(void)
 {
+    security_socket_tests();
     struct ciuki_net_control r={.version=1,.size=sizeof(r)};
-    CHECK(ctl(CIUKI_NETCTL_GET,&r)==-EPERM); client.network_capability=true;
+    CHECK(!ctl(CIUKI_NETCTL_GET,&r)); client.network_capability=true;
     CHECK(!ctl(CIUKI_NETCTL_GET,&r) && r.count==2 && r.config.dhcp && r.address==PP_HTONL(0xc0000264));
     r.generation++;CHECK(ctl(1,&r)==-EBUSY);r.generation--;
     r.version=2;CHECK(ctl(0,&r)==-EOPNOTSUPP);r.version=1;
@@ -79,12 +105,20 @@ static void netctl_tests(void)
     CHECK(!ctl(3,&r) && !r.address);discovers=dhcp_discover;
     for(unsigned i=0;i<10;i++)net_stack_link(0,true);CHECK(tcpip_callback_wait(core_barrier,NULL)==ERR_OK);
     CHECK(dhcp_discover==discovers);CHECK(!ctl(2,&r));retry_acquisition();CHECK(!ctl(0,&r) && r.address);
-    client.network_capability=false;CHECK(ctl(1,&r)==-EPERM);CHECK(!live_pins);
+    client.network_capability=false;CHECK(!ctl(0,&r));CHECK(!live_pins);
     client.dhcp_capability=true;
-    CHECK(ctl(CIUKI_NETCTL_GET,&r)==-EPERM && ctl(CIUKI_NETCTL_SET,&r)==-EPERM);
+    security_fixture_identity(&client,1001,2,false,0);
+    struct ciuki_net_config before=netctl_saved[0];
+    CHECK(!ctl(CIUKI_NETCTL_GET,&r) && ctl(CIUKI_NETCTL_SET,&r)==-EPERM);
+    CHECK(ctl(CIUKI_NETCTL_RELEASE,&r)==-EPERM && ctl(CIUKI_NETCTL_RENEW,&r)==-EPERM);
+    CHECK(!memcmp(&before,&netctl_saved[0],sizeof(before)));
+    security_fixture_identity(&client,501,3,false,0);
+    CHECK(!ctl(CIUKI_NETCTL_GET,&r) && ctl(CIUKI_NETCTL_SET,&r)==-EPERM);
+    CHECK(ctl(CIUKI_NETCTL_RELEASE,&r)==-EPERM && ctl(CIUKI_NETCTL_RENEW,&r)==-EPERM);
+    security_fixture_identity(&client,1000,1,true,0);
+    client.dhcp_capability=false;
     CHECK(!ctl(CIUKI_NETCTL_RELEASE,&r) && !r.address);
     CHECK(!ctl(CIUKI_NETCTL_RENEW,&r));retry_acquisition();
-    client.dhcp_capability=false;CHECK(ctl(CIUKI_NETCTL_RELEASE,&r)==-EPERM);
-    puts("PASS G26B DHCP-only capability: release/renew accepted, GET/SET and unprivileged mutations refused");
+    puts("PASS H05 network credentials: public GET; Standard/Guest SET/RENEW/RELEASE denied unchanged; administrator DHCP allowed without path flags");
     puts("PASS f2-100 netctl: capability/copies, validation, static/DHCP, three DNS, search domain, save rollback, administrative down/up, release/renew, persisted boot before DHCP");
 }

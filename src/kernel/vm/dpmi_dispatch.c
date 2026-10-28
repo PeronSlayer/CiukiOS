@@ -744,14 +744,14 @@ static struct dpmi_cli_site *cli_site_find(struct dosvm *v, const struct dpmi_se
  * boundary, or the inspected pattern). The kept window is always the
  * DPMI_CLI_BYTES before the CLI (a 15-byte instruction plus one), so a
  * rewritten instruction just before a short proof is noticed as well. */
-static void cli_site_store(struct dosvm *v, const struct v86_frame *f, const struct dpmi_seg *cs,
+static bool cli_site_store(struct dosvm *v, const struct v86_frame *f, const struct dpmi_seg *cs,
                            uint8_t pop, unsigned width, uint32_t distance, bool provisional)
 {
     struct dpmi *d = &v->dpmi;
     (void)distance;
     unsigned len = f->tf.eip < DPMI_CLI_BYTES ? f->tf.eip : DPMI_CLI_BYTES;
     uint32_t linear = cs->base + f->tf.eip;
-    if (!len || f->tf.eip < len) return;
+    if (!len || f->tf.eip < len) return false;
     struct dpmi_cli_site *slot = &d->cli_site[0];
     for (unsigned i = 0; i < DPMI_CLI_SITES; i++)
         if (!d->cli_site[i].used || d->cli_site[i].used < slot->used) slot = &d->cli_site[i];
@@ -759,10 +759,11 @@ static void cli_site_store(struct dosvm *v, const struct v86_frame *f, const str
         .len = (uint8_t)len, .big = cs->big, .client = (uint8_t)d->clients, .provisional = provisional};
     for (unsigned i = 0; i < DPMI_CLI_SITES; i++)   /* an upgrade replaces its own entry */
         if (d->cli_site[i].used && d->cli_site[i].linear == linear) { slot = &d->cli_site[i]; break; }
-    if (dosvm_read(v, linear - len, s.code, len)) return;
+    if (dosvm_read(v, linear - len, s.code, len)) return false;
     s.used = ++d->cli_clock ? d->cli_clock : 1;
     *slot = s;
     d->cli_settled = true;
+    return true;
 }
 /* fx-16, the Windows 95 rule (Chen, above): when no forward proof reaches
  * the CLI, the code immediately before it must be PUSHF, or PUSHF; POP r
@@ -864,21 +865,42 @@ static bool arm_flags_image(struct dosvm *v, struct v86_frame *f, const struct d
             site = 0; d->cli.proved++;
             goto proven;
         }
-        if (reached) { site->used = 0; d->cli.missed++; return false; }   /* disproved */
+        if (reached) {                                                   /* disproved */
+            site->used = 0; d->cli.missed++;
+            d->cli_miss_tick = g_ticks;
+            return false;
+        }
     }
     if (site) { pop = site->pop; width = site->width; d->cli.hits++; }
     else {
-        /* Every CLI that needed a proof keeps the seeds coming for a
-         * while: a new site is learned on its next execution at latest. */
-        d->cli_miss_tick = g_ticks;
+        /* fx-doomwin: only a CLI left without a cached site restarts the
+         * seed demand (DPMI_SEED_IDLE_MS of return-tracker breakpoints and
+         * stack snapshots), so that its next execution finds a fresh
+         * boundary. A CLI just proven and cached needs no seed any more.
+         * Before, every proof restarted the demand, and the control-flow
+         * proof was never cached, so DOOM's few learned sites kept the
+         * tracker arming 32-hop breakpoint chains for a second each time,
+         * at every PM trap of the window's 25-40 thousand per second and
+         * in its busy waits (title, menus, wipes): T23 trial 6c3b7800 bank
+         * n=4, 11,241 checkpoint hits of 12,132 #DB exits (454 ms, 37 us
+         * each); host DOOM replay, 12,282 of 17,940 #DB in 30 s. A control
+         * proof is cached like a forward proof: both decode from an
+         * observed boundary and clear the remembered instructions at every
+         * transfer, so PUSHF [POP r] physically precedes the CLI either way
+         * and the kept bytes guard the site (cli_site_find), as the live
+         * image check guards every arm. */
+        bool stored;
         if (flags_preceding_reach(v, f, cs, &pop, &width, false, &reached)) {
             d->cli.proved++;
-            cli_site_store(v, f, cs, pop, width, f->tf.eip - d->decode_eip, false);
-        } else if (flags_control_preceding(v, f, cs, &pop, &width)) d->cli.control++;
-        else if (!reached && flags_pattern(v, f, cs, &pop, &width)) {
+            stored = cli_site_store(v, f, cs, pop, width, f->tf.eip - d->decode_eip, false);
+        } else if (flags_control_preceding(v, f, cs, &pop, &width)) {
+            d->cli.control++;
+            stored = cli_site_store(v, f, cs, pop, width, 0, false);
+        } else if (!reached && flags_pattern(v, f, cs, &pop, &width)) {
             d->cli.pattern++;
-            cli_site_store(v, f, cs, pop, width, 5, true);
-        } else { d->cli.missed++; return false; }
+            stored = cli_site_store(v, f, cs, pop, width, 5, true);
+        } else { d->cli.missed++; d->cli_miss_tick = g_ticks; return false; }
+        if (!stored) d->cli_miss_tick = g_ticks;
     }
 proven:;
     /* PUSHF's image of the real flags: IF set (the host never runs a client
@@ -1069,7 +1091,6 @@ static bool return_step_safe(struct dosvm *v, const struct v86_frame *f)
  * covers a restore that retired before tracing began, or an unsafe barrier. */
 #define DPMI_IF_STEPS 4096u
 #define DPMI_IF_WAIT_MS 2u
-#define DPMI_ISR_WAIT_MS 50u
 #define DPMI_IF_RECORDS 16u
 static bool if_step_context(const struct dpmi *d, const struct v86_frame *f, bool retired)
 {
@@ -1144,7 +1165,8 @@ static void if_recovery_prepare(struct dosvm *v, struct v86_frame *f)
     struct dpmi *d = &v->dpmi;
     uint32_t flags = irq_save();
     dosvm_pic_cascade(&v->monitor);
-    bool pending = dosvm_pic_pending(&v->monitor) >= 0;
+    bool pending = dosvm_pic_pending(&v->monitor) >= 0 ||
+        (v->mouse.pending_mask && v->mouse.mask && !v->mouse.active);
     uint64_t tick = g_ticks;
     irq_restore(flags);
     if (!v->frame_pm || v->monitor.vif || !pending) { if_recovery_end(v, f); return; }
@@ -1799,6 +1821,7 @@ int dpmi_deliver(struct dosvm *v, struct v86_frame *f)
 {
     struct dpmi *d = &v->dpmi;
     dpmi_irq_resync(v, f);
+    dosvm_irq_release(v);
     return_resume(v, f);
     if (v->frame_pm) armed_observe(v, f);
     if_recovery_prepare(v, f);
@@ -1813,7 +1836,7 @@ int dpmi_deliver(struct dosvm *v, struct v86_frame *f)
     struct v86_frame from;
     if (!irq && (g_boot.flags & CBI_F_VERBOSE)) from = *f;
     if (!hooked && !v->frame_pm) {
-        int e = v86_irq_deliver(&v->monitor, f);
+        int e = dosvm_rm_irq_deliver(v, f);
         irq_restore(flags);
         if (!irq && !e && (g_boot.flags & CBI_F_VERBOSE))
             dosvm_trace(v, DOSVM_TRACE_IRQ0, &from, vector, f->tf.cs & 0xFFFF, f->tf.eip);

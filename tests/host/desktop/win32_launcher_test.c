@@ -6,6 +6,7 @@
 #include <stdio.h>
 #include <string.h>
 #include <unistd.h>
+#include "../../../apps/dosbox/program.h"
 int desk_w32_launcher_main(int,char **);
 static char path[260],words[34][1600],cwd[512];
 static unsigned maps,launched,sent,waits;
@@ -36,6 +37,7 @@ int main(int argc,char **argv)
     assert(argc==2);char *args[]={"shell-launch","0","C:\\Program Files\\fixture.exe","/remove \"keep spaces\"",argv[1],NULL};
     assert(!desk_w32_launcher_main(5,args));
     assert(!strcmp(path,"/Program Files/fixture.exe") && !maps && launched==1);
+    assert(!strcmp(words[0],"C:\\Program Files\\fixture.exe"));   /* fx-autorun: the Windows image name */
     assert(!strcmp(words[1],"\"C:\\Program Files\\fixture.exe\" /remove \"keep spaces\""));assert(!strcmp(cwd,argv[1]));
     assert(show==1);
     char text[]="one \"two words\" empty\\\"quote \"\"";char *native[6]={0};
@@ -47,6 +49,15 @@ int main(int argc,char **argv)
     char command[260];assert(!desk_w32_dos_command(&dos,command,sizeof(command)) && !strcmp(command,"D:\\SETUP.EXE"));
     strcpy(dos.target,"/mnt/e/INSTALL.BAT");strcpy(dos.arguments,"/fast");
     assert(!desk_w32_dos_command(&dos,command,sizeof(command)) && !strcmp(command,"E:\\INSTALL.BAT /fast"));
+    /* fx-dosfull: Files names a DOS program's Screen usage by the profile key
+     * of the command this launch types for the same path. */
+    static const char *const targets[]={"/mnt/d/SETUP.EXE","/mnt/e/INSTALL.BAT","/GAMES/doom/doom.exe","/TOOLS/x.com","C:\\OLD\\Game.Exe"};
+    for (unsigned i=0;i<sizeof(targets)/sizeof(*targets);i++) {
+        struct desk_launch_record r={.show=1};strcpy(r.target,targets[i]);strcpy(r.arguments,"-a b");
+        char typed[260],a[97],b[97],native[260];
+        assert(!desk_w32_dos_command(&r,typed,sizeof(typed)) && !dosbox_program_key(typed,a));
+        assert(!desk_w32_native_path(targets[i],native,sizeof(native)) && !dosbox_native_key(native,b) && !strcmp(a,b));
+    }
     args[4]="D:\\bad";assert(desk_w32_launcher_main(5,args)==1 && launched==1);
     assert(sent==3);
     char *wait_args[]={"shell-launch","0","C:\\Program Files\\fixture.exe","/remove",argv[1],"--wait",NULL};
@@ -62,6 +73,11 @@ int main(int argc,char **argv)
     assert(!strcmp(words[1],"\"C:\\tmp\\quake3.exe\" +set r_mode 3"));
     char *root_args[]={"shell-launch","0","C:\\top.exe","","",NULL};
     assert(!desk_w32_launcher_main(5,root_args) && !strcmp(cwd,"/"));
+    /* fx-autorun: a program on a disc (native /mnt/d) is started as D:\\..., so
+     * the kernel's IS5 admission finds SETUP.INS next to it from any drive. */
+    char *disc_args[]={"shell-launch","0","/mnt/d/SETUP.EXE","-s",argv[1],NULL};
+    assert(!desk_w32_launcher_main(5,disc_args) && !strcmp(path,"/mnt/d/SETUP.EXE"));
+    assert(!strcmp(words[0],"D:\\SETUP.EXE") && !strcmp(words[1],"\"D:\\SETUP.EXE\" -s") && !words[2][0]);
     unsigned saved=launched;show_args[5]="10";
     assert(desk_w32_launcher_main(6,show_args)==1 && reply_result==-EINVAL && launched==saved);
     puts("PASS production PE/DOS launcher and shared native argv parser: full quoted command line, native argv quoting, DOS window, cwd isolation, bad cwd refusal");return 0;

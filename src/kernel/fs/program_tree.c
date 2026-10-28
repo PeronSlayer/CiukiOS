@@ -5,8 +5,8 @@
 struct frame { struct fat_entry entry; uint32_t cursor; bool counted; };
 int program_tree(struct fat_volume *v,unsigned game,bool remove,uint32_t *size)
 {
-    static const char *const names[]={"WOLF3D","DOOM","QUAKE","WAR2"};
-    if(!v || !size || !game || game>4)return -FS_EINVAL;
+    static const char *const names[]={"WOLF3D","DOOM","QUAKE","WAR2","DUKE3D"};
+    if(!v || !size || !game || game>sizeof(names)/sizeof(*names))return -FS_EINVAL;
     *size=0;
     if(remove && v->readonly)return -FS_EROFS;
     size_t bytes=sizeof(struct frame)*PROGRAM_DEPTH;

@@ -2,6 +2,7 @@
  * Serial Terminal window: the 80x24 grid, the Call, Transfer and View menus,
  * the Properties dialog and the status bar. */
 #include "serial.h"
+#include "../desktop/profile.h" /* sec-user-04: My Documents is per user */
 #include <errno.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -85,7 +86,7 @@ void serial_attach(struct serial_app *a, struct du_ui *u)
     u->menus = a->menus; u->menu_count = 4;
     du_add(u, DU_CANVAS, SV_CANVAS, grid_box(), "")->accepts_tab = 1;
     du_add(u, DU_STATUS, SV_STATUS, (struct du_rect){0, u->canvas.height - 20, u->canvas.width, 20}, "");
-    if (!a->folder) a->folder = "/Documents";
+    if (!a->folder) a->folder = profile_home();
     sync_menu(a); status(a); du_focus(u, SV_CANVAS); u->dirty = 1;
 }
 void serial_tick(struct serial_app *a, unsigned elapsed_ms)

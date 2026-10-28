@@ -3330,3 +3330,127 @@ WM_CLOSE, and declines once; with Close grayed the request declines at once
 and nothing is dispatched; enabled again, the request destroys the window.
 It fails on the previous user32 (`USER CHECK ... error 1400`: the window was
 destroyed).
+
+## fx-q3vise — ShellExecute(Ex) of a folder: the end of the VISE install (2026-10-27)
+
+T23 evidence (image 6c3b7800, private BOOT1.LOG): the Quake III Arena demo
+installer (`Q3ADemo.exe`, Installer VISE 3.x, pid 7) copied the game, logged
+`stub kernel32.dll!FindActCtxSectionGuid` and then ran without pumping
+messages until the owner ended it ("not responding", End Task 27 s later).
+No child process was created. The user page-fault count rose by about 7,000
+per second for the whole hang (snapshots 22–27), against 270 per second during
+the copy; a QEMU run of the same installer (lead-scratch `q3-serial-102`) went
+through the same phase in about 60 s (4 million faults) and then showed the
+Finished page.
+
+### Host reproduction
+
+The original installer runs on the H1 adapter in game mode
+(`tests/host/win32/installers/h1_game.c`, options `+set ciuki_installer`):
+the stand-in desktop presses Enter (Y on the licence page) on each untitled
+wizard page that stays unchanged for 4 s. With the production builtins, the
+reused Wine DLLs and the w32srv registry of the image, the copy ran from
+21 s to 33 s and the progress page then stayed frozen for 51 s: ten cycles of
+5.1 s, 710,110 w32srv requests, the CPU busy, the installer reading none of
+the Enter presses. SIGPROF samples and the stack words of sampled kernel
+records (`+set ciuki_installer_stacks 1`, mapped to modules and exports
+offline) put the loop in the engine `vise32ex.dll` (extracted to
+`C:\WINDOWS\TEMP\~vis0000`), ViseMain+0x3930 (0x10047ff0):
+
+```
+SHELLEXECUTEINFOA e = {cbSize 60, fMask 0, lpFile = folder, nShow SW_SHOW};
+ShellExecuteExA(&e);                       /* result not checked */
+for (end = GetTickCount() + 5000; GetTickCount() < end; )
+    if (FindWindowA("CabinetWClass", folder) ||
+        FindWindowA("CabinetWClass", <name part of folder>)) break;
+```
+
+called through a one-argument stub of the script engine (0x1004abf0) once per
+shortcut created, with the shortcut's Start-menu folder (ten shortcuts in
+`Quake 3 Arena Demo`, `...\Extras` and `...\Extras\Help`). The window created
+and destroyed in each cycle is the COM apartment window of the engine's
+`CoInitialize`/`CoUninitialize` around each `IShellLink` (Wine combase
+`apartment_createwindowifneeded`); `FindActCtxSectionGuid` is Wine combase's
+activation-context lookup in `CoGetClassObject`, a stub that returns FALSE
+(Windows 98 has no activation contexts), after which the registry
+`InprocServer32` path creates the shell link as before.
+
+### Research
+
+- [ShellExecuteA](https://learn.microsoft.com/en-us/windows/win32/api/shellapi/nf-shellapi-shellexecutea):
+  "To open a folder, use either of the following calls:
+  `ShellExecute(handle, NULL, <fully_qualified_path_to_folder>, NULL, NULL, SW_SHOWNORMAL);`
+  or ... `"open"`"; "To explore a folder ... `"explore"`"; "If lpOperation is
+  NULL, the function opens the file specified by lpFile. If lpOperation is
+  "open" or "explore", the function attempts to open or explore the folder";
+  ShellExecute "uses an open Explorer window rather than launch a new one".
+- [The Old New Thing, 2015-06-19](https://devblogs.microsoft.com/oldnewthing/20150619-00/?p=45341)
+  ("Why does the class name for Explorer change depending on whether you open
+  it with /e?"): in Windows 95 plain folder windows had the class
+  `CabinetWClass` and Explore-mode windows the other class (the shipped name
+  is `ExploreWClass`); programs found Explorer's window "by doing a
+  FindWindow for CabinetWClass", which is why the names were kept.
+- Explorer titles a folder window with the folder's name; the full path only
+  with Folder Options "Display the full path in title bar" (off by default).
+  The engine accepts both titles.
+- CiukiOS before: `sdk/win32/shell/execute.c` mapped every target through
+  its extension's class; a folder has none, so ShellExecuteEx failed with
+  ERROR_NO_ASSOCIATION and nothing could ever answer the engine's FindWindow.
+  `FindWindowA` (`sdk/win32/user32/windows.c`) costs two w32srv requests per
+  top-level window in the system, each with a 70.7 KB reply buffer
+  (`u32_directory`, `W32R_MAX`): the five-second polls were the T23 fault
+  storm.
+
+### Decisions
+
+- ShellExecute(Ex) A/W with no verb, "open" or "explore" on an existing
+  directory opens it as Windows 98 does: Files (CiukiOS's Explorer) shows
+  the folder, and the shell keeps, per folder opened by the process, a
+  hidden top-level window of class `CabinetWClass` (`ExploreWClass` for
+  "explore") titled with the folder's name, so `FindWindow`/`IsWindow` answer
+  as with Explorer's window. A second open of the same folder reuses that
+  window and starts nothing (Explorer activates its window). hInstApp is
+  greater than 32 and hProcess NULL (no process was started for the caller).
+- Files is started by the desktop: user32 `CiukiShellOpenFolder(window,
+  path)` sends `DESK_V3_LAUNCH "files" <POSIX folder path>` (UTF-8, at most
+  `DESK_ARG_MAX` bytes, never truncated) on that window's wire, and the
+  desktop accepts it from a window that carries a Win32 HWND for an absolute
+  path without empty, "." or ".." components or control characters
+  (`desk_folder_argument`); every other program, option or path stays
+  `-EPERM`. Drives map as in Files (C: is `/`, X: is `/mnt/x`). A refusal
+  fails the ShellExecute call (the window is destroyed); a drive root or a
+  UNC folder keeps the earlier refusal.
+- The engine's FindWindow loop now ends at its first iteration: on the H1
+  host the end of the install (first folder to the Finished page) takes
+  2.3 s instead of 51 s and 2,620 w32srv requests instead of 710,110; three
+  Files launches are requested, one per folder.
+
+### Host tests
+
+- `tests/host/win32/installers/test_quake3.py` `Quake3InstallerTests`: the
+  original installer from its Welcome page to `TERMINATE 0`, the installed
+  game (quake3.exe 1.11, pak0.pk3), the ten Start-menu shortcuts, the three
+  folder launches, the end of the install under 10 s and fewer than 50,000
+  w32srv requests. On the previous DLLs the same run made no launch,
+  needed 51 s and 710,110 requests.
+- `tests/host/win32/installers/shell_test.c` (`test_installers.py`): folder
+  open, title and class, reuse, explore, another drive, a refusing desktop,
+  "print", a drive root and a missing folder.
+- `tests/host/win32/user32` `test_shell_folder`: the launch packet, UTF-8,
+  the desktop's refusal, the length bound and the window checks.
+- `tests/host/desktop/window_model_test.c` row `fx-q3vise Win32 folder opens
+  Files`: refusal without a Win32 HWND, for options, relative and traversal
+  paths and other programs; Files opened with the folder as its argument.
+
+### Known limits
+
+- The stand-in window belongs to the calling process and ends with it; a
+  Files window the user opened on the same folder is not reused.
+- `FindWindow`/`EnumWindows` still cost two w32srv round trips per window
+  with a W32R_MAX reply buffer each (unchanged here); `GetTickCount` is a
+  kernel record per call (6.5 million records from the VISE stub's own
+  start-up and exit polling on the H1 host). Both are performance items for
+  a later directive.
+- A message-only window (`HWND_MESSAGE`, used by Wine combase for the
+  apartment window) is created as a hidden top-level window with a desktop
+  wire; Windows 98 has no message-only windows.

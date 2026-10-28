@@ -110,7 +110,7 @@ enum sh_action { SH_ACT_NONE, SH_ACT_SUBMENU, SH_ACT_LAUNCH, SH_ACT_ABOUT, SH_AC
 #define SH_ITEM_DEFAULT 4u
 #define SH_ITEM_CHECKED 8u
 /* mark: 1 + the byte of label that is the underlined access key (0 none). */
-struct sh_item { char label[44]; const char *icon; uint8_t action, flags, mark; int16_t arg; };
+struct sh_item { char label[44]; const char *icon; const char *file_icon; uint8_t action, flags, mark; int16_t arg; };   /* file_icon: fx-exeicons own-icon key, or NULL */
 struct sh_menu { uint64_t opened; unsigned animation_step; int kind, count, hot, row_h, icon,scroll,scroll_max; struct desk_box box; struct sh_item items[SH_ITEMS]; };
 /* Desktop shortcuts. action: SH_ACT_LAUNCH with a program name and an
  * optional argument (Files with a folder), or a built-in action. */
@@ -140,6 +140,7 @@ struct sh_dnd {
     struct desk_box image;            /* drag image bounds as last painted */
 };
 struct desk_shell {
+    unsigned icon_generation;   /* fx-exeicons: du_file_icons_generation() last painted */
     struct sh_program_tray program_tray[SH_PROGRAM_TRAY];
     struct sh_program_balloon program_balloons[SH_PROGRAM_TRAY];
     unsigned program_balloon_count;
@@ -267,6 +268,15 @@ void desk_logon_done(struct desktop *);
 int desk_logon_input(struct desktop *, const struct ciuki_input_event *);
 void desk_session_lock(struct desktop *);
 void desk_session_resume(struct desktop *);
+/* sec-user-03: a secure-menu action handed back by LOGON (logon_proto.h LGN_ACT_*). */
+void desk_session_action(struct desktop *, unsigned action);
+/* sec-user-04 (logon.inc): LOGON-session lock hooks. saver_lock: 0 when the
+ * protected saver may go (locked, or a password-less owner), -errno to keep
+ * it; arm_resume: 1 ready to sleep (locked or nothing to protect), 0 still
+ * arming, -errno refuse Stand by; password_set: LOGON's PASSWORD notice. */
+int desk_session_saver_lock(struct desktop *);
+int desk_session_arm_resume(struct desktop *);
+int desk_session_password_set(struct desktop *);
 void desk_shortcut_properties(struct desktop *, unsigned link, int repair);
 const char *desk_program_menu_label(const char *);
 void desk_shell_reset(struct desktop *);

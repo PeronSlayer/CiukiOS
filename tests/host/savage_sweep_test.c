@@ -207,3 +207,8 @@ int main(void)
     puts("PASS Savage deadlines/checkpoints: expired or failed pre-command checkpoint issues no fill; slow evidence truncates and retains earlier results");
     return 0;
 }
+
+/* fx-r3dalloc moved large driver buffers to fs_contig_alloc; this harness
+ * links no fs_port.c, so it supplies zeroed host memory. */
+__attribute__((weak)) void *fs_contig_alloc(size_t n) { return calloc(1, n ? n : 1); }
+__attribute__((weak)) void fs_contig_free(void *p, size_t n) { (void)n; free(p); }

@@ -17,6 +17,7 @@ enum dosvm_state { DOSVM_CREATING, DOSVM_BOOTING, DOSVM_RUNNABLE,
 enum dosvm_reason { DOSVM_EXIT, DOSVM_TERMINATE, DOSVM_FAULT, DOSVM_RESET, DOSVM_TIMEOUT };
 struct dosvm;
 struct task;
+struct dos_identity;
 struct dosvm_key { uint32_t id, generation; };
 struct dosvm_config {
     uint32_t commitment; /* zero selects DOSVM_RESIDENT_CAP */
@@ -27,7 +28,9 @@ struct dosvm_config {
     /* f3-06: read-only base image (VFS path, the private FAT16 geometry:
      * DOSVM_SECTORS sectors, or fewer when its trailing zero sectors were
      * cut, which then read as zeros); NULL selects C:\SYSTEM\DOS\UNIFIED.IMG.
-     * The writable overlay always stays in C:\SYSTEM\DOS (any base volume). */
+     * sec-k05: the writable overlay and per-title data live in the owner's
+     * profile (dos_identity.h); C:\SYSTEM\DOS only for internal VMs and the
+     * interim bootstrap session (any base volume). */
     const char *base;
     bool disable_file_bridge; /* unified disables the retired v1 bridge */
     uint8_t game, kernel; /* game 1..3; kernel 2=unified; 0 only for explicit host-fixture seams */
@@ -43,6 +46,11 @@ struct dosvm_config {
      * Called only during dosvm_create, on the creating thread. */
     bool (*cancelled)(void *arg);
     void *cancel_arg;
+    /* sec-k05: the creator's captured identity (dos_identity.h), fixed before
+     * guest boot; the VM takes its own subject reference. NULL only for a
+     * kernel-internal VM (probes, conformance), which runs as SYSTEM and is
+     * never reachable from a user process. */
+    const struct dos_identity *identity;
 };
 /* f3-02 window adapter: desktop KEY is public set 1; MOTION is surface-local
  * absolute coordinates; BUTTON is 1/2/3 and down/up. TEXT is ignored after
@@ -177,6 +185,11 @@ int dosvm_record_byte(struct dosvm *, uint8_t byte);
  * supervisor's owner-death collection. No physical input or display grant. */
 int32_t dosvm_client_syscall(struct trap_frame *);
 void dosvm_client_poll(void);
+/* sec-k05 teardown hook for sec-k07: terminate every window VM created in
+ * this security session (forced, like an owner death). Sleeps; call it from
+ * the SYSTEM teardown context after the session left ACTIVE. Returns the
+ * number of VMs still retained for a later retry. */
+unsigned dosvm_session_revoke(uint32_t session);
 struct dosvm *dosvm_client_first(uint32_t *owner_pid);
 void dosvm_expect(struct dosvm *, const char *name);   /* resets the verdict latch */
 /* f3-06: the 80x25 text cells latched when the expected verdict line
@@ -184,6 +197,7 @@ void dosvm_expect(struct dosvm *, const char *name);   /* resets the verdict lat
 const uint16_t *dosvm_verdict_text(const struct dosvm *);
 /* Scheduler/arch ownership hooks, identity for every other task. */
 bool dosvm_trap(struct trap_frame *);
+bool dosvm_trap_fast(struct trap_frame *); /* fx-doomwin: plane selects at trap entry */
 bool dosvm_client(const struct task *);       /* f3-04: worker running a DPMI client frame */
 void dosvm_task_switch(const struct task *);  /* f3-04: per-VM LDT and watchpoints */
 uint32_t dosvm_task_cr3(const struct task *, uint32_t normal);

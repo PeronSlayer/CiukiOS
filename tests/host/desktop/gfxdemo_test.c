@@ -71,8 +71,50 @@ static void select_page(unsigned page)
         if (du_tabs_hit(w,x,w->box.y+4)==(int)page) { at_click(&ui,x,w->box.y+4);return; }
     assert(0);
 }
-static unsigned requests,last_index;
-static int request(void *ctx,unsigned op,unsigned index) { (void)ctx;assert(op==DESK_GFX_BENCH);requests++;last_index=index;return 0; }
+static unsigned requests,last_index,leases,last_lease=2;
+static int request(void *ctx,unsigned op,unsigned index)
+{
+    (void)ctx;
+    if (op==DESK_LEASE) { leases++;last_lease=index;return 0; }
+    assert(op==DESK_GFX_BENCH);requests++;last_index=index;return 0;
+}
+/* f7-14: backend, native resolution and full-screen controls. The host
+ * library has no kernel transport: hardware is unavailable here. */
+static void gl_controls(const char *folder)
+{
+    char text[192];
+    select_page(1);du_render(&ui);
+    assert(app.backend==CIUKI_GL_BACKEND_AUTO && !app.backend_error && app.gl.frames && !app.gl.hardware_frames);
+    assert(app.gl.backend==CIUKI_GL_BACKEND_SOFTWARE && app.gl.software_frames==app.gl.frames);
+    at_click_widget(&ui,GFX_BACKEND);
+    assert(app.backend==CIUKI_GL_BACKEND_HARDWARE && app.backend_error==-ENODEV);
+    assert(!strcmp(du_get(&ui,GFX_BACKEND)->text,"Backend: Hardware"));
+    du_render(&ui);assert(!app.scene.error && app.gl.policy==CIUKI_GL_BACKEND_HARDWARE && app.gl.backend==CIUKI_GL_BACKEND_SOFTWARE);
+    gfx_status_line(&app,text,sizeof(text));assert(strstr(text,"OpenGL software (Hardware)") && strstr(text,"hardware unavailable"));
+    at_save(folder,"cube-hardware-unavailable",&ui);
+    at_click_widget(&ui,GFX_BACKEND);assert(app.backend==CIUKI_GL_BACKEND_SOFTWARE && !app.backend_error);
+    at_click_widget(&ui,GFX_BACKEND);assert(app.backend==CIUKI_GL_BACKEND_AUTO && !app.backend_error);
+    /* Native resolution off: 320 x 240 scaled into the 634 x 476 view. */
+    unsigned native_w=app.scene.width,native_h=app.scene.height;
+    at_click_widget(&ui,GFX_NATIVE);du_render(&ui);
+    assert(!app.native_resolution && app.scene.width==320 && app.scene.height==240 && app.viewport.w==634);
+    at_click_widget(&ui,GFX_NATIVE);du_render(&ui);
+    assert(app.native_resolution && app.scene.width==native_w && app.scene.height==native_h && native_w==634);
+    /* Full screen: without a desktop request path the control reports it. */
+    app.request=NULL;at_click_widget(&ui,GFX_FULLSCREEN);
+    assert(app.full_state==GFX_WINDOWED && app.full_error==-ENOSYS);
+    app.request=request;at_click_widget(&ui,GFX_FULLSCREEN);
+    assert(app.full_state==GFX_FULL_REQUESTED && leases==1 && last_lease==1 && !app.full_error);
+    at_tap(&ui,DU_KEY_ESC);assert(leases==2 && !last_lease);
+    app.full_state=GFX_WINDOWED;app.request=NULL;
+    assert(!strcmp(gfx_present_name(&app),"desktop-copy"));
+    app.full_state=GFX_FULL_ACTIVE;app.scene.presented=1;assert(!strcmp(gfx_present_name(&app),"gpu-copy"));
+    app.scene.presented=0;assert(!strcmp(gfx_present_name(&app),"cpu-copy"));
+    /* A hidden-window repaint under the lease never renders the windowed scene. */
+    uint64_t frames=app.gl.frames;ui.dirty=1;du_render(&ui);gfx_gl_status(&app);assert(app.gl.frames==frames);
+    app.full_state=GFX_WINDOWED;app.scene.presented=0;
+    puts("PASS backend control (automatic/hardware/software, hardware unavailable reported), native resolution, full-screen request and Esc release");
+}
 int main(int argc,char **argv)
 {
     assert(argc==3);FILE *f=fopen(argv[1],"rb");assert(f && fread(portrait,4,256*256,f)==256*256 && !fclose(f));
@@ -100,8 +142,11 @@ int main(int argc,char **argv)
     p.index=1;p.result=-ENODEV;gfx_receive(&app,&p);assert(app.bench_index==2 && app.results[1].error==-ENODEV);
     app.bench_running=0;app.accelerator=(struct ciuki_accel_info){0};strcpy(app.engine.driver_id,"swdib");app.results[0].error=-ENODEV;
     du_render(&ui);assert(!app.scene.error);at_save(argv[2],"software-only",&ui);
+    gl_controls(argv[2]);select_page(0);du_render(&ui);
     du_resize(&ui,pixels,560,360);du_render(&ui);select_page(1);du_render(&ui);
-    assert(app.scene.width==261 && app.scene.height==196);
+    /* Narrow windows: Native resolution and Full screen on a second row. */
+    assert(app.scene.width==226 && app.scene.height==170 && app.viewport.y==92);
+    at_save(argv[2],"narrow-controls",&ui);
     du_resize(&ui,pixels,760,360);du_render(&ui);
     assert(app.scene.width==320 && app.scene.height==240 && app.viewport.h>=240);
     p=(struct desk_packet){.opcode=DESK_GFX_INFO,.width=800,.height=600,.bpp=16,.accelerator={.generation=10}};

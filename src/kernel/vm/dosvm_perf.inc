@@ -13,6 +13,20 @@ uint64_t dosvm_perf_clock(void)
     /* Ordinary hardware boots need the same accounting as diagnostics. */
     return g_tsc_per_ms ? read_tsc_serialized() : 0;
 }
+/* fx-doomwin: the stamps at a VM exit's boundaries (trap entry, exit end,
+ * return to guest time) read the TSC without CPUID. RDTSC alone "is not a
+ * serializing instruction" and may read the counter before earlier
+ * instructions complete (Intel SDM Vol. 2B, RDTSC), an error of at most
+ * the P6 reorder window (tens of cycles) against exits of thousands; the
+ * exit's IRET after the closing stamp is itself serializing (SDM Vol. 3A,
+ * "Serializing Instructions"). Each CPUID costs about 130 clocks on the
+ * P6/Pentium M line (Agner Fog, instruction tables), so the two pairs
+ * these boundaries read cost about 0.46 us per exit on the T23, inside
+ * every vm_perf_cost figure. Interior measurements keep dosvm_perf_clock. */
+uint64_t dosvm_perf_stamp(void)
+{
+    return g_tsc_per_ms ? read_tsc_unserialized() : 0;
+}
 uint64_t dosvm_perf_task_clock(void)
 {
     /* Presenter/port calls can be preempted. The native scheduler clock
@@ -48,10 +62,10 @@ void dosvm_isr_end(struct dosvm *v, const struct dpmi_record *r)
     if (us > s->max_us) s->max_us = us > UINT32_MAX ? UINT32_MAX : (uint32_t)us;
     if (ms > s->max_ms) s->max_ms = ms > UINT32_MAX ? UINT32_MAX : (uint32_t)ms;
 }
-static void perf_phase(struct dosvm *v, unsigned phase)
+static void perf_phase_clock(struct dosvm *v, unsigned phase, bool boundary)
 {
     uint32_t flags = irq_save();
-    uint64_t now = dosvm_perf_clock();
+    uint64_t now = boundary ? dosvm_perf_stamp() : dosvm_perf_clock();
     if (v->perf.phase == 1) v->perf.guest_cycles += now - v->perf.stamp;
     if (v->perf.phase == 2) {
         uint64_t cycles = now - v->perf.stamp;
@@ -61,6 +75,9 @@ static void perf_phase(struct dosvm *v, unsigned phase)
     v->perf.stamp = now; v->perf.phase = phase;
     irq_restore(flags);
 }
+static void perf_phase(struct dosvm *v, unsigned phase) { perf_phase_clock(v, phase, false); }
+/* An exit boundary stamp (dosvm_perf_stamp). */
+static void perf_boundary(struct dosvm *v, unsigned phase) { perf_phase_clock(v, phase, true); }
 static struct dosvm *perf_current;
 static void perf_switch(struct dosvm *next)
 {
@@ -153,7 +170,7 @@ void dosvm_startup_report(struct dosvm *v, bool force)
 static void perf_exit_end(struct dosvm *v)
 {
     uint32_t flags = irq_save();
-    perf_phase(v, 2);
+    perf_boundary(v, 2);
     {
         v->perf.cost_count[v->perf.cause]++;
         v->perf.cost_cycles[v->perf.cause] += v->perf.trap_cycles;
@@ -282,8 +299,13 @@ static void perf_live(struct dosvm *v, const struct dosvm_perf_sample *s, unsign
                   id, gen, n, s->exits[0], s->exits[1], s->exits[2], s->exits[3], s->exits[4], s->exits[5]);
     rec_diag_disk_bootlog(dosvm_probe(v), "group=vm_perf_service vm=%u gen=%u n=%u ticks=%u timer_us=%llu audio_us=%llu port_overflow=%u",
                   id, gen, n, s->ticks, s->timer_us, s->audio_us, s->port_overflow);
-    rec_diag_disk_bootlog(dosvm_probe(v), "group=vm_perf_checkpoint vm=%u gen=%u n=%u hits=%u segmented=%u fallback=%u",
-                         id, gen, n, s->return_hits, s->return_segmented, s->return_fallbacks);
+    /* Reuse the short decoder checkpoint row: another row exceeds the
+     * four-VM stalled-drain record budget; remap's row is already full. */
+    /* fx-doomwin: fast= counts the lean exits retired at trap entry
+     * (dosvm_trap_fast), a subset of vm_perf_remap lean=. */
+    rec_diag_disk_bootlog(dosvm_probe(v), "group=vm_perf_checkpoint vm=%u gen=%u n=%u hits=%u segmented=%u fallback=%u dac_counted=%u fast=%u",
+                         id, gen, n, s->return_hits, s->return_segmented, s->return_fallbacks, s->dac_counted,
+                         s->fast_exits);
     rec_diag_disk_bootlog(dosvm_probe(v), "group=vm_perf_tracker vm=%u gen=%u n=%u armed=%u hits=%u expired=%u fallback=%u reacquired=%u segmented=%u",
                          id, gen, n, s->return_armed, s->return_hits, s->return_expired,
                          s->return_fallbacks, s->return_reacquired, s->return_segmented);
@@ -354,7 +376,8 @@ static void perf_disk_report(struct dosvm *v)
     CAPTURE(harvests); CAPTURE(direct_pages); CAPTURE(trapped_bytes);
     CAPTURE(converted_bytes); CAPTURE(rows); CAPTURE(port_remaps);
     CAPTURE(burst_insn); CAPTURE(latch_read_windows); CAPTURE(batched);
-    CAPTURE(lean_exits); CAPTURE(dac_batched); CAPTURE(linear_direct);
+    CAPTURE(lean_exits); CAPTURE(dac_batched); CAPTURE(dac_counted); CAPTURE(linear_direct);
+    CAPTURE(fast_exits);
     CAPTURE(port_overflow); CAPTURE(ticks);
     CAPTURE(present_waits); CAPTURE(present_wait_cycles); CAPTURE(present_wait_max_cycles);
     r->present_samples = v->present_samples;
@@ -434,7 +457,11 @@ static void perf_disk_report(struct dosvm *v)
     v->perf.last_burst_insn = r->burst_insn; v->perf.last_latch_read_windows = r->latch_read_windows;
     s->batched = DELTA(batched, last_batched);
     s->lean_exits = DELTA(lean_exits, last_lean_exits);
+    s->fast_exits = DELTA(fast_exits, last_fast_exits);
+    v->perf.last_fast_exits = r->fast_exits;
     s->dac_batched = DELTA(dac_batched, last_dac_batched);
+    s->dac_counted = DELTA(dac_counted, last_dac_counted);
+    v->perf.last_dac_counted = r->dac_counted;
     s->linear_direct = DELTA(linear_direct, last_linear_direct);
     v->perf.last_lean_exits = r->lean_exits; v->perf.last_dac_batched = r->dac_batched;
     v->perf.last_linear_direct = r->linear_direct;

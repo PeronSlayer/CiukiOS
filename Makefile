@@ -1,4 +1,4 @@
-.PHONY: help build-full kernel image cd test-host qemu-test-full qemu-run-full clean \
+.PHONY: help build-full kernel image cd test-host qemu-test-full qemu-acceptance qemu-run-full clean \
         legacy-build-full legacy-build-full-cd legacy-qemu-run-full legacy-qemu-test-full \
         fetch-costa fetch-network-stack sdk lua desktop apps upper
 
@@ -31,6 +31,7 @@ help:
 	@echo "  make cd              - build the Setup CD (ISO, boot image, cd-manifest.json) from the built image"
 	@echo "  make test-host       - T0 host tests (kernel library, loader statics, runner, fixtures)"
 	@echo "  make qemu-test-full  - T2 boot smoke of the built image through the runner"
+	@echo "  make qemu-acceptance - the owner's trial list on qemu-t23 before a hardware image (suite acc-t23)"
 	@echo "  make qemu-run-full   - boot the image interactively (scripts/run_f0.sh [selector])"
 	@echo "  make clean           - remove F0 build outputs and test runs"
 	@echo "Legacy 0.8 image (branch legacy-0.8 is canonical for it): legacy-build-full, legacy-build-full-cd,"
@@ -90,6 +91,10 @@ test-host:
 
 qemu-test-full:
 	@python3 scripts/test/run.py f0-smoke --image $(IMAGE)
+
+# fx-accept: build/test-runs/acc-t23/summary.txt; a failing item blocks the image.
+qemu-acceptance:
+	@bash scripts/test/acceptance.sh --image $(IMAGE)
 
 qemu-run-full:
 	@bash scripts/run_f0.sh

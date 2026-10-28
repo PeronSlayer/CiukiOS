@@ -1,5 +1,6 @@
 /* SPDX-License-Identifier: MIT */
 #include "regedit.h"
+#include "../desktop/profile.h" /* sec-user-04: My Documents is per user */
 #include "../libdeskui/job.h"
 #include <errno.h>
 #include <stdio.h>
@@ -229,7 +230,7 @@ static void command(struct re_app *a, int id)
     } else if (id == RE_IMPORT || id == RE_EXPORT) {
         static const struct du_file_filter types[] = {{"Registration Files (*.reg)", "*.reg"}, {"All Files (*.*)", "*.*"}};
         struct du_file_options o = {.flags = id == RE_EXPORT ? DU_FILE_SAVE | DU_FILE_OVERWRITE_PROMPT : DU_FILE_FILE_MUST_EXIST,
-            .title = id == RE_EXPORT ? "Export branch" : "Import registry file", .folder = "/Documents", .name = "registry.reg",
+            .title = id == RE_EXPORT ? "Export branch" : "Import registry file", .folder = profile_home(), .name = "registry.reg",
             .filters = types, .filter_count = 2, .default_ext = "reg"};
         if (du_file_open(a->ui, RE_FILE, &o)) error(a, "File dialog", errno);
     }
