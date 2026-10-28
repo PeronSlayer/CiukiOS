@@ -2456,7 +2456,7 @@ static const struct expectation expectations[] = {
     {"constant.CIUKI_IPX_FRAME_II", CIUKI_IPX_FRAME_II, 2u},
     {"constant.CIUKI_IPX_FRAME_SNAP", CIUKI_IPX_FRAME_SNAP, 3u},
     {"constant.CIUKI_IPX_FRAME_AUTO", CIUKI_IPX_FRAME_AUTO, 4u},
-    {"constant.CIUKI_SYSTEM_SETTING_IPX_FRAME", CIUKI_SYSTEM_SETTING_IPX_FRAME, 4u},
+    {"constant.CIUKI_SYSTEM_SETTING_IPX_FRAME", CIUKI_SYSTEM_SETTING_IPX_FRAME, 6u},
     {"offsetof.ciuki_net_control.ipx_frame_type", __builtin_offsetof(struct ciuki_net_control, ipx_frame_type), 388u},
     {"constant.CIUKI_NET_MEDIA_10", CIUKI_NET_MEDIA_10, 2u},
     {"constant.CIUKI_NET_MEDIA_100", CIUKI_NET_MEDIA_100, 4u},
