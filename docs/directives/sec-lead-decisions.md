@@ -44,7 +44,7 @@
 - K8-5: images ship without `power.cfg`; the defaults (button: Shut down, lid: nothing) apply.
 - K8-6: every future directive that adds a syscall, call-99 action, channel operation, device command or policy kind adds its census row in `tests/host/security/policy_census.py`. The census test enforces it.
 
-## Lead decisions on the sec-user-06 questions (2026-10-28 15:40)
+## Lead decisions on the sec-user-06 questions (2026-10-28 15:21)
 - U6-1 approved: the security acceptance cases are ordinary menu boots chosen by the runner, because a fw_cfg test item replaces the normal boot and LOGON never starts.
 - U6-2 approved: each self-test boot writes one real registry backup to measure it against the desktop's 5 s request limit.
 - U6-3 approved: the input driver's self-test attention entry, refused outside a self-test boot and unreachable from any syscall or SDK path, with its own census row.

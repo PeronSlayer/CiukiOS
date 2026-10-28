@@ -1,6 +1,6 @@
 # integ7-merge: resolve the sec-user-06 merge on integration 7
 
-- **Written:** 2026-10-28 15:42 by the lead. Implementer: Codex `gpt-6.1-sol`, effort `high`.
+- **Written:** 2026-10-28 15:22 by the lead. Implementer: Codex `gpt-6.1-sol`, effort `high`.
 - **Worktree and branches:** `/home/peronslayer/Desktop/CiukiOS-wt-integ7`, branch `wt/integ7` = `wt/integ6` (main + sec-runtime1 + fx-games20 + f7-26) + sec-k08 (merged cleanly). The lead has started `git merge wt/sec-user06`; nine files carry conflict markers (`git diff --name-only --diff-filter=U`).
 - **Inputs:**
   - the reports `../CiukiOS-wt-sec-user06/build/codex/sec-user06-report.md`, `../CiukiOS-wt-sec-k08/build/codex/sec-k08-report.md` and `../CiukiOS-wt-sec-runtime1/build/codex/sec-runtime1-report.md`;
