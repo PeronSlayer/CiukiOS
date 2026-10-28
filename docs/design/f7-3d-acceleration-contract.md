@@ -1055,3 +1055,42 @@ before resolving the merge; the Mesa and X.Org upstream archive indexes
 were also checked online. No register sequence, precision envelope or
 qualification predicate changes. Matrox format diagnostics use their own
 family name; T23 scanout and lease-flow assertions compile only for Savage.
+
+## 12. ATI Mach64 family integration (f7-27, integration 8)
+
+The [Mach64 family design](f7-family-ati-mach64.md) records the existing
+Rage Pro/Mobility backend, register sources, Q1–Q4 probes and containment
+rules. The descriptor is `R3D_UNQUALIFIED`; only qualification for the
+current device generation can expose capabilities. Host register models
+provide no silicon qualification. CPU MMIO and the claimed local VRAM heap
+remain the only transport and storage; no AGP or bus-master DMA is enabled.
+
+The private backend's optional `whole_context_fallback` policy preserves
+Mach64's AUTO-context latch after a refused state; it defaults to false for
+the other backends. Mach64 synchronizes its attachments during execute and
+has no on-demand `download` hook. Integration 6's reservation, scanout and
+download hooks and the qualified Savage implementation remain intact.
+
+Research recheck: [Mesa 7.11.2](https://archive.mesa3d.org/older-versions/7.x/7.11.2/),
+`mach64_context.c:180–200` and `mach64_tris.c:422–439`, confirms two exposed
+texture stages, one uploaded mip level and two fractional vertex bits.
+Keep the existing mip-filter and quarter-pixel admission refusals. The H1
+replay therefore remains software at 640×480 and 1024×768. No feature claim
+or precision tolerance is widened by this merge.
+
+Round 2 of [f7-unify](../directives/f7-unify.md) selects Mach64 beside Matrox
+in the same `KERNEL_FAMILIES` table and `kernel_engine.c`, using
+`GL_KERNEL_FAMILY_MACH64`. Its H1 test retains UBSan by default and optional
+ASan/LSan; the default Savage and existing Radeon/Matrox builds retain their
+sanitizer policies. Format diagnostics use `GL_MACH64_FORMAT`; T23 lease,
+scanout and lease-reacquisition assertions remain exclusive to Savage.
+
+Source comparison for this harness merge: Mesa `mach64_context.c:181–206`
+retains two units and no mipmapping; FreeBSD release/8.4.0
+[`mach64_dma.c:63–98`](https://cgit.freebsd.org/src/plain/sys/dev/drm/mach64_dma.c?h=release/8.4.0)
+and X.Org 6.9.6 `atimach64io.h:201–207` retain FIFO/idle rules. The
+[X.Org release index](https://xorg.freedesktop.org/archive/individual/driver/)
+provides the pinned mach64 6.9.6 archive. The owner-provided Resource Kit,
+chapter 30 `wrkc30_3.htm:426–436`, distinguishes local VRAM from AGP/GART
+heaps; this integration keeps the family's local-only allocation policy.
+No register programming or public ABI changes are introduced by the harness.

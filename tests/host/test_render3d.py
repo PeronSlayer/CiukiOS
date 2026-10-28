@@ -241,7 +241,7 @@ class RenderTests(unittest.TestCase):
             'tdfx': 'R3D_NOT_IMPLEMENTED',
             'rage128': 'R3D_NOT_IMPLEMENTED',
             'radeon2d': 'R3D_UNQUALIFIED',
-            'mach64': 'R3D_NOT_IMPLEMENTED',
+            'mach64': 'R3D_UNQUALIFIED',
             'matrox': 'R3D_UNQUALIFIED',
             'i740': 'R3D_NOT_IMPLEMENTED',
             'i810': 'R3D_NOT_IMPLEMENTED',

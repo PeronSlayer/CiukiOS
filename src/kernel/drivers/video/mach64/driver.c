@@ -18,8 +18,16 @@
 #include "../../../fs/vfs.h"
 
 #include "../render3d.h"
+#include "mach64_3d.h"
+/* f7-27: the setup-engine backend is linked into the kernel; host 2D
+ * fixtures without it see null weak symbols and stay software-only. */
+extern const struct render3d_backend *mach64_3d_backend(void) __attribute__((weak));
+extern void mach64_3d_boot_diagnostic(struct m64_engine *, const struct fb_device *) __attribute__((weak));
+extern void mach64_3d_bind_vfs(struct vfs *) __attribute__((weak));
+extern int mach64_3d_owner_stop(struct m64_engine *) __attribute__((weak));
 static const struct render3d_family render_family = {
-    .status=R3D_NOT_IMPLEMENTED, .potential_units=1, .potential_texture_size=1024
+    .status=R3D_UNQUALIFIED, .potential_units=2, .potential_texture_size=1024,
+    .backend=mach64_3d_backend
 };
 
 static const struct display_match matches[]={
@@ -186,7 +194,7 @@ static int activation(void *ctx)
 }
 static const struct accel_ops *start(const struct fb_device *d,struct vfs *vfs)
 {
-    (void)vfs;
+    if (mach64_3d_bind_vfs) mach64_3d_bind_vfs(vfs);
     if (!eligible(d) || !marker_owned || engine.active) return 0;
     const struct pci_func *p=candidate(d);
     uint32_t base=p->bar[2]&~15u;
@@ -203,7 +211,8 @@ static const struct accel_ops *start(const struct fb_device *d,struct vfs *vfs)
         }
     }
     if ((hw_read(0,CONFIG_CHIP_ID)&0xffffu)!=p->device) { reason="chip_id_mismatch"; return 0; }
-    unsigned mem=hw_read(0,MEM_CNTL)&15u;
+    uint32_t mem_cntl=hw_read(0,MEM_CNTL);
+    unsigned mem=mem_cntl&15u;
     uint32_t vram=mem<8 ? (mem+1)*512*1024u : mem<12 ? (mem-3)*1024*1024u : (mem-7)*2048*1024u;
     if (vram>g_boot.display.vram_bytes) vram=g_boot.display.vram_bytes;
     /* Keep away from the top-of-aperture register alias, even with BAR2. */
@@ -227,6 +236,9 @@ static const struct accel_ops *start(const struct fb_device *d,struct vfs *vfs)
         }
     }
     m64_attach(&engine,d,&io,cursor_ok ? cursor_mapping : 0,cursor_offset);
+    engine.vram_bytes=vram;
+    engine.mem_cntl=mem_cntl;
+    if (mach64_3d_owner_stop) engine.render3d_stop=mach64_3d_owner_stop;
     int e=fbdev_accel_probe(d,activation,&engine);
     reason=engine.reason;
     if (e) { blocked=true; if (!engine.quarantined) reason="activation_refused"; return 0; }
@@ -250,6 +262,10 @@ static void snapshot(struct ciuki_accel_info *out)
 }
 static void record(void)
 {
+    /* Worker context outside presenter: the opt-in (3d=probe) boot
+     * qualification of f7-27 runs here until f7-13's background job. */
+    if (mach64_3d_boot_diagnostic && engine.active && !engine.quarantined)
+        mach64_3d_boot_diagnostic(&engine,fbdev_get());
     const char *why=engine.quarantined ? engine.reason : reason;
     if (recorded && last_active==engine.active && last_quarantined==engine.quarantined &&
         last_safe==engine.cpu_safe && last_reason==why) return;
@@ -275,7 +291,7 @@ static int cursor_test(const struct accel_ops *ops,uint64_t deadline,bool (*canc
 }
 const struct display_driver mach64_driver={
     .render3d=&render_family,
-    .id="mach64",.attempt_files={ATTEMPT_PATH},.name="ATI Mach64 / Rage Mobility",.matches=matches,
+    .id="mach64",.attempt_files={ATTEMPT_PATH,"C:/system/settings/accel-3d-mach64-1002-%04x.cfg"},.name="ATI Mach64 / Rage Mobility",.matches=matches,
     .match_count=ARRAY_SIZE(matches),.framebuffer_bar=0,.probe=probe,.eligible=eligible,
     .start=start,.fallback=fallback,.attempt_begin=attempt_begin,.attempt_end=attempt_end,
     .attempt_failed=attempt_failed,.record=record,.quarantine=quarantine,.summary=summary,

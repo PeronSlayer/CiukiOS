@@ -601,6 +601,8 @@ void gl_quake3_savage(int default_format) {
     assert(!default_format); gl_kernel_setup(2);
 #elif defined(GL_KERNEL_FAMILY_MATROX)
     gl_kernel_setup(2);
+#elif defined(GL_KERNEL_FAMILY_MACH64)
+    gl_kernel_setup(2);
 #else
     extern void gl_kernel_fullscreen_setup(unsigned,unsigned); gl_kernel_fullscreen_setup(w,h);
 #endif
@@ -618,12 +620,16 @@ void gl_quake3_savage(int default_format) {
         assert(strict==chosen);
       }
       PIXELFORMATDESCRIPTOR actual; assert(DescribePixelFormat(dc,chosen,40,&actual));
+#ifndef GL_KERNEL_FAMILY_MACH64
       assert(!(actual.dwFlags&PFD_GENERIC_FORMAT));
+#endif
       printf(
 #ifdef GL_KERNEL_FAMILY_RADEON
           "GL_RADEON_FORMAT width="
 #elif defined(GL_KERNEL_FAMILY_MATROX)
           "GL_MATROX_FORMAT width="
+#elif defined(GL_KERNEL_FAMILY_MACH64)
+          "GL_MACH64_FORMAT width="
 #else
           "GL_SAVAGE_FORMAT width="
 #endif
@@ -645,7 +651,7 @@ void gl_quake3_savage(int default_format) {
 #endif
         extern void gl_savage_scope(unsigned);
         gl_savage_scope(scenario); gl_savage_begin(); frame(scenario); glFinish();
-#if !defined(GL_KERNEL_FAMILY_RADEON) && !defined(GL_KERNEL_FAMILY_MATROX)
+#if !defined(GL_KERNEL_FAMILY_RADEON) && !defined(GL_KERNEL_FAMILY_MATROX) && !defined(GL_KERNEL_FAMILY_MACH64)
         extern void gl_kernel_present_lease(const uint32_t *,unsigned,unsigned); gl_kernel_present_lease(pixels,w,h);
 #endif
 #ifdef SW_PROFILE
@@ -659,7 +665,7 @@ void gl_quake3_savage(int default_format) {
     }
     gl_kernel_teardown();
   }
-#if !defined(GL_KERNEL_FAMILY_RADEON) && !defined(GL_KERNEL_FAMILY_MATROX)
+#if !defined(GL_KERNEL_FAMILY_RADEON) && !defined(GL_KERNEL_FAMILY_MATROX) && !defined(GL_KERNEL_FAMILY_MACH64)
   extern void gl_quake3_lease_flow(int); gl_quake3_lease_flow(default_format);
 #endif
   gl_kernel_mode(640,480); gl_hardware_native(0); savage_frames=0;
@@ -669,7 +675,7 @@ void gl_quake3_savage(int default_format) {
  * the full-screen lease, whose 640x480 mode switch revokes that generation.
  * The context must regain hardware without a failure mark, and later frames
  * must stay GPU-resident: no READ, no UPLOAD, direct native scanout. */
-#if !defined(GL_KERNEL_FAMILY_RADEON) && !defined(GL_KERNEL_FAMILY_MATROX)
+#if !defined(GL_KERNEL_FAMILY_RADEON) && !defined(GL_KERNEL_FAMILY_MATROX) && !defined(GL_KERNEL_FAMILY_MACH64)
 void gl_quake3_lease_flow(int default_format) {
   extern void gl_kernel_desktop_setup(unsigned,unsigned),gl_kernel_teardown(void),gl_kernel_mode(unsigned,unsigned);
   extern void gl_kernel_counters(unsigned *); extern unsigned gl_kernel_draws(void);

@@ -1,5 +1,7 @@
 #if defined(GL_KERNEL_FAMILY_MATROX)
 #include "matrox_kernel_engine.c"
+#elif defined(GL_KERNEL_FAMILY_MACH64)
+#include "../../mach64_3d_gl_engine.c"
 #else
 /* Real copied wire/validator/BCI emitter to independent fake silicon.
  * GPL-2.0-only. Fixture callbacks model only hardware and the lease boundary. */
@@ -414,4 +416,4 @@ void gl_savage_end(unsigned w,unsigned h,unsigned frame,unsigned gpu_draws,uint6
     for (unsigned i=0;i<6;i++) CHECK(!admission_refused[i]);
 }
 
-#endif /* GL_KERNEL_FAMILY_MATROX */
+#endif /* family engine selection */

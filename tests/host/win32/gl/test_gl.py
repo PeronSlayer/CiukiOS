@@ -25,6 +25,10 @@ KERNEL_FAMILIES = {
  'matrox': dict(name='matrox', define='GL_KERNEL_FAMILY_MATROX', engine='kernel_engine.c',
                 sources=('matrox/matrox3d.c','matrox/engine.c'),
                 replaces=('s3savage/savage3d.c',)),
+ 'mach64': dict(name='mach64', define='GL_KERNEL_FAMILY_MACH64', engine='kernel_engine.c',
+                sources=('mach64/mach64_3d.c','mach64/engine.c'),
+                support_sources=('tests/host/mach64_3d_model.c',),
+                replaces=('s3savage/savage3d.c',)),
 }
 
 class GLTests(unittest.TestCase):
@@ -32,7 +36,7 @@ class GLTests(unittest.TestCase):
  def setUpClass(cls):
   cls.build(sanitize=True)
  @classmethod
- def build(cls,sanitize,profile=True,gamma_hooks=True,kernel_family="savage"):
+ def build(cls,sanitize,profile=True,gamma_hooks=True,kernel_family="savage",ubsan=False):
   family=KERNEL_FAMILIES[kernel_family]
   out=ROOT/'build/host/win32/gl';out.mkdir(parents=True,exist_ok=True);cls.out=out
   spec=importlib.util.spec_from_file_location('glbuild',ROOT/'sdk/libgl/build.py');gl=importlib.util.module_from_spec(spec);spec.loader.exec_module(gl)
@@ -50,12 +54,13 @@ class GLTests(unittest.TestCase):
   video_units=[n for n in video_units if n not in family['replaces']]
   video_units += [n for n in family['sources'] if n not in video_units]
   units += [ROOT/'src/kernel/drivers/video'/n for n in video_units]
+  units += [ROOT/n for n in family.get('support_sources',())]
   units += [ROOT/'src/kernel/lib/fmt.c']
   cls.binary=out/(('engine' if sanitize else 'benchmark')+('' if gamma_hooks else '-no-gamma')+('' if kernel_family=='savage' else '-'+family['name']))
   flags=['-std=c17','-D_GNU_SOURCE','-DW32_HOST_MODEL','-O2','-g','-ffp-contract=off','-Wall','-Wextra','-Werror','-Wno-unused-function','-fno-vectorize','-fno-slp-vectorize','-I'+str(ROOT/'sdk/win32/include'),'-I'+str(ROOT/'sdk/libgl/vendor/include')]
   flags+=['-I'+str(ROOT/'src/kernel/include'),'-I'+str(ROOT/'tests/host'),'-I'+str(out)]
   if family['define']:flags+=['-D'+family['define']]
-  if sanitize:flags+=['-fsanitize=address,undefined','-fno-sanitize-recover=all']
+  if sanitize or ubsan:flags+=['-fsanitize='+('address,undefined' if sanitize else 'undefined'),'-fno-sanitize-recover=all']
   if profile:flags+=['-DSW_PROFILE']
   if not gamma_hooks:flags+=['-DGL_TEST_NO_GAMMA']
   fixture=out/('fixture-sanitize.o' if sanitize else 'fixture.o')
