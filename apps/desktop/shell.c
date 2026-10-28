@@ -2509,7 +2509,7 @@ static void icons_build(struct desktop *d)
     if (d->sh.folder && d->sh.folder->bin_full) d->sh.icons[2].icon = d->sh.cfg.recycle_icon ? "edit-delete" : "user-trash-full";   /* G2: the bin holds something */
     if (d->sh.folder) for (unsigned i=0;i<d->sh.folder->model.count;i++) {
         const struct fm_entry *e=&d->sh.folder->model.entries[i];
-        char path[FM_PATH]; if (fm_join(path,d->sh.profile.desktop[0] ? d->sh.profile.desktop : DESK_FOLDER,e->name)) return;
+        char path[FM_PATH]; if (fm_entry_path(&d->sh.folder->model,i,path)) return;   /* sec-user-05: physical in a merged view */
         const struct desk_catalog_entry *cat=desk_catalog_file(path);
         icon_add(d,e->name,e->meta.type==FM_DIR ? "files" : cat ? cat->name : "ciuknote",path,
             e->meta.type==FM_DIR ? "folder" : strlen(e->name)>4 && fm_same_path(e->name+strlen(e->name)-4,".lnk") ? "emblem-symbolic-link" : e->meta.exec ? du_icon_file(e->name,0,1) : cat ? cat->tango : du_icon_file(e->name,0,0), SH_ACT_LAUNCH,0);

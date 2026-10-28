@@ -2,6 +2,7 @@
  * SPDX-License-Identifier: MIT */
 #include "win32_adapter.h"
 #include "../dosbox/autorun.h"
+#include "profile.h" /* sec-user-05 */
 #include <ciuki/channel.h>
 #include <ciuki/spawn.h>
 #include <errno.h>
@@ -53,7 +54,10 @@ int main(int argc,char **argv)
     child[count]=NULL;
     /* G1: no TZ; the Win32 C runtime reads GetTimeZoneInformation. */
     char state[]="CIUKI_SHELL_SHOW=1";state[sizeof(state)-2]=(char)('0'+show);
-    char *env[]={"LC_ALL=C","PATH=/Programs","HOME=/Documents",state,NULL};
+    /* sec-user-05: forward the session's profile root and temporaries. */
+    struct profile_env profile;char *env[10]={"LC_ALL=C","PATH=/Programs"};
+    unsigned n=profile_env_add(&profile,env,2);   /* HOME at [2], then TMPDIR... */
+    env[n]=env[3];env[3]=state;env[n+1]=NULL;     /* CIUKI_SHELL_SHOW stays at [3] */
     result=ciuki_spawn(path,child,env,maps?&map:NULL,maps,0);if(result<0)result=-errno;
     if(waited && result>0){
         int status=0,pid=result,r;

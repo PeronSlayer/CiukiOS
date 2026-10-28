@@ -673,6 +673,9 @@ static void test_shared_tick(void)
 #define main kernel_mechanism_main
 #endif
 #include "../security/win32_isolation_test.inc"
+#ifdef CIUKI_H11_IDENTITY /* sec-user-05: H11 identity facade over these kernel tokens */
+#include "../security/identity_kernel_test.inc"
+#endif
 int main(int argc, char **argv)
 {
     if (argc == 3 && !strcmp(argv[1], "--pe")) {
@@ -691,6 +694,12 @@ int main(int argc, char **argv)
         setvbuf(stdout,NULL,_IONBF,0);test_security_isolation();
         CHECK(!pages_used&&!g_user_mappings&&heap_blocks==1);free(ram);return 0;
     }
+#ifdef CIUKI_H11_IDENTITY /* sec-user-05 */
+    if(argc==2&&!strcmp(argv[1],"--identity")){
+        setvbuf(stdout,NULL,_IONBF,0);test_identity_facades();
+        CHECK(!pages_used&&!g_user_mappings&&heap_blocks==1);free(ram);return 0;
+    }
+#endif
     test_memory();test_records();test_fpu();test_context();test_spawn_exceptions();test_objects_sections();test_loader_shared_alias();test_shared_tick();
     CHECK(!pages_used&&!g_user_mappings&&heap_blocks==1);printf("w32 core: checks=%u PASS\n",checks);free(ram);return 0;
 }

@@ -258,9 +258,15 @@ static void profile_folders(void){
       assert(SHGetPathFromIDListA(pidl,a) && !strcmp(a,expected));shell_free(pidl);
     }
     char common[260];assert(SHGetSpecialFolderPathA(0,common,25,0) && !strcmp(common,"C:\\WINDOWS\\Desktop"));
+    /* sec-user-05: CSIDL_PROFILE and CSIDL_LOCAL_APPDATA of the session. */
+    char expected[260],a[260];snprintf(expected,sizeof(expected),"C:\\Windows\\Profiles\\u%08x",profile);
+    assert(SHGetSpecialFolderPathA(0,a,40,0) && !strcmp(a,expected));
+    snprintf(expected,sizeof(expected),"C:\\Windows\\Profiles\\u%08x\\Local Settings\\Application Data",profile);
+    assert(SHGetSpecialFolderPathA(0,a,28,0) && !strcmp(a,expected));
   }
   host_profile("","");char path[260];assert(SHGetSpecialFolderPathA(0,path,5,0) && !strcmp(path,"C:\\Documents"));
-  puts("PASS g32b Shell A/W/PIDL: Alice/Bob personal folders, CREATE, common folder and default profile");
+  assert(!SHGetSpecialFolderPathA(0,path,40,0)); /* no profile: no CSIDL_PROFILE, as Windows 98 */
+  puts("PASS g32b Shell A/W/PIDL: Alice/Bob personal folders, CREATE, common folder and default profile; sec-user-05 profile/local application data");
 }
 int main(int argc,char **argv){
   setvbuf(stdout,0,_IONBF,0);assert(argc==2);host_init(argv[1]);

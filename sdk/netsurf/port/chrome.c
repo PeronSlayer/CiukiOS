@@ -78,6 +78,36 @@ const char *ciuki_netsurf_log_path="/system/logs/NETSURF.LOG";
 #endif
 #define CIUKI_NETSURF_LOG_MAX (64u*1024u)
 static const char *profile_path="/Documents/NetSurf";
+#ifndef CIUKI_HOST
+/* sec-user-05 (user-security-contract.md 8.2, A1-10): in a profile session
+ * the browser's choices, bookmarks and history live in the user's
+ * Application Data and its exit/fetch log in Local Settings\Application
+ * Data, both below the committed profile root the kernel launch generated
+ * (USERPROFILE). A profile-less bootstrap desktop keeps the former shared
+ * locations. Missing folders are created inside the profile. */
+static char user_profile_path[160],user_log_path[200];
+static bool ensure_tree(char *path)
+{
+    for(char *p=path+1;;p++){
+        if(*p && *p!='/')continue;
+        char c=*p;*p=0;struct stat st;
+        bool ok=!stat(path,&st)?S_ISDIR(st.st_mode):errno==ENOENT && (!mkdir(path,0700) || errno==EEXIST);
+        *p=c;if(!ok)return false;if(!c)return true;
+    }
+}
+static void select_user_paths(void)
+{
+    const char *root=getenv("USERPROFILE");
+    if(!root || strncmp(root,"/Windows/Profiles/",18) || !root[18] || strlen(root)>=96 || strstr(root,"/.."))return;
+    char log_dir[180];
+    snprintf(user_profile_path,sizeof(user_profile_path),"%s/Application Data/NetSurf",root);
+    snprintf(log_dir,sizeof(log_dir),"%s/Local Settings/Application Data/NetSurf",root);
+    snprintf(user_log_path,sizeof(user_log_path),"%s/NETSURF.LOG",log_dir);
+    profile_path=user_profile_path;
+    ciuki_netsurf_log_path=ensure_tree(log_dir) ? user_log_path : NULL;
+    (void)ensure_tree(user_profile_path);
+}
+#endif
 const char *ciuki_chrome_choices(void)
 {
     static char path[560];snprintf(path,sizeof(path),"%s/Choices",profile_path);
@@ -645,6 +675,9 @@ int ciuki_chrome_arguments(int *argc,char **argv)
 #endif
         if(consumed) { memmove(argv+i,argv+i+1,(size_t)(*argc-i)*sizeof(*argv));(*argc)--; } else i++;
     }
+#ifndef CIUKI_HOST
+    select_user_paths(); /* sec-user-05 */
+#endif
     /* Before netsurf_init registers the fetchers, which create the network
      * with the trust anchors the profile selects. */
     ciuki_test_arm();

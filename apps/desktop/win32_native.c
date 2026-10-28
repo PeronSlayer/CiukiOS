@@ -18,6 +18,7 @@
 #include <unistd.h>
 #include <stdlib.h>
 #include "win32_crash.h"
+#include "profile.h" /* sec-user-05 */
 #if defined(__CIUKIOS__) && !defined(__linux__)
 #include "../../sdk/libreg/transport.h"
 static struct reg_remote registry_broker={.fd=-1};
@@ -35,7 +36,12 @@ static void *crash_disk_worker(void *p)
     pthread_mutex_lock(&crash_disk_lock);
     /* G13: native program faults live with the other logs (BOOT.LOG, NETSURF.LOG). */
     const struct ciuki_w32_fault *f=p;
-    int error=desk_w32_crash_store?desk_w32_crash_store(f->kind==W32_REPORT_NATIVE_FAULT?"/system/logs":"/WINDOWS/CRASH",p):-ENOSYS;
+    /* sec-user-05: a profile session's crash reports stay with their owner
+     * (<profile>/Local Settings/Application Data/Crash); the machine folders
+     * remain for the profile-less bootstrap desktop only. */
+    char own[200];const char *directory=profile_data(own,sizeof(own),"Crash",0);
+    if(!directory)directory=profile_root_path()?NULL:f->kind==W32_REPORT_NATIVE_FAULT?"/system/logs":"/WINDOWS/CRASH";
+    int error=!directory?-EACCES:desk_w32_crash_store?desk_w32_crash_store(directory,p):-ENOSYS;
     pthread_mutex_unlock(&crash_disk_lock);
     if(error)fprintf(stderr,"[win32] warning check=crash-file-write error=%d\n",error);
     free(p);return NULL;
@@ -223,7 +229,8 @@ static int launch_execute(enum desk_w32_kind kind,const struct desk_launch_recor
     maps[count++]=(struct ciuki_spawn_fd){report[1],4};
     char type[8],show[2]={(char)('0'+r->show),0};snprintf(type,sizeof(type),"%u",(unsigned)kind);
     char *argv[]={"/System/Win32/shell-launch",type,(char *)r->target,(char *)r->arguments,(char *)r->directory,show,wait ? "--wait" : NULL,NULL};
-    char *env[]={"LC_ALL=C","PATH=/Programs","HOME=/Documents",NULL};
+    struct profile_env profile;char *env[9]={"LC_ALL=C","PATH=/Programs"}; /* sec-user-05 */
+    env[profile_env_add(&profile,env,2)]=NULL;
     helper=ciuki_spawn(argv[0],argv,env,maps,count,0);
     if(helper<0){result=-errno;goto done;}
     uint64_t deadline=clock_ns()+(wait ? UINT64_C(300000000000) : UINT64_C(1500000000));
@@ -424,7 +431,8 @@ static void *restart_launch_worker(void *unused)
     else{
         struct ciuki_spawn_fd map={report[1],4};
         char *argv[]={"/System/Win32/runonce.exe",restart_command,NULL};
-        char *env[]={"LC_ALL=C","PATH=/Programs","HOME=/Documents",NULL};
+        struct profile_env profile;char *env[9]={"LC_ALL=C","PATH=/Programs"}; /* sec-user-05 */
+        env[profile_env_add(&profile,env,2)]=NULL;
         int helper=ciuki_spawn(argv[0],argv,env,&map,1,0);
         if(helper<0)result=-errno;
         else{

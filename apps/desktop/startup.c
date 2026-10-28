@@ -1,6 +1,7 @@
 /* G21 startup snapshot and persistent selection. SPDX-License-Identifier: MIT */
 #include "startup.h"
 #include "win32_adapter.h"
+#include "profile.h"
 #include <ciuki/registry.h>
 #include <dirent.h>
 #include <errno.h>
@@ -78,16 +79,27 @@ static int folder_entries(const char *folder, struct desk_startup_entry *out, un
     if (closedir(dir) && !result) result=-errno;
     return result ? result : (int)used;
 }
-int desk_startup_list_at(const char *folder, const char *registry, struct desk_startup_entry *out, unsigned cap)
+/* sec-user-05 (Windows XP): the All Users StartUp folder (folder,
+ * CSIDL_COMMON_STARTUP) and then the current user's (personal,
+ * CSIDL_STARTUP); Microsoft documents no order between them. */
+int desk_startup_list_folders_at(const char *folder, const char *personal, const char *registry,
+                                 struct desk_startup_entry *out, unsigned cap)
 {
     if (!out || !cap || cap>DESK_STARTUP_MAX) return -EINVAL;
     int n=ciuki_win32_startup_list(out,cap); if (n<0) return n;
     if ((unsigned)n>cap) return -EOVERFLOW;
     n=folder_entries(folder,out,(unsigned)n,cap); if (n<0) return n;
+    if (personal && *personal && strcmp(personal,folder)) { n=folder_entries(personal,out,(unsigned)n,cap); if (n<0) return n; }
     struct reg_root *root=reg_open_root_at("Desktop",registry); if (!root) return -errno;
     int error=0;
     for (int i=0;i<n && !error;i++) error=selection(root,&out[i]);
     reg_close_root(root); return error ? error : n;
+}
+int desk_startup_list_at(const char *folder, const char *registry, struct desk_startup_entry *out, unsigned cap)
+{
+    char personal[192];
+    return desk_startup_list_folders_at(folder,profile_folder(personal,sizeof(personal),"Start Menu/Programs/StartUp") ? personal : NULL,
+                                        registry,out,cap);
 }
 int desk_startup_execute(struct desk_startup_entry *entries, unsigned count, int skip,
                          int (*consume)(const struct desk_startup_entry *),

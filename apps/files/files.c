@@ -16,6 +16,7 @@
 #include <sys/wait.h>
 #include <unistd.h>
 #include "../desktop/tz_env.h"
+#include "../desktop/profile.h" /* sec-user-05 */
 
 #define CHECKPOINT_SERIAL 0xf2310000u
 
@@ -92,7 +93,10 @@ static int launch(struct files_app *a, const char *program, char *const argv[])
     if ((!strcmp(program, "/Programs/ciuknote") || !strcmp(program, "/Programs/control") || (entry && entry->takes_file)) && argv[0] && argv[1] && !argv[2])
         return launch_window(a->user, program + sizeof("/Programs/") - 1, argv[1]);
     char tz[DESK_TZ_ENV_BYTES];
-    char *env[] = {desk_tz_env(tz, sizeof(tz)), "HOME=/Documents", "TMPDIR=/tmp", "PATH=/Programs", NULL};
+    /* sec-user-05: the session's profile home and private temporaries. */
+    struct profile_env profile;
+    char *env[9] = {desk_tz_env(tz, sizeof(tz)), "PATH=/Programs"};
+    env[profile_env_add(&profile, env, 2)] = NULL;
     ciuki_pid_t pid = ciuki_spawn(program, argv, env, NULL, 0, 0);
     return pid < 0 ? -errno : (int)pid;
 }

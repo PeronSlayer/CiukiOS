@@ -89,6 +89,8 @@ EXPORTS
     CiukiThreadDetach
     CiukiProcessDetach
     w32_server_exchange
+    ; sec-user-05: per-install machine SID over the existing REGISTRY link
+    w32_registry_machine
     ; f5-20A: NT native API and compiler helpers the reused Wine DLLs import
     LdrAddRefDll
     NtAllocateVirtualMemory

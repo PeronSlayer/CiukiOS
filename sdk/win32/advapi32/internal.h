@@ -14,4 +14,17 @@ uint32_t w32r_from_utf8(void *,uint32_t,const char *,int wide);
 void *w32r_alloc(uint32_t);
 void w32r_free(void *);
 uint32_t w32r_registry_access(uint32_t);
+/* --- sec-user-05 identity transports (identity.c). Production bodies are in
+ * rpc.c; host tests replace only these boundaries. --- */
+struct ciuki_w32_object_args;
+/* One W32_OBJECT record; buffer (or NULL) becomes the record's name address.
+ * Returns the Win32 error (transport failures included), 0 on success. */
+uint32_t w32r_object(struct ciuki_w32_object_args *, void *buffer);
+/* Per-install machine SID components A/B/C (REGISTRY RB_MACHINE_ID). */
+uint32_t w32r_machine(uint32_t sid[3]);
+/* One ACCOUNTS exchange (op, copied body, reply): 0 or -errno. */
+int32_t w32r_accounts(uint32_t, const void *, uint32_t, void *, uint32_t, uint32_t *);
+/* Frees a process-heap block; 0 when the pointer is not one. */
+int w32r_release(void *);
+/* --- end sec-user-05 --- */
 #endif

@@ -63,6 +63,10 @@ struct ws_shell;
 /* Registers nothing: the caller sets wr_server.shell_call/shell_exit/shell. */
 struct ws_shell *ws_create(const struct ws_fs *, const struct ws_config *, struct wr_server *);
 void ws_destroy(struct ws_shell *);
+/* sec-user-05: whether the session user is an administrator (common
+ * program groups). The guest asks the kernel for its own credential at
+ * ws_create; host tests set it here. */
+void ws_set_administrator(struct ws_shell *, int);
 /* wr_server hooks: W32R_PROGMAN_* and W32R_SHUTDOWN restart actions. */
 uint32_t ws_call(void *, uint32_t pid, const struct w32r_request *, const char *path,
                  const char *name, struct w32r_reply *, uint8_t *bytes, size_t cap);

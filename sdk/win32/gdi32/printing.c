@@ -21,6 +21,7 @@ IMPORT BOOL W32API MoveFileA(const char *, const char *);
 IMPORT DWORD W32API GetLastError(void);
 IMPORT DWORD W32API GetCurrentProcessId(void);
 IMPORT DWORD W32API GetFullPathNameA(const char *, DWORD, char *, char **);
+IMPORT DWORD W32API GetEnvironmentVariableA(const char *, char *, DWORD); /* sec-user-05 */
 #define BAD_FILE ((void *)(intptr_t)-1)
 #define HANDLES 16u
 struct printer_handle {
@@ -173,17 +174,52 @@ static int select_printer(const struct cp_config *c, const char *name) {
       return (int)i;
   return -1;
 }
+/* sec-user-05 (user-security-contract.md 8.2; sec-k05 open item): a profile
+ * session's jobs go to its own queue, <USERPROFILE>\Settings\Spool, which
+ * that session's native worker services (apps/libprint/print.c); the printer
+ * configuration stays the machine's CP_ROOT. Without a profile the machine
+ * queue CP_ROOT remains. */
+static void job_root(char out[200]) {
+  char profile[160];
+  DWORD n = GetEnvironmentVariableA("USERPROFILE", profile, sizeof(profile));
+  int valid = n >= 4 && n < sizeof(profile) - 16 && profile[1] == ':' &&
+              (profile[2] == '\\' || profile[2] == '/');
+  for (DWORD i = 0; valid && i + 1 < n; i++)
+    if (profile[i] == '.' && profile[i + 1] == '.')
+      valid = 0;
+  if (!valid) {
+    local_copy(out, 200, CP_ROOT);
+    return;
+  }
+  local_copy(out, 200, profile);
+  local_copy(out + n, 200 - n, "/Settings/Spool");
+}
 static void job_path(char *out, unsigned id, const char *leaf) {
-  char base[] = CP_ROOT "/j000/";
-  unsigned at = sizeof(CP_ROOT "/j") - 1;
-  base[at] = (char)('0' + id / 100);
-  base[at + 1] = (char)('0' + id / 10 % 10);
-  base[at + 2] = (char)('0' + id % 10);
-  local_copy(out, 300, base);
-  if (!leaf)
-    out[sizeof(base) - 2] = 0;
-  else
-    local_copy(out + sizeof(base) - 1, 300 - (sizeof(base) - 1), leaf);
+  char root[200], slot[] = "/j000";
+  job_root(root);
+  slot[2] = (char)('0' + id / 100);
+  slot[3] = (char)('0' + id / 10 % 10);
+  slot[4] = (char)('0' + id % 10);
+  unsigned at = w32_strlen(root);
+  local_copy(out, 300, root);
+  local_copy(out + at, 300 - at, slot);
+  at += sizeof(slot) - 1;
+  if (leaf) {
+    local_copy(out + at, 300 - at, "/");
+    local_copy(out + at + 1, 300 - at - 1, leaf);
+  }
+}
+/* The profile queue and its Settings parent exist before a slot is made. */
+static void job_queue_ready(void) {
+  char root[200];
+  job_root(root);
+  unsigned n = w32_strlen(root);
+  if (n > 6 && !w32_stricmp(root + n - 6, "/Spool")) {
+    root[n - 6] = 0;
+    CreateDirectoryA(root, 0);
+    root[n - 6] = '/';
+  }
+  CreateDirectoryA(root, 0);
 }
 static struct printer_handle *lookup(void *h) {
   uintptr_t v = (uintptr_t)h;
@@ -282,6 +318,7 @@ DWORD W32API StartDocPrinterA(void *handle, DWORD level, const void *info) {
       !output_path(job.target, d->pOutputFile))
     return 0;
   char path[300];
+  job_queue_ready(); /* sec-user-05 */
   for (unsigned id = 1; id <= CP_JOBS; id++) {
     job_path(path, id, 0);
     if (!CreateDirectoryA(path, 0)) {

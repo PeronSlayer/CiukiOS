@@ -21,13 +21,22 @@ class StartupTests(unittest.TestCase):
                  '-I'+str(ROOT/'apps/desktop'), '-idirafter', str(ROOT/'sdk/sysroot-overlay/include')]
         io = work/'posix-io.o'
         subprocess.run([*flags, '-c', ROOT/'apps/w32srv/posix_io.c', '-o', io], check=True)
+        # sec-user-05: libreg's reg_load/reg_commit reference the broker
+        # transport since sec-k06; a host build has no remote roots.
+        stub = work/'remote.c'
+        stub.write_text('#include <errno.h>\n#include <stdint.h>\nstruct reg_remote;struct rt;\n'
+                        'int reg_remote_load(struct reg_remote *r,struct rt **t){(void)r;(void)t;errno=EOPNOTSUPP;return -1;}\n'
+                        'int reg_remote_commit(struct reg_remote *r,struct rt *t,uint64_t g){(void)r;(void)t;(void)g;errno=EOPNOTSUPP;return -1;}\n'
+                        'void reg_remote_close(struct reg_remote *r){(void)r;}\n')
+        remote = work/'remote.o'
+        subprocess.run([*flags, '-c', stub, '-o', remote], check=True)
         sources = ['apps/desktop/'+n+'.c' for n in ('startup', 'win32_registry', 'win32_launch', 'protocol')]
         sources += ['apps/w32srv/'+n+'.c' for n in ('registry', 'storage', 'directory', 'defaults')]
         sources += ['sdk/libreg/'+n+'.c' for n in ('registry', 'storage', 'hardware')]
         sources += ['tests/host/desktop/startup_test.c']
         binary = work/'startup-test'
         subprocess.run([*flags, '-include', ROOT/'tests/host/desktop/replay_base.h',
-                        *(ROOT/s for s in sources), io, '-pthread', '-o', binary], check=True)
+                        *(ROOT/s for s in sources), io, remote, '-pthread', '-o', binary], check=True)
         with tempfile.TemporaryDirectory(dir=work) as directory:
             subprocess.run([binary, directory], check=True, timeout=30)
 

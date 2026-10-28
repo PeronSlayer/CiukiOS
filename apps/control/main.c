@@ -901,7 +901,12 @@ static int control_run(struct cp_main *m)
 
 #include "internet_history.h"
 static int internet_clear(void *ctx)
-{ (void)ctx;return internet_history_clear("/Documents/NetSurf"); }
+{
+    /* sec-user-05: the browser profile of this session (sdk/netsurf chrome.c). */
+    (void)ctx;char own[200];const char *path=profile_data(own,sizeof(own),"NetSurf",1);
+    if(!path && profile_root_path()){errno=EACCES;return -1;}
+    return internet_history_clear(path ? path : "/Documents/NetSurf");
+}
 static int internet_read(void *ctx,struct cp_internet_options *o)
 { (void)ctx;return internet_load(INTERNET_OPTIONS_PATH,o); }
 static int internet_write(void *ctx,const struct cp_internet_options *o)
