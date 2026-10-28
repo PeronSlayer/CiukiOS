@@ -24,7 +24,11 @@ struct acct_server {
     /* sec-user-02 first-boot adapter: the shared G32 settings binding (NULL:
      * no G32 migration) and the last adapter result, for diagnostics. */
     const struct acct_legacy_io *legacy;
-    int firstboot_result;
+    int firstboot_result, firstboot_pending;
+    uint64_t firstboot_retries;
+    /* Each (step, errno) below 128 is reported once, even if a different
+     * refusal intervenes. All errors supplied by these adapters fit. */
+    uint64_t firstboot_refusals[ACCT_BOOT_STEP_COUNT][2];
     /* sec-own: native file access for the DOS saves migration (NULL: none). */
     const struct acct_tree_io *tree;
 };
@@ -32,8 +36,9 @@ struct acct_server {
  * tables and volume. host_test is set only by host harnesses; the image
  * passes 0, so acct_service_open demands real tables. 0 or -errno. */
 int acct_server_init(struct acct_server *, const struct acct_store *tables, int host_test);
-/* Opens the service when closed and the retry time has come (every
- * ACCT_SERVER_OPEN_RETRY_MS). Returns 1 once open, 0 while closed. */
+/* Opens or resumes unpublished startup when the retry time has come.
+ * EAGAIN retries every FIRSTBOOT_RETRY_MS with no deadline; other open
+ * failures use OPEN_RETRY_MS. Returns 1 once open, 0 while closed. */
 int acct_server_open(struct acct_server *, uint64_t now);
 /* SERVICE_ACCEPT on AUTH and ACCOUNTS until both backlogs are empty. */
 void acct_server_accept(struct acct_server *);

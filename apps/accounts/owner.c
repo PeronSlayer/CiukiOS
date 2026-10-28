@@ -140,5 +140,9 @@ int acct_owner_call(struct acct_store *s, unsigned op, const struct acct_owner_r
     if(!e) e=s->owner.call(s->owner.ctx,f->request,n,f->reply,sizeof(f->reply),&m);
     if(!e) e=acct_owner_reply_decode(r,q,f->reply,m);
     if(!e && (op==5 || op==6) && r->state!=ACCT_OWNER_CHECKPOINTED) e=-EIO;
-    acct_frame_free(&s->kernel,f,sizeof(*f)); return e;
+    static const enum acct_boot_step steps[]={ ACCT_BOOT_RECOVER, ACCT_BOOT_PREPARE,
+        ACCT_BOOT_COMMIT, ACCT_BOOT_ABORT, ACCT_BOOT_STATUS, ACCT_BOOT_CHECKPOINT,
+        ACCT_BOOT_COMPACT, ACCT_BOOT_RESERVE };
+    acct_frame_free(&s->kernel,f,sizeof(*f));
+    return acct_boot_result(s,op<sizeof(steps)/sizeof(*steps)?steps[op]:ACCT_BOOT_RECOVER,e);
 }

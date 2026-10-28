@@ -44,14 +44,31 @@ int acct_service_open(struct acct_service *s, const struct acct_store *store, in
     int e = store->kernel.lease_acquire(store->kernel.ctx);
     if (e) return e;
     s->leased = 1;
-    e = store->owner.authenticate(store->owner.ctx);
+    e = acct_service_resume(s);
+    if (e) {
+        enum acct_boot_step step=s->store.firstboot_step;
+        acct_service_close(s);
+        s->store.firstboot_step=step;
+    }
+    return e;
+}
+int acct_service_resume(struct acct_service *s)
+{
+    if (!s || !s->leased || s->available || s->active.occupied || s->pending.occupied) return -EPERM;
+    if (s->results) {
+        acct_wipe(s->results,sizeof(*s->results));
+        s->store.kernel.deallocate(s->store.kernel.ctx,s->results,sizeof(*s->results));
+        s->results=NULL;
+    }
+    s->store.firstboot_step=ACCT_BOOT_RECOVER;
+    int e = s->store.owner.authenticate(s->store.owner.ctx);
     if (!e) e = acct_store_recover(&s->store, &s->db);
-    if (!e && !pictures_valid(&store->kernel, &s->db)) e = -EIO;
+    if (!e && !pictures_valid(&s->store.kernel, &s->db)) e = -EIO;
     if (!e) e=acct_results_open(s);
     if (!e) s->available = 1;
-    else if (e != -ENOENT) { acct_service_close(s); return e; }
+    else if (e != -ENOENT) return e;
     e=acct_enrollment_recover(s);
-    if(e) { acct_service_close(s); return e; }
+    if(e) { s->available=0; return e; }
     s->next_ticket = 1;
     return 0;
 }
@@ -90,10 +107,13 @@ int acct_service_bootstrap(struct acct_service *s, const void *seed, size_t byte
     if (d) *d = decoded;
     else e = -ENOMEM;
     acct_wipe(&decoded, sizeof(decoded));
-    if (!e) e=acct_boot_identity(&s->store,d,1);
+    if (!e) {
+        e=acct_boot_identity(&s->store,d,1);
+        if (e && s->store.firstboot_step!=ACCT_BOOT_ENTROPY_SID) s->store.firstboot_step=ACCT_BOOT_IDENTITY;
+    }
     if (!e && d->origin == ACCT_READY) {
         struct acct_record *r = &d->records[2];
-        e = k->entropy(k->ctx, r->salt, 16);
+        e = acct_boot_result(&s->store,ACCT_BOOT_ENTROPY_SALT,k->entropy(k->ctx, r->salt, 16));
         if (!e) e = acct_derive("", r->salt, ACCT_ITERATIONS, r->verifier);
         if (!e) { r->kdf = 1; r->iterations = ACCT_ITERATIONS; r->flags |= ACCT_PASSWORD_SET; }
     }

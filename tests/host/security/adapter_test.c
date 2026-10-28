@@ -334,14 +334,13 @@ static void test_lease_and_gate(void)
     CHECK(acct_service_open(&acct_srv.service,&acct_srv.tables,0)==-ENOSYS);
     CHECK(!acct_server_open(&acct_srv,0) && acct_srv.last_open_error==-EIO); /* no evidence is not fresh */
     fake_provision(&fake,1);
-    /* The kernel generator is not yet seeded at the first open (getentropy
-     * EAGAIN): the server closes and reopens shortly, so the promotion
-     * resumes through the recovery of the next open. */
+    /* Entropy EAGAIN retries under the same unpublished service lease. */
     entropy_unready=1;
-    CHECK(!acct_server_open(&acct_srv,ACCT_SERVER_OPEN_RETRY_MS) && !acct_srv.opened && !acct_srv.kernel.leased);
+    CHECK(!acct_server_open(&acct_srv,ACCT_SERVER_OPEN_RETRY_MS) && !acct_srv.opened && acct_srv.kernel.leased);
     CHECK(acct_srv.firstboot_result==-EAGAIN && !entropy_unready);
     CHECK(!acct_server_open(&acct_srv,ACCT_SERVER_OPEN_RETRY_MS+ACCT_SERVER_FIRSTBOOT_RETRY_MS-1));
     CHECK(acct_server_open(&acct_srv,ACCT_SERVER_OPEN_RETRY_MS+ACCT_SERVER_FIRSTBOOT_RETRY_MS) && acct_srv.opened);
+    CHECK(acct_srv.firstboot_retries==1);
     CHECK(acct_srv.kernel.leased && acct_srv.kernel.pid==account_thread->process->pid && acct_srv.kernel.generation==1);
     CHECK(!acct_srv.kernel.safe_mode);
     struct acct_service other;

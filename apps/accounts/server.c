@@ -20,6 +20,32 @@ static void note(const char *what, int code)
     else snprintf(line,sizeof(line),"[accounts] %s",what);
     acct_sys_log(line);
 }
+static void firstboot_refused(struct acct_server *s, int error)
+{
+    static const char *const names[]={ "recover", "promote", "identity", "entropy-sid",
+        "entropy-salt", "generation", "binding", "stage", "tree-digest", "validate-stage",
+        "orphans", "reserve", "status", "prepare", "commit", "abort", "checkpoint", "compact", "intent" };
+    _Static_assert(sizeof(names)/sizeof(*names)==ACCT_BOOT_STEP_COUNT,"first-boot step names");
+    unsigned step=s->service.store.firstboot_step;
+    if (step>=ACCT_BOOT_STEP_COUNT) step=ACCT_BOOT_RECOVER;
+    unsigned code=error<0?(unsigned)-(int64_t)error:0;
+    if (code<128) {
+        uint64_t bit=UINT64_C(1)<<(code%64);
+        if (s->firstboot_refusals[step][code/64]&bit) return;
+        s->firstboot_refusals[step][code/64]|=bit;
+    }
+    char line[128];
+    snprintf(line,sizeof(line),"[accounts] first-boot step=%s error=%d",names[step],error);
+    acct_sys_log(line);
+}
+static void firstboot_promoted(struct acct_server *s)
+{
+    s->firstboot_pending=0;
+    char line[128];
+    snprintf(line,sizeof(line),"[accounts] first boot: provisioning seed promoted retries=%llu",
+             (unsigned long long)s->firstboot_retries);
+    acct_sys_log(line);
+}
 /* Status-only reply to a complete request: same header (service, operation,
  * id and the pair's endpoint generation), reply flag, no body. */
 static void refuse(int fd, const uint8_t *request, int status)
@@ -94,21 +120,31 @@ int acct_server_open(struct acct_server *s, uint64_t now)
     /* sec-user-02 first-boot adapter (firstboot.h): protect G32 evidence
      * before open; promote a staged seed or register the enrollment source
      * after an open that found no published database. */
-    int prepared=acct_firstboot_prepare(&s->tables,s->legacy);
-    if (prepared<0) note("first-boot migration refused",prepared);
-    int e=acct_service_open(&s->service,&s->tables,s->host_test);
+    int resuming=s->service.leased;
+    if (!resuming) {
+        int prepared=acct_firstboot_prepare(&s->tables,s->legacy);
+        if (prepared<0) note("first-boot migration refused",prepared);
+    }
+    int e=resuming?acct_service_resume(&s->service):acct_service_open(&s->service,&s->tables,s->host_test);
+    if (!e && s->service.available && s->firstboot_pending) {
+        (void)acct_firstboot_promote(&s->service); /* remove a residual consumed seed */
+        s->firstboot_result=ACCT_FIRSTBOOT_PROMOTED;
+        firstboot_promoted(s);
+    }
+    else if (!e && s->service.available && s->firstboot_result==-EAGAIN) s->firstboot_result=ACCT_FIRSTBOOT_NOTHING;
     if (!e && !s->service.available) {
-        int previous=s->firstboot_result;
+        s->service.store.firstboot_step=ACCT_BOOT_PROMOTE;
         s->firstboot_result=acct_firstboot_promote(&s->service);
-        if (s->firstboot_result<0) { if (s->firstboot_result!=previous) note("first-boot promotion refused",s->firstboot_result); }
-        else if (s->firstboot_result==ACCT_FIRSTBOOT_PROMOTED) note("first boot: provisioning seed promoted",0);
+        if (s->firstboot_result<0) firstboot_refused(s,s->firstboot_result);
+        else if (s->firstboot_result==ACCT_FIRSTBOOT_PROMOTED) firstboot_promoted(s);
         else if (s->firstboot_result==ACCT_FIRSTBOOT_ENROLLMENT) note("first boot: G32 enrollment required",0);
-        /* EAGAIN: the kernel OWNER store or the entropy generator is not
-         * ready yet on a slow first boot. The interrupted batch resumes
-         * through the recovery of the next open (contract 3.6), so close
-         * and reopen shortly instead of serving an unpublished store. */
+        /* Before SID persistence, retry entropy in place under this lease.
+         * After durable progress, resume through the same recovery as open:
+         * exact sealed intent, or abort an orphan and retire its G. OWNER
+         * remains attached, including its active receipt/candidate. */
         if (s->firstboot_result==-EAGAIN) {
-            acct_service_close(&s->service);
+            s->firstboot_pending=1;
+            if (s->firstboot_retries!=UINT64_MAX) s->firstboot_retries++;
             s->next_open=now+ACCT_SERVER_FIRSTBOOT_RETRY_MS;
             return 0;
         }
@@ -120,6 +156,14 @@ int acct_server_open(struct acct_server *s, uint64_t now)
         if (s->service.available) migrate_dos_saves(s); /* sec-own */
         return 1;
     }
+    firstboot_refused(s,e);
+    if (e==-EAGAIN) {
+        s->firstboot_result=e;
+        if (s->firstboot_retries!=UINT64_MAX) s->firstboot_retries++;
+        s->next_open=now+ACCT_SERVER_FIRSTBOOT_RETRY_MS;
+        return 0;
+    }
+    if (resuming) acct_service_close(&s->service);
     if (e!=s->last_open_error) note("open refused; every request is answered with EIO",e);
     s->last_open_error=e;
     s->next_open=now+ACCT_SERVER_OPEN_RETRY_MS;
@@ -190,6 +234,8 @@ void acct_server_step(struct acct_server *s, unsigned idle_ms)
 void acct_server_close(struct acct_server *s)
 {
     server_reset(s);
+    /* A transient first-boot refusal holds the lease before opened=1. */
+    if (s->service.leased) acct_service_close(&s->service);
     int fds[ACCT_KERNEL_LINKS];
     unsigned n=acct_kernel_adapter_fds(&s->kernel,fds,ACCT_KERNEL_LINKS);
     for (unsigned i=0;i<n;i++) (void)acct_kernel_adapter_retire(&s->kernel,fds[i]);

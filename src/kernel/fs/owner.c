@@ -209,7 +209,11 @@ static int transition(struct owner_store *s,const struct owner_request *q,struct
     if(op==OWNER_COMMIT && r->state!=OWNER_PREPARED) return -EIO;
     int e=s->io.reserve(s->io.ctx,q,s->pending,true);
     if(!e) e=owner_manifest_validate(s,q);
-    if(e) { s->ready=false; return e; }
+    /* A namespace mutation during hashing is a refusal to validate this
+     * attempt, with the same durable receipt and namespace fence intact.
+     * Keep the store usable so ACCOUNT can retry STATUS/PREPARE/COMMIT in
+     * this session. Persistent/corrupt evidence still closes the store. */
+    if(e) { if(e!=-EAGAIN) s->ready=false; return e; }
     if(op==OWNER_PREPARE) { r->state=OWNER_PREPARED; return owner_persist(s); }
     int intent=owner_intent(s,q); if(intent!=1) return intent<0?intent:-EIO;
     /* account COMMIT_REQUIRED forbids compensation even if publication or a
@@ -265,7 +269,7 @@ int owner_recover(struct owner_store *s)
         if(r->state==OWNER_RESERVED) e=transition(s,q,r,OWNER_PREPARE);
         if(!e) e=transition(s,q,r,OWNER_COMMIT);
     } else if(!e) e=transition(s,q,r,OWNER_ABORT);
-    ofree(q,sizeof(*q)); if(e) s->ready=false; return e;
+    ofree(q,sizeof(*q)); if(e && e!=-EAGAIN) s->ready=false; return e;
 }
 int owner_open(struct owner_store *s,const struct owner_backend *io,const uint32_t sid[3],uint64_t volume,bool fresh)
 {
