@@ -8,9 +8,13 @@
 #include <ciuki/swdib.h>
 #include "../../../fs/vfs.h"
 
-#include "../render3d.h"
+#include "vmwaresvga3d.h"
+/* SVGA3D legacy fixed-function backend (f7-31). Host devcaps, not this
+ * research metadata, decide units and sizes; admission needs this boot's
+ * Q1-Q4 on the actual host (docs/design/f7-family-vmware-svga3d.md). */
 static const struct render3d_family render_family = {
-    .status=R3D_NOT_IMPLEMENTED, .potential_units=0, .potential_texture_size=0
+    .status=R3D_UNQUALIFIED, .potential_units=2, .potential_texture_size=1024,
+    .backend=vmsvga3d_backend
 };
 static struct vmsvga_engine engine={.cpu_safe=true,.reason="pending"};
 static struct vmsvga_ports ports;
@@ -22,6 +26,7 @@ static uint32_t fifo_capacity, fifo_bytes;
 static bool authorized, marker_owned, blocked, logged, logged_quarantine;
 static struct vfs_table marker_table;
 #define MARKER "C:/system/settings/vmsvga.cfg"
+#define MARKER_3D "C:/system/settings/accel-3d-vmwaresvga-15ad-%04x.cfg"
 static const struct display_match matches[]={{0x15ad,0x0405,3,255}};
 static bool probe(const struct pci_func *p)
 {
@@ -91,6 +96,10 @@ static int release_resources(void)
 static int runtime_stop(void *ctx)
 {
     struct vmsvga_engine *s=ctx;
+    /* The 3D owner closes its consumer and host context before the FIFO
+     * mapping or registers can be revoked. */
+    int stopped=vmsvga3d_owner_stop(s);
+    if (stopped) return stopped;
     if (s->cpu_safe && !ports.fifo && claims[0]<0 && claims[1]<0) return 0;
     /* Core stop is intentionally called once here: ops->stop is the single
      * authority, including mode transitions and failed-marker cleanup. */
@@ -205,7 +214,7 @@ static int activation_probe(void *arg)
 }
 static const struct accel_ops *start(const struct fb_device *fb,struct vfs *vfs)
 {
-    (void)vfs;
+    vmsvga3d_bind_vfs(vfs);
     if (!authorized || !eligible(fb) || fb->width<16 || fb->height<16) return 0;
     authorized=false;
     const struct pci_func *p=owner(fb);
@@ -234,6 +243,7 @@ static const struct accel_ops *start(const struct fb_device *fb,struct vfs *vfs)
     io.valid=resources_valid;
     int initialized=vmsvga_engine_init(&engine,&io,fb,base,fifo_bytes);
     engine.ops.stop=runtime_stop;
+    engine.self_test=activation_probe;
     if (initialized) goto failure;
     if (fbdev_accel_probe(fb,activation_probe,&engine)) {
         (void)fallback(); blocked=true; return 0;
@@ -258,6 +268,7 @@ static void snapshot(struct ciuki_accel_info *out)
 }
 static void record(void)
 {
+    if (engine.active && !engine.quarantined) vmsvga3d_boot_diagnostic(&engine,fbdev_get());
     if (logged && logged_quarantine==engine.quarantined) return;
     if (!engine.active && !blocked && !engine.quarantined && !engine.initialized) return;
     logged=true; logged_quarantine=engine.quarantined;
@@ -271,7 +282,7 @@ static int cursor_test(const struct accel_ops *ops,uint64_t until,bool (*cancel)
 }
 const struct display_driver vmwaresvga_driver={
     .render3d=&render_family,
-    .id="vmwaresvga",.attempt_files={MARKER},.name="VMware SVGA II",.matches=matches,.match_count=1,.framebuffer_bar=1,
+    .id="vmwaresvga",.attempt_files={MARKER,MARKER_3D},.name="VMware SVGA II",.matches=matches,.match_count=1,.framebuffer_bar=1,
     .probe=probe,.eligible=eligible,.start=start,.fallback=fallback,
     .attempt_begin=attempt_begin,.attempt_end=attempt_end,.attempt_failed=attempt_failed,
     .record=record,.quarantine=quarantine,.summary=summary,.snapshot=snapshot,.cursor_test=cursor_test

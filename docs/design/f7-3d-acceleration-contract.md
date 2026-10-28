@@ -1094,3 +1094,42 @@ provides the pinned mach64 6.9.6 archive. The owner-provided Resource Kit,
 chapter 30 `wrkc30_3.htm:426–436`, distinguishes local VRAM from AGP/GART
 heaps; this integration keeps the family's local-only allocation policy.
 No register programming or public ABI changes are introduced by the harness.
+
+## 13. VMware SVGA3D family integration (f7-31, integration 8)
+
+Research and repository comparison: 2026-10-28 (`date` checked). The
+[f7-31 family design](f7-family-vmware-svga3d.md) records the pinned protocol,
+capability gates, command/state citations, memory plan and Q1–Q4 model evidence.
+The VMware descriptor is `R3D_UNQUALIFIED`; registration alone admits no
+hardware features. The existing NVIDIA software-only decision stays in force.
+
+Linux v6.1 [`vmw_supports_3d`, lines 35–80](https://raw.githubusercontent.com/torvalds/linux/v6.1/drivers/gpu/drm/vmwgfx/vmwgfx_cmd.c)
+requires `SVGA_CAP_3D` and checks legacy FIFO hardware version or GB devcaps.
+Mesa 21.3.9 [`SVGA3D_FIFOReserve`, lines 107–128](https://gitlab.freedesktop.org/mesa/mesa/-/raw/mesa-21.3.9/src/gallium/drivers/svga/svga_cmd.c)
+encodes a command id and payload size before the body. VirtualBox commit
+`b6bea72111fcff48f31c57c9f66365b1d3301bb9`
+[`DevVGA-SVGA3d-ogl.cpp`, lines 1526–1527 and 5687–5697](https://raw.githubusercontent.com/VirtualBox/virtualbox/b6bea72111fcff48f31c57c9f66365b1d3301bb9/src/VBox/Devices/Graphics/DevVGA-SVGA3d-ogl.cpp)
+leaves TEXTURE_OPS empty and ignores colour/alpha combiner state. The pinned
+local copies were checked for these facts; raw online fetches failed in this
+sandbox. [Mesa's official SVGA3D documentation](https://docs.mesa3d.org/drivers/svga3d.html)
+was accessible online and confirms that the guest driver uses the host GPU.
+
+Decision: preserve integration 8's Savage engine, backend lifecycle hooks,
+native fullscreen lease checks and TinyGL-only GL host link. Reuse the
+existing Mach64 whole-context refusal hook for VMware; retain its original
+field position and submission order, without duplicate fields or code.
+Select VMware's host engine and three H1 scenarios only behind
+`GL_KERNEL_FAMILY_VMWARE` through the shared `KERNEL_FAMILIES` table and
+`kernel_engine.c`. Its `vmwaresvga` and `vmwaresvga-vbox` rows select the
+VMware and legacy VirtualBox OpenGL model semantics respectively. Both
+keep UBSan by default, with the existing optional ASan/LSan policy; all
+other family calls and sanitizer defaults stay unchanged.
+The VMware model uses the copied presentation path; it does not claim the
+Savage-specific direct-scanout or mode-reacquisition evidence. No hypervisor
+qualification follows from these host tests.
+
+Round 3 of [f7-unify](../directives/f7-unify.md) rechecked the pinned Linux,
+Mesa and VirtualBox ranges above before resolving the family merge.
+The shared service and header stay identical to integration 8; each
+family retains its tests, capability gates and refusal policy. Source
+research and host-only results are recorded in the round 3 report.

@@ -253,7 +253,7 @@ class RenderTests(unittest.TestCase):
             'riva128': 'R3D_NOT_IMPLEMENTED',
             'nv2d': 'R3D_SOFTWARE_ONLY',
             'trident': 'R3D_NOT_IMPLEMENTED',
-            'vmwaresvga': 'R3D_NOT_IMPLEMENTED',
+            'vmwaresvga': 'R3D_UNQUALIFIED',
         }
         expected=set(status)
         found=set()

@@ -29,6 +29,16 @@ KERNEL_FAMILIES = {
                 sources=('mach64/mach64_3d.c','mach64/engine.c'),
                 support_sources=('tests/host/mach64_3d_model.c',),
                 replaces=('s3savage/savage3d.c',)),
+ 'vmwaresvga': dict(name='vmwaresvga', define='GL_KERNEL_FAMILY_VMWARE', engine='kernel_engine.c',
+                sources=('vmwaresvga/vmwaresvga3d.c','vmwaresvga/engine.c'),
+                support_sources=('tests/host/vmwaresvga3d_model.c',),
+                extra_defines=('SVGA_H1_HOST=SVGA_HOST_VMWARE',),
+                replaces=('s3savage/savage3d.c',)),
+ 'vmwaresvga-vbox': dict(name='vmwaresvga-vbox', define='GL_KERNEL_FAMILY_VMWARE', engine='kernel_engine.c',
+                sources=('vmwaresvga/vmwaresvga3d.c','vmwaresvga/engine.c'),
+                support_sources=('tests/host/vmwaresvga3d_model.c',),
+                extra_defines=('SVGA_H1_HOST=SVGA_HOST_VBOX_GL',),
+                replaces=('s3savage/savage3d.c',)),
 }
 
 class GLTests(unittest.TestCase):
@@ -60,6 +70,7 @@ class GLTests(unittest.TestCase):
   flags=['-std=c17','-D_GNU_SOURCE','-DW32_HOST_MODEL','-O2','-g','-ffp-contract=off','-Wall','-Wextra','-Werror','-Wno-unused-function','-fno-vectorize','-fno-slp-vectorize','-I'+str(ROOT/'sdk/win32/include'),'-I'+str(ROOT/'sdk/libgl/vendor/include')]
   flags+=['-I'+str(ROOT/'src/kernel/include'),'-I'+str(ROOT/'tests/host'),'-I'+str(out)]
   if family['define']:flags+=['-D'+family['define']]
+  flags+=['-D'+define for define in family.get('extra_defines',())]
   if sanitize or ubsan:flags+=['-fsanitize='+('address,undefined' if sanitize else 'undefined'),'-fno-sanitize-recover=all']
   if profile:flags+=['-DSW_PROFILE']
   if not gamma_hooks:flags+=['-DGL_TEST_NO_GAMMA']

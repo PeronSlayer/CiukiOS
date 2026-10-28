@@ -1,0 +1,38 @@
+VMware SVGA3D protocol values (f7-31 SVGA3D backend)
+Origin: VMware SVGA3D device headers as distributed in
+  Mesa 21.3.9 src/gallium/drivers/svga/include/ (MIT, below) and
+  Linux v6.1 drivers/gpu/drm/vmwgfx/device_include/ (GPL-2.0 OR MIT).
+Pins, URLs and SHA-256: docs/design/f7-family-vmware-svga3d.md section 1.
+Used at src/kernel/drivers/video/vmwaresvga/vmwaresvga3d_protocol.h: numeric
+command ids, enumerators, devcap indices and capability bits only, each with
+its source line. No upstream header or .c file is included or compiled; the
+backend, owner and host model are original GPL-2.0-only code.
+Mesa svga, the Linux vmwgfx driver, VirtualBox (GPL-3.0) and QEMU sources
+were read as references for semantics and host behaviour, not imported.
+The precision envelope header is a CiukiOS file copied from the Savage
+backend (src/kernel/drivers/video/s3savage/savage3d_precision.h).
+
+/**********************************************************
+ * Copyright 1998-2017 VMware, Inc.  All rights reserved.
+ *
+ * Permission is hereby granted, free of charge, to any person
+ * obtaining a copy of this software and associated documentation
+ * files (the "Software"), to deal in the Software without
+ * restriction, including without limitation the rights to use, copy,
+ * modify, merge, publish, distribute, sublicense, and/or sell copies
+ * of the Software, and to permit persons to whom the Software is
+ * furnished to do so, subject to the following conditions:
+ *
+ * The above copyright notice and this permission notice shall be
+ * included in all copies or substantial portions of the Software.
+ *
+ * THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND,
+ * EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF
+ * MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND
+ * NONINFRINGEMENT. IN NO EVENT SHALL THE AUTHORS OR COPYRIGHT HOLDERS
+ * BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN
+ * ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN
+ * CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+ * SOFTWARE.
+ *
+ **********************************************************/
