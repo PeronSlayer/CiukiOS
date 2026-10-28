@@ -52,3 +52,13 @@
 - U6-4: `/Programs/sectest` stays in the image but is hidden from the Start menu and from Add/Remove Programs.
 - U6-5: the pending cases stay pending until their runtime paths exist; `qemu-t23` is the only profile; acc-quake3's title follows the protected installer store path.
 - U6-6 (overlap with sec-k08): one `security.kdf` self-test row, sec-k08's library with an 8 s bound; the self-test budget stays within 600 s.
+
+## Lead decision on the session launch deadline (2026-10-29 00:05)
+- K8-8: `CIUKI_SECURITY_LAUNCH_TIMEOUT_MS` goes from 5,000 to 30,000 ms.
+  - **Evidence.** On the `qemu-t23` profile (TCG, Pentium III, icount `shift=1`), integration 8 failed three automatic first boots out of three with `[logon] session start failed: -110`: the desktop was still waiting for its first composed frame at 5 s. The same image under KVM starts the session in 1.6 s (`start_ms=1555` and `1644`).
+  - **Rationale.**
+    - The hardware baseline includes 1998-class desktop PCs, which are slower than the Pentium III.
+    - The deadline exists to detect a launch that died, not to measure start-up speed.
+    - The Windows Service Control Manager waits 30,000 ms by default for a service to report that it is running ([Event ID 7011](https://technet.microsoft.com/en-us/library/dd349371(v=ws.10)), `ServicesPipeTimeout`). Winlogon has no deadline at all for starting the shell.
+  - **Measurement.** `start_ms` in the LOGON `session running` record stays the start-up timing.
+  - Directive: `integ8-glue`.
