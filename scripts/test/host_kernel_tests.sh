@@ -587,6 +587,11 @@ python3 -B -m unittest discover -s "$root/tests/host/security" -p test_dos_ident
 # ACCOUNT service, bound policy, reboot and SID-without-store refusal.
 python3 -B -m unittest discover -s "$root/tests/host/security" -p test_system_owner.py
 # ---- end sec-own ----
+# ---- sec-sysvc H16 (one block): SYSTEM services of call 99 (boot
+# configuration, system/user logs, driver packs) for administrator, standard
+# user and Guest, with the direct routes refused by the bound policy.
+python3 -B -m unittest discover -s "$root/tests/host/security" -p test_system_services.py
+# ---- end sec-sysvc ----
 
 # F2 production parser, mappings, wait queues, stack and lifecycle with fake
 # physical memory/scheduling; no guest execution or host runner lock.

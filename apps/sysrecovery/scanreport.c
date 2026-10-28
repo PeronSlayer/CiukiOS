@@ -7,6 +7,7 @@
 #include <errno.h>
 #include <stdarg.h>
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 #include <time.h>
 #include "recovery.h"
@@ -80,18 +81,17 @@ size_t scandisk_text(const struct ciuki_scandisk *r, char *out, size_t cap)
 }
 int scandisk_log(const char *root, const struct ciuki_scandisk *r, int64_t now)
 {
-    char path[512];
-    int n = snprintf(path, sizeof(path), "%s/System/LOGS/SCANDISK.LOG", root ? root : "");
-    if (n < 0 || (size_t)n >= sizeof(path)) return -ENAMETOOLONG;
-    FILE *f = fopen(path, "a");
-    if (!f) return -errno;
     time_t t = (time_t)now; struct tm tm; char when[32];
     if (localtime_r(&t, &tm)) strftime(when, sizeof(when), "%Y-%m-%d %H:%M", &tm); else snprintf(when, sizeof(when), "?");
-    char text[2048];
-    scandisk_text(r, text, sizeof(text));
-    fprintf(f, "ScanDisk, %s, drive %c:, %s%s\n%s\n", when, 'A' + (r->drive < 26 ? r->drive : 25),
-            r->flags & CIUKI_SCANDISK_THOROUGH ? "Thorough" : "Standard", r->flags & CIUKI_SCANDISK_AT_START ? " (at start)" : "", text);
-    int e = ferror(f) ? -EIO : 0;
-    if (fclose(f) && !e) e = -errno;
+    enum { TEXT = 2048, ENTRY = 2304 };
+    char *text = malloc(TEXT + ENTRY);
+    if (!text) return -ENOMEM;
+    char *entry = text + TEXT;
+    scandisk_text(r, text, TEXT);
+    int n = snprintf(entry, ENTRY, "ScanDisk, %s, drive %c:, %s%s\n%s\n", when, 'A' + (r->drive < 26 ? r->drive : 25),
+                     r->flags & CIUKI_SCANDISK_THOROUGH ? "Thorough" : "Standard", r->flags & CIUKI_SCANDISK_AT_START ? " (at start)" : "", text);
+    /* sec-sysvc: a system log, appended through the SYSTEM log service. */
+    int e = n < 0 ? -EIO : sr_log_append(root, "SCANDISK.LOG", entry, (size_t)n < ENTRY ? (size_t)n : ENTRY - 1);
+    free(text);
     return e;
 }

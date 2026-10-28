@@ -501,6 +501,36 @@ Implementation record and decisions: `docs/validation/sec-own.md`.
   committed profile descriptor of uid 1000 once OWNER has it, so k05's DOS data
   roots move from the legacy machine store into that profile.
 
+#### SYSTEM services for administrator operations and logs (sec-sysvc amendment, 2026-10-28)
+
+Implementation record, research and the complete inventory:
+`docs/validation/sec-sysvc.md`. K-Q4 keeps the sealed boot/service set and the
+security/log trees SYSTEM-only; administrators reach them only through these
+typed kernel services of call 99 (`CIUKI_SYS_RECOVERY`, records in `abi.h`;
+the same model as SCANDISK and the media maintenance broker). Each service
+checks the caller's retained subject (an administrator, or SYSTEM outside any
+session) before its first side effect, then acts on fixed SYSTEM targets
+through a kernel VFS table. A caller-chosen input (a driver package folder, the
+original of a system file) is read through the caller's own namespace and
+subject, so a service never carries a file the caller could not read. No
+SYSTEM descriptor is handed out and the rule table is unchanged, except that
+`/System/SFC.LST` (the restore service's trust input) joins the sealed set.
+
+| Service | Who | What the kernel does as SYSTEM |
+| --- | --- | --- |
+| BOOT_CONFIG (5) SET | Administrators | Rewrites `C:\SYSTEM\BOOT.CFG` (printable text, the loader's 127 bytes), restoring the previous text after a failed write. Startup menu/selective startup stay RECOVERY SET/ENABLE. |
+| LOG (6) LIST/READ, MACHINE | Administrators | Lists and reads `C:\SYSTEM\LOGS` (Event Viewer model: SYSTEM-owned logs, administrators read through the service; standard users and Guest EPERM; no direct file access for anyone). |
+| LOG APPEND, MACHINE | Administrators | Appends the maintenance reports `SCANDISK.LOG` and `SFC.LOG` only; every other system log is written by SYSTEM itself. |
+| LOG LIST/READ/APPEND/REPLACE, USER | Every interactive user | The caller's own logs, `<profile>\Local Settings\Application Data\CiukiOS\Logs` (A1-10), opened as the caller; a session without a committed profile (only the interim administrator session of a first boot) holds them in `C:\SYSTEM\LOGS\Users\u<uid>`. Names are 8.3; APPEND starts the file over past its limit. |
+| DRIVER_PACK (7) INSTALL/REMOVE | Administrators | Stages `C:\SYSTEM\DRIVERS\<package>.stage`, copies the sealed manifest's files from the caller's folder hashing every byte, verifies with the NDIS gate's `ndp_verify`, renames into place; removal records `remove.ndp` before `manifest.ndp` goes and finishes interrupted removals. Qualified packages need the lead qualification and a stopped host. |
+| SFC_RESTORE (8) | Administrators | Restores a file of the sealed baseline `C:\SYSTEM\SFC.LST` from the caller's original (size and SHA-256 checked), after copying the current file to `C:\SYSTEM\Helpdesk\SFC`, with one replacing rename. |
+
+Programs that are not SYSTEM never write `C:\SYSTEM\LOGS`: NetSurf's log and
+the crash reports of a session's programs (`CRASHn.TXT` native, `WCRASHn.TXT`
+Win32) are that user's own logs; the Log Viewer shows the user's logs and, to
+administrators, the system logs. Per-user crash reports follow the rule
+table's "may instead be placed in the owning profile".
+
 ### Enforcement points and retained handles
 
 | Operation | Required checks before first side effect |

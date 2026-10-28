@@ -69,12 +69,17 @@ static struct form_control *file_gadget;
 static struct gui_window *file_window;
 const char *ciuki_resource_path="/system/netsurf";
 const char *ciuki_capture_path;
-/* f6-22: C:\SYSTEM\LOGS\NETSURF.LOG keeps one line per browser exit. Host
- * runs write it only when --ciuki-log= names a file. */
+/* f6-22: NETSURF.LOG keeps one line per browser exit. Host runs write it only
+ * when --ciuki-log= names a file. sec-sysvc: on CiukiOS it is the user's own
+ * log (<profile>\Local Settings\Application Data\CiukiOS\Logs), appended
+ * through the SYSTEM log service (ciuki/recovery.h); C:\SYSTEM\LOGS is
+ * SYSTEM's. The path remains for --ciuki-log= and an older kernel (ENOSYS). */
 #ifdef CIUKI_HOST
 const char *ciuki_netsurf_log_path;
 #else
+#include <ciuki/recovery.h>
 const char *ciuki_netsurf_log_path="/system/logs/NETSURF.LOG";
+static bool netsurf_log_named;
 #endif
 #define CIUKI_NETSURF_LOG_MAX (64u*1024u)
 static const char *profile_path="/Documents/NetSurf";
@@ -636,7 +641,12 @@ int ciuki_chrome_arguments(int *argc,char **argv)
         else if(!strncmp(a,"--ciuki-profile=",16)) { profile_path=a+16;profile_requested=true;consumed=true; }
         else if(!strncmp(a,"--ciuki-capture=",16)) { ciuki_capture_path=a+16;consumed=true; }
         else if(!strcmp(a,"--ciuki-frame-bench")) { ciuki_frame_bench=true;consumed=true; }
-        else if(!strncmp(a,"--ciuki-log=",12)) { ciuki_netsurf_log_path=a+12;consumed=true; }
+        else if(!strncmp(a,"--ciuki-log=",12)) {
+            ciuki_netsurf_log_path=a+12;consumed=true;
+#ifndef CIUKI_HOST
+            netsurf_log_named=true;
+#endif
+        }
         else if(!strncmp(a,"--ciuki-clock-scale=",20)) {
             /* f6-20 T23 model: charge host layouts as a slower CPU. */
             char *end;unsigned long n=strtoul(a+20,&end,10);if(*end || !n || n>1000000) { exit_reason="bad-arguments";return -1; }
@@ -712,12 +722,23 @@ static int exit_line(char *line,size_t size,bool surface)
 static void netsurf_log(const char *line)
 {
     if(!ciuki_netsurf_log_path)return;
-    struct stat st;int flags=O_WRONLY|O_CREAT|O_APPEND;
-    if(!stat(ciuki_netsurf_log_path,&st) && st.st_size>=(off_t)CIUKI_NETSURF_LOG_MAX)flags=O_WRONLY|O_CREAT|O_TRUNC;
-    int fd=open(ciuki_netsurf_log_path,flags,0666);if(fd<0)return;
     char stamp[32]="unknown-time ";struct timespec now;struct tm utc;
     if(!clock_gettime(CLOCK_REALTIME,&now) && gmtime_r(&now.tv_sec,&utc))
         snprintf(stamp,sizeof(stamp),"%04d-%02d-%02dT%02d:%02d:%02dZ ",utc.tm_year+1900,utc.tm_mon+1,utc.tm_mday,utc.tm_hour,utc.tm_min,utc.tm_sec);
+#ifndef CIUKI_HOST
+    if(!netsurf_log_named) {
+        /* The service starts the file over past the limit, like the file path. */
+        size_t a=strlen(stamp),b=strlen(line);char *record=malloc(a+b);
+        if(!record)return;
+        memcpy(record,stamp,a);memcpy(record+a,line,b);
+        int r=ciuki_system_log_write(CIUKI_SYSTEM_LOG_USER,"NETSURF.LOG",0,record,a+b,CIUKI_NETSURF_LOG_MAX);
+        int error=errno;free(record);
+        if(!r || (error!=ENOSYS && error!=ENODEV))return;
+    }
+#endif
+    struct stat st;int flags=O_WRONLY|O_CREAT|O_APPEND;
+    if(!stat(ciuki_netsurf_log_path,&st) && st.st_size>=(off_t)CIUKI_NETSURF_LOG_MAX)flags=O_WRONLY|O_CREAT|O_TRUNC;
+    int fd=open(ciuki_netsurf_log_path,flags,0666);if(fd<0)return;
     ciuki_write_all(fd,stamp,strlen(stamp));ciuki_write_all(fd,line,strlen(line));close(fd);
 }
 /* fx-11: net.c's fetch error records (stage, errno, TLS codes, RTC state),

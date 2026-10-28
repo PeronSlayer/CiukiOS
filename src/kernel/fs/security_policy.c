@@ -81,7 +81,10 @@ int policy_init(struct policy_volume *v,uint64_t id,uint64_t mount,bool system,
         {"/Program Files",POLICY_PROGRAM},{"/Documents",POLICY_SHARED},
         {"/Documents/Desktop",POLICY_SHARED},
         {"/Documents/Desktop/Quake III Arena Demo",POLICY_PROGRAM},{"/CIUKILDR",POLICY_SEALED},
-        {"/BOOT.CFG",POLICY_SEALED}
+        {"/BOOT.CFG",POLICY_SEALED},
+        /* sec-sysvc: System File Checker's baseline, the trust input of the
+         * SYSTEM restore service; only the image builder writes it. */
+        {"/System/SFC.LST",POLICY_SEALED}
     };
     if (system) for (unsigned i=0;i<sizeof(defaults)/sizeof(*defaults);i++) {
         int e=policy_rule_add(v,defaults[i].path,defaults[i].kind); if (e) return e;

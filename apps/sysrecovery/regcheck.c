@@ -368,6 +368,8 @@ static int restore_entry(const char *root, const char *dir, const uint8_t *en, c
     }
     char p[512];
     int e = full(p, sizeof(p), root, path); if (e) return e;
+    /* sec-sysvc: BOOT.CFG is sealed; the SYSTEM service restores it. */
+    if (!strcasecmp(path, "/system/BOOT.CFG") && n <= CIUKI_BOOT_CONFIG_MAX && !sr_boot_config(root, (const char *)data, n, &e)) return e;
     return replace(p, data, n);
 }
 int rc_restore(const char *root, const char *name)

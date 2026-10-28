@@ -24,6 +24,7 @@ static struct reg_remote registry_broker={.fd=-1};
 #endif
 uint32_t desk_w32_record(void *,uint32_t);
 extern int desk_w32_crash_store(const char *,const struct ciuki_w32_fault *) __attribute__((weak));
+extern int desk_w32_crash_log(const struct ciuki_w32_fault *) __attribute__((weak)); /* sec-sysvc */
 extern void desk_w32_fault_dialog(struct desktop *,const struct ciuki_w32_fault *) __attribute__((weak));
 extern void desk_v3_revoke(struct desktop *) __attribute__((weak));
 extern void desk_v3_pointer_release(struct desktop *) __attribute__((weak));
@@ -33,9 +34,14 @@ static pthread_mutex_t crash_disk_lock=PTHREAD_MUTEX_INITIALIZER;
 static void *crash_disk_worker(void *p)
 {
     pthread_mutex_lock(&crash_disk_lock);
-    /* G13: native program faults live with the other logs (BOOT.LOG, NETSURF.LOG). */
+    /* sec-sysvc: the report is the faulting user's own log, written through
+     * the SYSTEM log service (Log Viewer lists it). An older kernel (ENOSYS)
+     * keeps G13's folders: native faults with the other logs, Win32 ones in
+     * C:\WINDOWS\CRASH. */
     const struct ciuki_w32_fault *f=p;
-    int error=desk_w32_crash_store?desk_w32_crash_store(f->kind==W32_REPORT_NATIVE_FAULT?"/system/logs":"/WINDOWS/CRASH",p):-ENOSYS;
+    int error=desk_w32_crash_log?desk_w32_crash_log(f):-ENOSYS;
+    if(error==-ENOSYS || error==-ENODEV)
+        error=desk_w32_crash_store?desk_w32_crash_store(f->kind==W32_REPORT_NATIVE_FAULT?"/system/logs":"/WINDOWS/CRASH",p):-ENOSYS;
     pthread_mutex_unlock(&crash_disk_lock);
     if(error)fprintf(stderr,"[win32] warning check=crash-file-write error=%d\n",error);
     free(p);return NULL;

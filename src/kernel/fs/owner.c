@@ -112,6 +112,28 @@ int owner_save_records(struct owner_store *s,const struct owner_request *q,struc
     r->state=OWNER_COMMITTED; s->active=0; memset(s->pending,0,sizeof(s->pending));
     return owner_persist(s);
 }
+/* sec-sysvc (lead decision, first-boot uid recovery): a power cut between
+ * OWNER's durable RESERVE and ACCOUNT's intent write leaves an orphan that the
+ * next boot aborts, which raises uid_high past the ready/Setup recipe's uid.
+ * Such a uid may be reserved again only while the store's complete history
+ * proves that nothing was ever published: no committed generation or account
+ * batch, no checkpoint floor or candidate (every receipt since creation is
+ * retained), no profile record, no batch in flight, every receipt ABORTED,
+ * and at least one of them named this uid. Every other uid below the
+ * watermark stays retired (contract 3.5). Creator-root records may name the
+ * uid (the interim session's own entries); they are not profile ownership. */
+static bool first_boot_retry(const struct owner_store *s,uint32_t uid)
+{
+    if(s->generation || s->committed_accounts_high || s->floor || s->candidate || s->checkpoint[0] ||
+       s->profile_count || s->active || s->root_key) return false;
+    bool named=false;
+    for(unsigned i=0;i<s->receipt_count;i++) {
+        struct owner_receipt *r=s->receipts[i];
+        if(r->state!=OWNER_ABORTED) return false;
+        for(unsigned j=0;j<r->count;j++) if(fs_rd32(receipt_results(r)+32*j)==uid) named=true;
+    }
+    return named;
+}
 static int validate_bindings(struct owner_store *s,const struct owner_request *q)
 {
     unsigned creates=0;
@@ -120,7 +142,7 @@ static int validate_bindings(struct owner_store *s,const struct owner_request *q
         if(b->action==OWNER_CREATE) {
             int occupied=occupied_records(s,b->path);
             if(old || occupied) return occupied<0?occupied:-EEXIST;
-            if(b->uid>=1000 && b->uid<s->uid_high) return -EIO;
+            if(b->uid>=1000 && b->uid<s->uid_high && !first_boot_retry(s,b->uid)) return -EIO; /* sec-sysvc */
             creates++;
         } else if(!old || old->retired || old->binding.key!=b->key || old->binding.generation!=b->generation ||
                    memcmp(old->binding.path,b->path,64)) return -EIO;
