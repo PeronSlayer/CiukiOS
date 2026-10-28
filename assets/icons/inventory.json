@@ -1966,6 +1966,17 @@
     "status": "retained"
   },
   {
+    "icon": "emblem-readonly",
+    "object": "apps/desktop/shell.c:emblem-readonly",
+    "previous": "emblem-readonly",
+    "previous_derived_sizes": [
+      48
+    ],
+    "previous_missing_runtime_sizes": [],
+    "source": "apps/desktop/shell.c",
+    "status": "retained"
+  },
+  {
     "icon": "emblem-symbolic-link",
     "object": "apps/desktop/shell.c:emblem-symbolic-link",
     "previous": "emblem-symbolic-link",
