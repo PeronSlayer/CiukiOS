@@ -154,7 +154,13 @@ class Codecs(unittest.TestCase):
                 src.bytes=n
                 self.assertLess(lib.ICDecompress(h,0,C.byref(src),buffer(key[:n]),C.byref(dest),pixels),0)
             src.bytes=len(key)+1
-            self.assertLess(lib.ICDecompress(h,0,C.byref(src),buffer(key+b'\x99'),C.byref(dest),pixels),0)
+            if kind=='mrle':
+                # fx-hlrun: the end-of-bitmap code ends an RLE frame; biSizeImage
+                # may be larger (Wine 10.0 msrle32.c MSRLE32_DecompressRLE8).
+                self.assertEqual(lib.ICDecompress(h,0,C.byref(src),buffer(key+b'\x99'),C.byref(dest),pixels),0)
+                self.assertEqual(pixels.raw,expected)
+            else:
+                self.assertLess(lib.ICDecompress(h,0,C.byref(src),buffer(key+b'\x99'),C.byref(dest),pixels),0)
         finally:self.assertEqual(lib.ICClose(h),0)
         self.assertEqual(lib.ICClose(h),-8)
         return hashlib.sha256(expected).hexdigest()
@@ -188,6 +194,32 @@ class Codecs(unittest.TestCase):
             self.assertEqual(pixels.raw[:5],bytes((1,2,3,4,5)))
             self.assertEqual(pixels.raw[15],6)
         finally:lib.ICClose(h)
+
+    def test_rle_output_format_and_stream_sized_frames(self):
+        """fx-hlrun: ICM_DECOMPRESS_GET_FORMAT for indexed output answers the
+        header and colour table size and copies the source's table (Wine
+        10.0 msrle32.c DecompressGetFormat); a frame whose biSizeImage is the
+        stream's largest frame decodes up to its end-of-bitmap code, as
+        comctl32's animation control decodes RLE8 AVIs (Half-Life's
+        launcher banner)."""
+        lib=self.lib;h=lib.ICOpen(four('vidc'),four('mrle'),2);self.assertTrue(h)
+        try:
+            source=bytearray(40+16)
+            struct.pack_into('<IiiHHIIiiII',source,0,40,4,1,1,8,1,4096,0,0,4,0)
+            source[40:]=bytes(range(16))
+            src=C.create_string_buffer(bytes(source),len(source))
+            self.assertEqual(lib.ICSendMessage(h,0x400a,C.addressof(src),0),56)
+            out=C.create_string_buffer(56)
+            self.assertEqual(lib.ICSendMessage(h,0x400a,C.addressof(src),C.addressof(out)),0)
+            self.assertEqual(out.raw[40:],bytes(range(16)))
+            size,width,height,planes,bits,compression,image=struct.unpack_from('<IiiHHII',out.raw)
+            self.assertEqual((size,width,height,bits,compression,image),(40,4,1,8,0,4))
+            frame=Bitmap(40,4,1,1,8,1,4096);dest=Bitmap(40,4,1,1,8,0,4);pixels=C.create_string_buffer(4)
+            self.assertEqual(lib.ICSendMessage(h,0x400c,C.addressof(frame),C.addressof(dest)),0)
+            data=bytes((4,9,0,1))+bytes(64)
+            self.assertEqual(lib.ICDecompress(h,0,C.byref(frame),buffer(data),C.byref(dest),pixels),0)
+            self.assertEqual(pixels.raw,b'\x09'*4)
+        finally:self.assertEqual(lib.ICClose(h),0)
 
     def test_avi_read_stream_and_decoded_frames(self):
         lib=self.lib;key=bytes((4,7,0,0))*3+bytes((4,7,0,1));data=buffer(F.avi((key,b'\0\1')))

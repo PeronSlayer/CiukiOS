@@ -10,13 +10,38 @@
 #include <string.h>
 #include <strings.h>
 #include <unistd.h>
+#ifdef H1_FONTS
+#include "../../../../apps/w32srv/fonts.h"
+#endif
 struct fixture_service {
     struct wr_server registry;
     struct ws_shell *shell;
     struct ws_fs native, mapped;
     char root[1024], hives[1100];
     unsigned fault;
+#ifdef H1_FONTS
+    struct wf_service *fonts;
+    char font_system[256], font_install[256];
+#endif
 };
+#ifdef H1_FONTS
+/* fx-hlrun: the production w32srv font service (fonts.c over libfont and
+ * FreeType) behind gdi32's PE-to-native bridge, so H1 dialogs and windows
+ * render their text. gdi32 names faces by their guest store paths:
+ * /System/fonts/X.ttf (the pinned system faces, here the repository's
+ * Liberation directory given by CIUKI_H1_FONTS) and /WINDOWS/FONTS/X.ttf
+ * (installed faces, here the fixture C: tree). */
+static uint32_t fixture_font_call(void *opaque,uint32_t pid,const struct w32r_request *a,const char *path,
+                                  const void *data,struct w32r_reply *r,uint8_t *out,size_t cap){
+    struct fixture_service *s=opaque;char mapped_path[600]="";
+    const char *base=NULL,*dir=NULL;
+    if(!strncasecmp(path,"/System/fonts/",14)){base=path+14;dir=s->font_system;}
+    else if(!strncasecmp(path,"/WINDOWS/FONTS/",15)){base=path+15;dir=s->font_install;}
+    if(*path && !base)return 2;
+    if(base && snprintf(mapped_path,sizeof(mapped_path),"%s/%s",dir,base)>=(int)sizeof(mapped_path))return 206;
+    return wf_call(s->fonts,pid,a,mapped_path,data,r,out,cap);
+}
+#endif
 /* The fixture disk is case-insensitive and case-preserving for PE I/O
  * (host_services.Session.path), as FAT is for the production replay and
  * probe. Resolve every existing component of the host path the same way:
@@ -76,6 +101,16 @@ void *installer_service_create(const char *root){
     s->shell=ws_create(&s->mapped,&config,&s->registry);
     if(!s->shell){wr_destroy(&s->registry);free(s);return 0;}
     s->registry.shell=s->shell;s->registry.shell_call=ws_call;s->registry.shell_exit=ws_exit;
+#ifdef H1_FONTS
+    const char *system=getenv("CIUKI_H1_FONTS");
+    if(system && strlen(system)<sizeof(s->font_system) &&
+       snprintf(s->font_install,sizeof(s->font_install),"%s/C/WINDOWS/FONTS",root)<(int)sizeof(s->font_install)){
+        strcpy(s->font_system,system);
+        struct wf_config config={.system_dir=s->font_system,.install_dir=s->font_install};
+        s->fonts=wf_create(&config);
+        if(s->fonts){s->registry.font_call=fixture_font_call;s->registry.fonts=s;}
+    }
+#endif
     return s;
 }
 uint32_t installer_service_exchange(void *ctx,uint32_t pid,const void *in,uint32_t n,void *out,uint32_t cap,uint32_t *used){
@@ -83,7 +118,11 @@ uint32_t installer_service_exchange(void *ctx,uint32_t pid,const void *in,uint32
     uint32_t e=wr_dispatch(&s->registry,pid,in,n,out,cap,&bytes);*used=(uint32_t)bytes;return e;
 }
 uint32_t installer_service_exit(void *ctx,uint32_t pid){return wr_exit(&((struct fixture_service *)ctx)->registry,pid);}
-uint32_t installer_service_destroy(void *ctx){struct fixture_service *s=ctx;uint32_t e=wr_flush(&s->registry);ws_destroy(s->shell);wr_destroy(&s->registry);free(s);return e;}
+uint32_t installer_service_destroy(void *ctx){struct fixture_service *s=ctx;uint32_t e=wr_flush(&s->registry);ws_destroy(s->shell);wr_destroy(&s->registry);
+#ifdef H1_FONTS
+    wf_destroy(s->fonts);
+#endif
+    free(s);return e;}
 uint32_t installer_service_restart_begin(void *ctx){return ws_restart_begin(((struct fixture_service *)ctx)->shell,2);}
 uint32_t installer_service_restart_phase(void *ctx){return ws_restart_phase(((struct fixture_service *)ctx)->shell);}
 int installer_service_restart_tick(void *ctx){return ws_restart_tick(((struct fixture_service *)ctx)->shell);}

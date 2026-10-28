@@ -43,6 +43,7 @@
 - K8-4: `security.kdf` reports min/median/max and prints WARN above a 1,000 ms median; it never fails the self-test, because the figure depends on the CPU.
 - K8-5: images ship without `power.cfg`; the defaults (button: Shut down, lid: nothing) apply.
 - K8-6: every future directive that adds a syscall, call-99 action, channel operation, device command or policy kind adds its census row in `tests/host/security/policy_census.py`. The census test enforces it.
+- K8-7 (sec-k08b, 2026-10-28 18:15): the kernel programs the hard-disk timer of the live desktop session's user. In Windows 2000/XP the spindown timeout belongs to the per-user power policy ([USER_POWER_POLICY](https://learn.microsoft.com/en-us/windows/win32/api/powrprof/ns-powrprof-user_power_policy) `SpindownTimeoutAc/Dc`); the machine policy stays administrator-only. Call-73 POLICY for the disk timer admits `security_device_desktop(proc_current())` beside the administrator gate; missing or revoked identities are refused, and `power_authorized` (which admits SYSTEM logon roles) is not used.
 
 ## Lead decisions on the sec-user-06 questions (2026-10-28 15:21)
 - U6-1 approved: the security acceptance cases are ordinary menu boots chosen by the runner, because a fw_cfg test item replaces the normal boot and LOGON never starts.

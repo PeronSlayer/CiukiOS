@@ -706,6 +706,51 @@ static void test_objects_sections(void)
     CHECK(!ua_read(p->memory, &read, base, 4) && !read);
     CHECK(!ua_write(p->memory, base, &value, 4) && !ua_read(other->memory, &read, peer_base, 4)
         && read == value);
+    {
+        /* fx-hlrun: OpenFileMapping opens a section by the name CreateFileMapping
+         * gave it (one global namespace); missing names, unnamed requests and
+         * other object types fail as on Windows. Names live in user memory. */
+        static const uint16_t shared_name[] = { 'H', 'L', 'S', 'h', 'a', 'r', 'e', 0 },
+                              absent_name[] = { 'H', 'L', 'X', 0 }, event_name[] = { 'H', 'L', 'E', 0 };
+        uint32_t names = base + 1024;
+        CHECK(!ua_write(p->memory, names, shared_name, sizeof(shared_name))
+            && !ua_write(p->memory, names + 64, absent_name, sizeof(absent_name))
+            && !ua_write(p->memory, names + 128, event_name, sizeof(event_name)));
+        struct ciuki_w32_section_args named_sec
+            = { .kind = W32_SEC_PAGEFILE, .bytes = 65536, .protect = W32_PAGE_READWRITE, .name = names };
+        CHECK(!w32_section_call(t, &named_sec) && !named_sec.error);
+        struct ciuki_w32_object_args open
+            = { .action = W32_OBJ_OPEN, .type = W32_OBJ_SECTION, .name = names, .access = UINT32_MAX };
+        CHECK(!w32_object_call(t, &open) && !open.error && open.result != named_sec.result
+            && w32_lookup(t, open.result, 0) == w32_lookup(t, named_sec.result, 0));
+        struct ciuki_w32_view_args nv = { .action = W32_VIEW_MAP, .section = named_sec.result, .bytes = 4096,
+            .access = W32_FILE_MAP_WRITE };
+        CHECK(!w32_view_call(t, &nv) && !nv.error);
+        uint32_t creator_view = nv.address;
+        nv = (struct ciuki_w32_view_args) { .action = W32_VIEW_MAP, .section = open.result, .bytes = 4096,
+            .access = W32_FILE_MAP_WRITE };
+        CHECK(!w32_view_call(t, &nv) && !nv.error && nv.address != creator_view);
+        uint32_t opened_view = nv.address, mark = 0x484c4f4d, seen = 0;
+        CHECK(!ua_write(p->memory, creator_view + 8, &mark, 4) && !ua_read(p->memory, &seen, opened_view + 8, 4)
+            && seen == mark);
+        struct ciuki_w32_object_args miss
+            = { .action = W32_OBJ_OPEN, .type = W32_OBJ_SECTION, .name = names + 64, .access = UINT32_MAX };
+        CHECK(!w32_object_call(t, &miss) && miss.error == 2);
+        miss = (struct ciuki_w32_object_args) { .action = W32_OBJ_OPEN, .type = W32_OBJ_SECTION, .access = UINT32_MAX };
+        CHECK(!w32_object_call(t, &miss) && miss.error == 87);
+        struct ciuki_w32_object_args ev
+            = { .action = W32_OBJ_CREATE, .type = W32_OBJ_EVENT, .name = names + 128, .access = UINT32_MAX };
+        CHECK(!w32_object_call(t, &ev) && !ev.error);
+        miss = (struct ciuki_w32_object_args) { .action = W32_OBJ_OPEN, .type = W32_OBJ_SECTION, .name = names + 128,
+            .access = UINT32_MAX };
+        CHECK(!w32_object_call(t, &miss) && miss.error == 6);
+        for (uint32_t view_base = creator_view, k = 0; k < 2; view_base = opened_view, k++) {
+            nv = (struct ciuki_w32_view_args) { .action = W32_VIEW_UNMAP, .address = view_base };
+            CHECK(!w32_view_call(t, &nv) && !nv.error);
+        }
+        CHECK(!w32_handle_close(p, ev.result) && !w32_handle_close(p, open.result)
+            && !w32_handle_close(p, named_sec.result));
+    }
     va = (struct ciuki_w32_view_args) {
         .action = W32_VIEW_MAP, .section = section, .bytes = 4096, .offset_lo = 1, .access = W32_FILE_MAP_READ
     };

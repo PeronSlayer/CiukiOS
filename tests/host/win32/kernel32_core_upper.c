@@ -55,6 +55,12 @@ int32_t w32_ciuki_call(void *record, uint32_t n) {
     CHECK(n == sizeof(*a) && a->name);
     copy(section_name, (const WCHAR *)(uintptr_t)a->name);
     a->result = 0x40 + 4 * sections++;
+    for (unsigned i = 0; i < 8; i++) /* fx-hlrun: OpenFileMapping finds it */
+      if (!objects[i].type) {
+        objects[i].type = W32_OBJ_SECTION;
+        copy(objects[i].name, section_name);
+        break;
+      }
     return 0;
   }
   CHECK(h->operation == W32_OBJECT && n == sizeof(struct ciuki_w32_object_args));
@@ -133,6 +139,21 @@ static void *run(void *unused) {
   CHECK(CreateFileMappingW(K32_INVALID, 0, 4, 0, 4096, fresh) == (HANDLE)0x40 &&
         section_name[1] == 0x20ac && !section_name[2]);
   CHECK(!CreateFileMappingW(K32_INVALID, 0, 4, 0, 4096, han) && GetLastError() == 123);
+  /* fx-hlrun: OpenFileMappingA/W open the named section with full access
+   * (Windows 9x does not check section access); no name is 87 without a
+   * record, an unknown name 2, another object type 6. */
+  extern HANDLE W32API OpenFileMappingA(DWORD, BOOL, const char *);
+  extern HANDLE W32API OpenFileMappingW(DWORD, BOOL, const WCHAR *);
+  const WCHAR mapping[] = {'H', 'L', 'm', 'a', 'p', 0};
+  CHECK(CreateFileMappingW(K32_INVALID, 0, 4, 0, 4096, mapping) == (HANDLE)0x44);
+  HANDLE opened = OpenFileMappingA(4 /* FILE_MAP_READ */, 0, "HLmap");
+  CHECK(opened && last_access == ~0u && GetLastError() == 0);
+  CHECK(OpenFileMappingW(2, 0, mapping) == opened && last_access == ~0u);
+  last_access = 0;
+  CHECK(!OpenFileMappingA(4, 0, 0) && GetLastError() == 87 && last_access == 0);
+  CHECK(!OpenFileMappingW(4, 0, 0) && GetLastError() == 87);
+  CHECK(!OpenFileMappingA(4, 0, "nothing") && GetLastError() == 2);
+  CHECK(!OpenFileMappingA(4, 0, "evt\xe9") && GetLastError() == 6);
   return 0;
 }
 int main(void) {

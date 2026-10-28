@@ -484,6 +484,30 @@ static void static_paint(HWND h, HDC dc) {
   u32_mnemonic_text(dc, r, c->text, c->font, dc_text(dc), flags,
                     !enabled(h));
 }
+/* fx-hlrun: a static control paints at once when its text, image or
+ * enabled state changes (GetDC, WM_CTLCOLORSTATIC, the style's paint), and
+ * only when visible; a text change does not invalidate it. Windows USER
+ * does this, as Wine 10.0 dlls/user32/static.c STATIC_TryPaintFcn for
+ * WM_SETTEXT (text styles), WM_ENABLE, STM_SETIMAGE and STM_SETICON.
+ * Half-Life's launcher sets its menu descriptions with SetWindowText and
+ * paints nothing itself in their WM_PAINT. */
+static BOOL static_text_style(struct u32_window *w) {
+  UINT type = w->style & SS_TYPEMASK;
+  return type == SS_LEFT || type == SS_CENTER || type == SS_RIGHT || type == SS_SIMPLE ||
+         type == SS_LEFTNOWORDWRAP || type == SS_OWNERDRAW;
+}
+static void static_paint_now(HWND h) {
+  if (!IsWindowVisible(h))
+    return;
+  HDC dc = GetDC(h);
+  if (!dc)
+    return;
+  struct control *c = control(h);
+  DWORD old = c ? select_font(dc, c) : 0;
+  static_paint(h, dc);
+  restore_font(dc, old);
+  ReleaseDC(h, dc);
+}
 static LRESULT static_message(HWND h, UINT m, WPARAM wp, LPARAM lp,
                               BOOL *handled) {
   struct u32_window *w = u32_window(h);
@@ -496,7 +520,7 @@ static LRESULT static_message(HWND h, UINT m, WPARAM wp, LPARAM lp,
   case STM_SETIMAGE: {
     HANDLE old = c->image;
     c->image = m == STM_SETICON ? (HANDLE)wp : (HANDLE)lp;
-    changed(h);
+    static_paint_now(h);
     return (LRESULT)old;
   }
   case STM_GETICON:
@@ -508,7 +532,7 @@ static LRESULT static_message(HWND h, UINT m, WPARAM wp, LPARAM lp,
       notify(h, m == WM_LBUTTONDOWN ? STN_CLICKED : STN_DBLCLK);
     return 0;
   case WM_ENABLE:
-    changed(h);
+    static_paint_now(h);
     return 0;
   default:
     *handled = 0;
@@ -2798,7 +2822,10 @@ LRESULT W32API u32_control_proc(HWND h, UINT m, WPARAM wp, LPARAM lp) {
     DefWindowProcA(h, m, wp, lp && w32_strlen((const char *)lp) <= 255
                                  ? lp
                                  : (LPARAM) "");
-    changed(h);
+    if (c->kind == STATIC && (w = u32_window(h)) && static_text_style(w))
+      static_paint_now(h); /* fx-hlrun */
+    else
+      changed(h);
     return 1;
   }
   case WM_GETTEXTLENGTH:

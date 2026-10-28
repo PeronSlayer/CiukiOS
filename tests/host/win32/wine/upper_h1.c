@@ -89,6 +89,37 @@ static int logged_invoke(void *opaque, void *proc, void *module, uint32_t reason
 
 /* Allow system calls only from the adapter ELF text (host_syscall, the
  * signal restorer). Everything else gets -ENOSYS without a signal. */
+#ifdef H1_INSTALLERS
+#include <asm/sigcontext.h>
+struct h1_ucontext {
+    ULONG flags, link;
+    struct {
+        ULONG sp, flags, size;
+    } stack;
+    struct sigcontext sc;
+};
+extern void host_sigreturn(void);
+/* fx-hlrun: SIGSYS from SECCOMP_RET_TRAP. siginfo's _sigsys.syscall (word
+ * 4) is the CiukiOS call number; the arguments are still in ebx, ecx, edx
+ * and esi; the result goes to eax and the PE resumes after its int 0x80. */
+static void sys_handler(int signal, const ULONG *info, struct h1_ucontext *uc) {
+    (void)signal;
+    struct sigcontext *s = &uc->sc;
+    int32_t result = -38;
+    if (!h1_game_syscall(info[4], s->ebx, s->ecx, s->edx, s->esi, &result))
+        result = -38;
+    s->eax = (ULONG)result;
+}
+static int sys_trap(void) {
+    struct {
+        void *handler;
+        ULONG flags;
+        void *restorer;
+        ULONG mask[2];
+    } action = {(void *)sys_handler, 0x44000004, host_sigreturn, {0, 0}};
+    return !host_syscall(174, 31 /* SIGSYS */, (ULONG)(uintptr_t)&action, 0, 8, 0, 0);
+}
+#endif
 static int sandbox(void) {
     struct {
         uint16_t code;
@@ -103,6 +134,14 @@ static int sandbox(void) {
         {0x06, 0, 0, 0x7fff0000u},                         /* allow */
         {0x06, 0, 0, 0x00050000u | 38u},                   /* ERRNO ENOSYS */
     };
+#ifdef H1_INSTALLERS
+    /* fx-hlrun: in game mode a PE int 0x80 traps (SIGSYS) into the
+     * adapter's emulation of the CiukiOS calls it serves (h1_game_syscall:
+     * the /dev/media CD drive); everything else still gets -ENOSYS and no
+     * PE call ever reaches Linux. */
+    if (game_exec)
+        filter[6].k = 0x00030000u; /* SECCOMP_RET_TRAP */
+#endif
     struct {
         uint16_t len;
         void *filter;
@@ -507,6 +546,10 @@ static int run_exe(const char *exe, const char *test) {
         return 8;
     host.teb.Tib.StackLimit = stack;
     host.teb.Tib.StackBase = (uint8_t *)stack + bytes;
+#ifdef H1_INSTALLERS
+    if (game_exec)
+        h1_game_exe(m->pe.image);
+#endif
     int value = host_entry(m->pe.image + m->pe.entry, host.teb.Tib.StackBase);
     host_print("RESULT entry-returned ");
     host_number((ULONG)value);
@@ -677,6 +720,12 @@ int host_main(int argc, char **argv) {
      * that execution blocker from a SIGSYS after PE execution began. */
     if (preflight)
         host_print("H1-SANDBOX enter\n");
+#ifdef H1_INSTALLERS
+    if (game_exec && !sys_trap()) {
+        host_print("SANDBOX-UNAVAILABLE SIGSYS handler refused\n");
+        return 77;
+    }
+#endif
     if (!sandbox()) {
         host_print("SANDBOX-UNAVAILABLE seccomp filter refused\n");
         return 77;

@@ -324,7 +324,7 @@ unsigned W32API SetDIBColorTable(HDC h, unsigned first, unsigned count,
     s->colors[first + i] = ((DWORD)entries[i].rgbRed << 16) |
                            ((DWORD)entries[i].rgbGreen << 8) |
                            entries[i].rgbBlue;
-  gdi_damage(d, (RECT){0, 0, (LONG)s->width, (LONG)s->height});
+  gdi_repaint(d, (RECT){0, 0, (LONG)s->width, (LONG)s->height});
   return count;
 }
 unsigned W32API GetDIBColorTable(HDC h, unsigned first, unsigned count,

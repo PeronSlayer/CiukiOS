@@ -31,7 +31,14 @@ FILE, SYSTEM, PROCESS = 0x109, 0x10a, 0x10b
 OBJECT, WAIT = 0x100, 0x101
 
 
-def build_bridge(out):
+# fx-hlrun: the Liberation faces gdi32 loads as its system fonts.
+FONTS = ROOT / 'assets/fonts/liberation'
+
+
+def build_bridge(out, fonts=False):
+    """The fixture w32srv library. With fonts, the production font service
+    (apps/w32srv/fonts.c, libfont, FreeType) answers gdi32's glyph requests,
+    so windows render their text (Services(fonts=True) stages the faces)."""
     out = Path(out)
     out.mkdir(parents=True, exist_ok=True)
     sources = [ROOT / 'apps/w32srv' / (n + '.c') for n in
@@ -39,8 +46,20 @@ def build_bridge(out):
     sources += [ROOT / 'apps/desktop/installer_registry.c', ROOT / 'apps/desktop/protocol.c', HERE / 'service_bridge.c']
     flags = ['clang', '-std=c17', '-O1', '-g', '-Wall', '-Wextra', '-Werror',
              '-I' + str(ROOT / 'sdk/win32/include'), '-I' + str(ROOT / 'src/kernel/include')]
-    library = out / 'installer-services.so'
-    subprocess.run([*flags, '-fPIC', '-shared', '-Wl,--no-undefined', *map(str, sources), '-o', str(library)], check=True)
+    extra, link = [], []
+    if fonts:
+        import sys
+        if str(ROOT) not in sys.path:
+            sys.path.insert(0, str(ROOT))
+        from sdk.freetype import build as freetype
+        archive = freetype.build(out / 'freetype', flags=['-O2', '-fPIC'])
+        extra = ['-DH1_FONTS', '-D_GNU_SOURCE', '-idirafter', str(ROOT / 'sdk/sysroot-overlay/include'),
+                 *freetype.includes()]
+        sources += [ROOT / 'apps/w32srv/fonts.c', ROOT / 'sdk/libfont/font.c']
+        link = [str(archive), '-lm']
+    library = out / ('installer-services-fonts.so' if fonts else 'installer-services.so')
+    subprocess.run([*flags, *extra, '-fPIC', '-shared', '-Wl,--no-undefined', *map(str, sources), *link,
+                    '-o', str(library)], check=True)
     return library, flags, sources
 
 
@@ -181,13 +200,23 @@ def send(sock, raw):
 
 
 class Services:
-    def __init__(self, root, library, program=None):
+    def __init__(self, root, library, program=None, fonts=False):
         self.root = Path(root).resolve()
         self.program = program
         for name in ('C/WINDOWS/TEMP', 'C/WINDOWS/SYSTEM', 'C/WINDOWS/SYSTEM32',
                      'C/WINDOWS/Desktop', 'C/WINDOWS/Start Menu/Programs',
                      'C/Program Files', 'C/System/Win32/Fixtures', 'D', 'hives'):
             (self.root / name).mkdir(parents=True, exist_ok=True)
+        if fonts:
+            # fx-hlrun: as the image stages them, the pinned system faces
+            # in C:\WINDOWS\FONTS for gdi32 (a library built with
+            # build_bridge(fonts=True) rasterises them from FONTS).
+            (self.root / 'C/WINDOWS/FONTS').mkdir(parents=True, exist_ok=True)
+            for face in FONTS.glob('*.ttf'):
+                target = self.root / 'C/WINDOWS/FONTS' / face.name
+                if not target.is_file():
+                    shutil.copyfile(face, target)
+            os.environ['CIUKI_H1_FONTS'] = str(FONTS)
         self.registry = Registry(library, self.root)
         self.sessions, self.children, self.failures, self.trace = [], [], [], []
         self.named = {}
@@ -583,6 +612,10 @@ class Session:
                         if len(out) > cap:
                             raise ValueError('oversized H1 reply')
                     except Exception as error:
+                        # A session the test is ending may be killed between
+                        # two requests (fx-hlrun: a polling wait loop).
+                        if self.terminating and isinstance(error, (BrokenPipeError, ConnectionResetError, EOFError)):
+                            break
                         status, out = (-errno.ETIMEDOUT if isinstance(error, TimeoutError)
                                        else -errno.EINVAL if isinstance(error, (ValueError, struct.error))
                                        else -errno.EIO), b''

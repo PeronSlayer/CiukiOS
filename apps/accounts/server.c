@@ -98,10 +98,20 @@ int acct_server_open(struct acct_server *s, uint64_t now)
     if (prepared<0) note("first-boot migration refused",prepared);
     int e=acct_service_open(&s->service,&s->tables,s->host_test);
     if (!e && !s->service.available) {
+        int previous=s->firstboot_result;
         s->firstboot_result=acct_firstboot_promote(&s->service);
-        if (s->firstboot_result<0) note("first-boot promotion refused",s->firstboot_result);
+        if (s->firstboot_result<0) { if (s->firstboot_result!=previous) note("first-boot promotion refused",s->firstboot_result); }
         else if (s->firstboot_result==ACCT_FIRSTBOOT_PROMOTED) note("first boot: provisioning seed promoted",0);
         else if (s->firstboot_result==ACCT_FIRSTBOOT_ENROLLMENT) note("first boot: G32 enrollment required",0);
+        /* EAGAIN: the kernel OWNER store or the entropy generator is not
+         * ready yet on a slow first boot. The interrupted batch resumes
+         * through the recovery of the next open (contract 3.6), so close
+         * and reopen shortly instead of serving an unpublished store. */
+        if (s->firstboot_result==-EAGAIN) {
+            acct_service_close(&s->service);
+            s->next_open=now+ACCT_SERVER_FIRSTBOOT_RETRY_MS;
+            return 0;
+        }
     }
     /* end sec-user-02 */
     if (!e) {
