@@ -13,6 +13,8 @@
 #include "lwip/mem.h"
 #include <ciuki/net_stack.h>
 #include <ciuki/net_control.h>
+#include <ciuki/ipx_config.h>
+#include <ciuki/ipx_wire.h>
 #include <ciuki/files.h>
 #include "../security/subject_fixture.h"
 #include <ciuki/desktop.h>

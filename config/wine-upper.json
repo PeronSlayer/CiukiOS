@@ -23174,20 +23174,6 @@
       "action": "core-implement",
       "audit": "f5-20b",
       "f5_20b": "implemented outside the decision table",
-      "importer": "dplayx.dll",
-      "kind": "import",
-      "linked": "user32.dll",
-      "name": "GetMessageW",
-      "owner": "user32.dll",
-      "provider": "user32.dll",
-      "retarget": null,
-      "rule": "core-api-f5-20b",
-      "symbol": "GetMessageW"
-    },
-    {
-      "action": "core-implement",
-      "audit": "f5-20b",
-      "f5_20b": "implemented outside the decision table",
       "importer": "ole32.dll",
       "kind": "import",
       "linked": "user32.dll",
@@ -25994,7 +25980,7 @@
       "size_of_image": 86016
     },
     "dplay.dll": {
-      "base": 1956577280,
+      "base": 1956511744,
       "file_bytes": 24576,
       "license": "LGPL-2.1-or-later",
       "memory": {
@@ -26005,38 +25991,38 @@
       },
       "qualified": false,
       "resource_entries": 3,
-      "sha256": "0ed89cc3472bcf0cb6b51ceefae57fb69c5d0079d099d11bc50ff3279dfec6f1",
+      "sha256": "781fc1f42428ae067cf67a8ac93e5a54a197ab21242c6fdb10b9982ae91f0644",
       "size_of_image": 24576
     },
     "dplayx.dll": {
       "base": 1956315136,
-      "file_bytes": 200704,
+      "file_bytes": 196608,
       "license": "LGPL-2.1-or-later",
       "memory": {
         "private_cow_commitment_pages": 2,
-        "reserved_image_pages": 49,
-        "shared_seed_pages": 49,
-        "startup_committed_pages_model": 51
+        "reserved_image_pages": 48,
+        "shared_seed_pages": 48,
+        "startup_committed_pages_model": 50
       },
       "qualified": false,
       "resource_entries": 6,
-      "sha256": "c27b7d9a8a0ee8d202de02e38b0e4d54057259efdfa653ae1fb2413073857804",
-      "size_of_image": 200704
+      "sha256": "70af7c0a6f4e47fc0aed5c6edf263f732648631974649d91de72d5cd9d20924d",
+      "size_of_image": 196608
     },
     "dpwsockx.dll": {
-      "base": 1956642816,
-      "file_bytes": 53248,
+      "base": 1956577280,
+      "file_bytes": 57344,
       "license": "LGPL-2.1-or-later",
       "memory": {
         "private_cow_commitment_pages": 2,
-        "reserved_image_pages": 13,
-        "shared_seed_pages": 13,
-        "startup_committed_pages_model": 15
+        "reserved_image_pages": 14,
+        "shared_seed_pages": 14,
+        "startup_committed_pages_model": 16
       },
       "qualified": false,
       "resource_entries": 6,
-      "sha256": "7fea3de795289a9901e7d7601886d65029c85880cea273c682c55ea66dcaac68",
-      "size_of_image": 53248
+      "sha256": "c308629e8b22bbd05a91291fd5d507e3fbf2f6e317ff8a9ab52db97eab8268c6",
+      "size_of_image": 57344
     },
     "imm32.dll": {
       "base": 1955266560,
@@ -26510,8 +26496,8 @@
         },
         "kernel32.dll": {
           "missing": [],
-          "present": 44,
-          "required": 44
+          "present": 45,
+          "required": 45
         },
         "msvcrt.dll": {
           "missing": [],
@@ -26525,8 +26511,8 @@
         },
         "user32.dll": {
           "missing": [],
-          "present": 2,
-          "required": 2
+          "present": 1,
+          "required": 1
         },
         "winmm.dll": {
           "missing": [],
@@ -26562,8 +26548,8 @@
         },
         "ws2_32.dll": {
           "missing": [],
-          "present": 21,
-          "required": 21
+          "present": 20,
+          "required": 20
         }
       }
     },
@@ -27205,9 +27191,9 @@
     "adapter": "H0: native production-loader model, DllMain observed. H1: i386 Linux adapter, production loader and core PEs, every DllMain executed; PE ntdll with the H1 transport (identity, w32srv atoms, console), seccomp-confined.",
     "h0": {
       "core_pe_sha256": {
-        "advapi32.dll": "3f77f061c1bb639ff9ab96b7e0e3481c3e513d557410fab3ce9b8b312aa6ae55",
+        "advapi32.dll": "b200a891537a7bdbfbd00477bfda3cf81f9084bac2753f908c23d93861200fd7",
         "avifil32.dll": "c77006a43c4294de7f3417d1dc1ed437061f79e64b6f472c797f65b349dc4ffb",
-        "ciukishell.dll": "5ce78ec5ad02e6e3b5faf8712eaa7e2e4a11d5563b91381b651c0b17d4812bb0",
+        "ciukishell.dll": "ddb83ae3dc8bfcba5ca86472221cc8b52ea4e429e9411d914c673cd287a74ec3",
         "comctl32.dll": "8d7eb0beb67752e31f5ff2bc5d51cebd0e1da19d496a029dcefec0909143d1e3",
         "comdlg32.dll": "859b99b4b82f4aa5bfe8cd8586c1d7743fc4c92131777990aef2561cbce79c8c",
         "crtdll.dll": "1c56dd2bb2f3de7bc972924b8beaa6dad647c77bc09f5a6a915006344aeb36b4",
@@ -27218,13 +27204,13 @@
         "dsetup.dll": "9274f53f6d5ca4922f3e262629afa2f14406520fcacd08f20aa9c39824e58c20",
         "dsetup32.dll": "91f69e3ec7a682500427c439dc8192f5581b28b95deddf1376431b094eb23b58",
         "dsound.dll": "855fa6414ce50d66d31b09f88484627690d289e11fbaa90cc917afa19addffd8",
-        "gdi32.dll": "272e1bf6d08308d1e1babf2398b04b379a9e35b129425fba47a7cc29d6827c37",
+        "gdi32.dll": "3faa4bf9d23cdd165560c13e1f537d9dfa47f61708e22438fac6a4081944a1a5",
         "gdiplus.dll": "3ed094b7673e3bc0814591e29113d7a92971e8c5958410fea9038154d7b5527f",
         "iccvid.dll": "d8b3f834cb9bfe60ff3ce5c2da91c881b81596e18aec6bfb77d9c515642f9e6a",
         "imaadp32.acm": "1e8e83eaaeb948317d7366ee9d4f300cbfb188b2473b2e7a86339c22d8868b90",
         "imm32.dll": "bfc0303ec9f37891e39d7bc340e3e5551035b1dc1758310b2482f1f2dd8200c6",
         "iphlpapi.dll": "8cbacc90aa854c0db8cbd0e7fe7d5291e1cd7f7956b39f9a900234af36390f3b",
-        "kernel32.dll": "e3fcf3c5b41d6f3cf7cceeb2ac9643148d67850f21dfacfa615f4c291ceb73a8",
+        "kernel32.dll": "dd4e2b63214069f3a9053d6e1dd4c81d22b1b1ef80124f7f794440628b57cf71",
         "lz32.dll": "1e7e8dd8a9e4a57646395f0fbc20977bd2e4888e7137f6fe97d6b8beeb1b2dcb",
         "mciavi32.dll": "700277bb6a13f25b8ec75c5eb60675667c779a3e39142443cca3abc91b613cdc",
         "mlang.dll": "e3d117fc469a7d84512e8e7b6dd8925ba8b340682076652a427fe305c4e56e91",
@@ -27234,14 +27220,14 @@
         "msrle32.dll": "d2aa53813b41f8cf3ac35df6d0d3a62d55d613a282277bb15a5ab7e46ccd23a2",
         "msvfw32.dll": "5f0e1aa6f2220d0c01145e6fb48daa6fda636a5c754051cd4b5f6524958f47cb",
         "msvidc32.dll": "97b04ea696fc40fb0da85dc85dcfa47fd7bcafef6a2c53da0a73594f573995bf",
-        "ntdll.dll": "c024665020981f5db0c5c92add93a0dea586314a0a25d7a0ad3db5a8b594d6e3",
+        "ntdll.dll": "939cc90b0e98290b90b559614f286a192575add468588f16bb8c64afad0e8b8f",
         "ole32.dll": "f41cd7a4e60118f32d455140bc25d073006dc62f31d5e076b1102f08338ea532",
         "opengl32.dll": "3476a395375106ec5aecf7dbb3bfb25035c42e1857d8aa7255c7c084145b0466",
         "secur32.dll": "aafff2cfb3a566e7ead499cf7206295fbe058a2d8f8ab711dfd33670b003be69",
         "shdocvw.dll": "ce9853ecec3d7672418d2be3182df3da6ceb3332e117d665886f762d834fcf7d",
         "shell32.dll": "0eb583699e3f5395c011a306f0f9cbce1ea3e4e12dca7e87d8ca870e9f7ca765",
         "urlmon.dll": "7cf171c73ea1db4d4e81d82271b001f0483fad54717f078901899f5170cd9cc3",
-        "user32.dll": "c37f657ce010c2d162e1312049a569db80c8d918902901a037e780fd87144268",
+        "user32.dll": "f9be4ac5d3f607199cc2cd95b74f67dc6127243af2dd8c84189d345a86790d4f",
         "uxtheme.dll": "a98dff78d8ea63a30b6aba8520b4c3dd37f7ec04fdbd705c40f9345c04f8d107",
         "version.dll": "2178a19894de306582014714c1dcf5e058d3553838ed3e6393551f9e6b1d6996",
         "windowscodecs.dll": "dba4f13327018b67569964fcaff08895863ab94ddb53984d0a5f9aec25cac82d",
@@ -27355,9 +27341,9 @@
         "comctl32.dll": "2a53a0928333182841b15f7395b8db48a01b9016a2194e420f7c29780b6b212b",
         "comdlg32.dll": "88dc12a9b05acf4006b2bd87c0ac02b04558fe62e7985066563a499e2063f160",
         "coml2.dll": "a503cc5b92f4bd1e3fb10fd88ef8e0ebf2cab7ad9ec4a03ff01a8eae8edd4045",
-        "dplay.dll": "0ed89cc3472bcf0cb6b51ceefae57fb69c5d0079d099d11bc50ff3279dfec6f1",
-        "dplayx.dll": "c27b7d9a8a0ee8d202de02e38b0e4d54057259efdfa653ae1fb2413073857804",
-        "dpwsockx.dll": "7fea3de795289a9901e7d7601886d65029c85880cea273c682c55ea66dcaac68",
+        "dplay.dll": "781fc1f42428ae067cf67a8ac93e5a54a197ab21242c6fdb10b9982ae91f0644",
+        "dplayx.dll": "70af7c0a6f4e47fc0aed5c6edf263f732648631974649d91de72d5cd9d20924d",
+        "dpwsockx.dll": "c308629e8b22bbd05a91291fd5d507e3fbf2f6e317ff8a9ab52db97eab8268c6",
         "msvcrt.dll": "8161d40c05af35d2ca99ced2c4d4cead51b3a11d12104fb2ada2e22d67c89967",
         "ole32.dll": "af5a3bd5db02edd9747d383e515f0cd66fa309dd9b7d4e606d9746b79ef612ea",
         "oleaut32.dll": "83d80452bdb4c017ab938cb9d737ebe136b4e82d99b11bcb7615162c22cadee8",
@@ -28383,7 +28369,7 @@
         "_wopen",
         "wcscpy_s"
       ],
-      "sdk_libc_sha256": "e5dfc95851ece618ae75bef1c116c6081aa4f889c515ae4f0fe2d2445887db3d",
+      "sdk_libc_sha256": "bf5a953a2007065d4c0487e0947a5eb161ab6142cab57d8e9578cc974e61f12e",
       "startup_pages_estimate": 27
     },
     "surface": [
@@ -28526,7 +28512,9 @@
       "0010-msvcrt-sbcs-code-page.patch": "f8a8a9fd32068f1178b327a4f6b727a0319ad6104ceb5750f6d0bd3e7c442870",
       "0011-directplay-lan.patch": "bfd3ed25ec82479e9b195f4c2abafc2dd1445948ddbc12ecf3e07a13322f66eb",
       "0012-directplay-lobby.patch": "7a48280f6b928187c8dc74f8bb4ccf6856dec440a22cd67e23f46387cfd24383",
-      "0013-directplay-enumeration.patch": "fa3d13ff507e75f0b7f549ff65cdd9ac251b486532f3eb569988b4655d4d8415"
+      "0013-directplay-enumeration.patch": "fa3d13ff507e75f0b7f549ff65cdd9ac251b486532f3eb569988b4655d4d8415",
+      "0014-directplay-ipx.patch": "694344d687101098795630d37a30d60516525964e1788e891597d9e6877da7e1",
+      "0015-directplay-lobby-lifetime.patch": "28699775c3b60229d60d046dcedad1136675c325f0fc9a9a9bf4fcda6ad218c8"
     },
     "strip": "llvm-objcopy --strip-all"
   },

@@ -32,7 +32,15 @@ void ipx_init(struct ipx_stack *s, const uint8_t node[6], void *arg,
               int (*send)(void *,const uint8_t *,unsigned))
 {
     memset(s,0,sizeof(*s)); memcpy(s->node,node,6); s->arg=arg; s->send=send;
-    s->next_socket=0x4000; s->next_id=1; s->framing=IPX_II; s->link=true;
+    s->next_socket=0x4000; s->next_id=1; s->framing=IPX_LLC; s->frame_type=CIUKI_IPX_FRAME_AUTO; s->link=true;
+}
+int ipx_set_framing(struct ipx_stack *s, unsigned type)
+{
+    if (type>CIUKI_IPX_FRAME_AUTO) return -EINVAL;
+    if (type==s->frame_type) return 0;
+    s->frame_type=type; s->framing=ipx_frame_wire(type); s->probed=false;
+    s->routers=0; memset(s->scores,0,sizeof(s->scores));
+    return 0;
 }
 int ipx_open(struct ipx_stack *s, unsigned type, unsigned protocol)
 {
@@ -98,7 +106,7 @@ static int emit_as(struct ipx_stack *s,const uint8_t *p,unsigned n,unsigned f)
     return bytes<0 ? bytes : s->send ? s->send(s->arg,wire,(unsigned)bytes) : -ENETDOWN;
 }
 static int emit(struct ipx_stack *s,const uint8_t *p,unsigned n)
-{ return emit_as(s,p,n,s->framing); }
+{ return emit_as(s,p,n,ipx_frame_reply(&s->frames,p,s->framing)); }
 static unsigned window(struct ipx_endpoint *e)
 { return (uint16_t)(e->expected+(e->shut_read ? IPX_QUEUE : IPX_QUEUE-e->count)-1); }
 static int spx_packet(struct ipx_stack *s,struct ipx_endpoint *e,unsigned ctrl,unsigned stream,
@@ -215,7 +223,7 @@ static bool enqueue(struct ipx_endpoint *e,const uint8_t *p,unsigned n)
 static void learn(struct ipx_stack *s,const uint8_t *p,unsigned f,unsigned bytes)
 {
     /* Only a valid directly attached RIP response is a discovery vote. */
-    if(s->now>s->discovery_end || p[19]!=1 || ipx_be16(p+30)!=0x453 ||
+    if(s->frame_type!=CIUKI_IPX_FRAME_AUTO || s->now>s->discovery_end || p[19]!=1 || ipx_be16(p+30)!=0x453 ||
        ipx_be16(p+42)!=0x453 || bytes<54 || ipx_be16(p+44)!=2 ||
        (bytes-46)%8 || zero(p+32,4))return;
     for(unsigned i=0;i<s->routers;i++)if(s->router_framing[i]==f && !memcmp(s->router_node[i],p+6,6))return;
@@ -235,6 +243,7 @@ static void input_canonical(struct ipx_stack *s,const uint8_t *p,unsigned bytes,
     if(!s->link || (!ipx_all(p) && memcmp(p,s->node,6)))return;
     learn(s,p,f,bytes);
     if(!zero(p+20,4) && !zero(s->network,4) && memcmp(p+20,s->network,4))return;
+    if (memcmp(p+6,s->node,6)) ipx_frame_remember(&s->frames,p+6,f);
     struct ciuki_sockaddr_ipx peer; read_address(&peer,p+32);
     for(unsigned i=0;i<IPX_ENDPOINTS;i++) {
         struct ipx_endpoint *e=&s->endpoint[i];
@@ -349,7 +358,7 @@ void ipx_tick(struct ipx_stack *s,uint64_t now)
 {
     if(now<s->now)return;
     s->now=now; if(!s->link)return;
-    if(!s->probed) {
+    if(!s->probed && s->frame_type==CIUKI_IPX_FRAME_AUTO) {
         s->probed=true; s->discovery_end=now+1000;
         struct ipx_endpoint probe={0}; probe.local.family=AF_IPX;
         memcpy(probe.local.node,s->node,6); uint8_t socket[2]={4,0x53}; memcpy(&probe.local.socket,socket,2);
@@ -382,7 +391,8 @@ void ipx_link(struct ipx_stack *s,bool up)
     if(!up) { for(unsigned i=0;i<IPX_ENDPOINTS;i++)if(s->endpoint[i].used) {
         failed(&s->endpoint[i],ENETDOWN); if(s->endpoint[i].detached)destroy(&s->endpoint[i]);
     } }
-    else { s->probed=false; s->routers=0; memset(s->scores,0,sizeof(s->scores)); }
+    else { s->probed=false; s->routers=0; s->framing=ipx_frame_wire(s->frame_type);
+        memset(&s->frames,0,sizeof(s->frames)); memset(s->scores,0,sizeof(s->scores)); }
 }
 int ipx_events(struct ipx_stack *s,unsigned i)
 {

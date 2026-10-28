@@ -9,6 +9,8 @@
 #include "dosvm_ipx.h"
 #include "dos_file_hook.h"
 #include <ciuki/dosvm_network_abi.h>
+/* Standalone DOS fixtures omit native sockets; the production hub is linked. */
+extern void net_ipx_port_start(struct net_bridge_port *) __attribute__((weak));
 
 #define NETWORK_PINS (DOSVM_IPX_ECBS * (DOSVM_IPX_FRAGMENTS + 2u) + 1u)
 struct network_pin { uint32_t linear; uint16_t length; bool used, write; };
@@ -247,6 +249,7 @@ int dosvm_network_attach(struct dosvm *v, struct net_bridge_port *port)
     error = dosvm_port_register(n->key, DOSVM_NE2000_BASE, DOSVM_NE2000_LAST, virtual_port, n);
     if (error) goto fail;
     /* fx-27: exits must dispatch this VM's IPX events; no lean port exits. */
+    if (net_ipx_port_start) net_ipx_port_start(port); /* gate held; DOS-only RIP discovery */
     v->network_attached = true;
     dosvm_network_rom_init(v); net_bridge_port_release(port); return 0;
 fail:

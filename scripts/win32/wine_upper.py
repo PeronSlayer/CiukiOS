@@ -49,7 +49,7 @@ PATCHES = ('0001-in-process-rpc-only.patch', '0002-disable-rpcss-activation.patc
            # f5-20C, found by the H1 DllMain run: MSVCRT's C locale code page.
            '0010-msvcrt-sbcs-code-page.patch',
            '0011-directplay-lan.patch', '0012-directplay-lobby.patch',
-           '0013-directplay-enumeration.patch')
+           '0013-directplay-enumeration.patch', '0014-directplay-ipx.patch', '0015-directplay-lobby-lifetime.patch')
 CFLAGS = '-O2 -g0 -march=pentiumpro -mno-sse -mno-sse2 -mno-mmx -fno-ident'
 LDFLAGS = '--no-default-config -Wl,-timestamp:0'
 # Fixed CiukiOS builtin-region bases, packed in MODULES order with 64 KiB

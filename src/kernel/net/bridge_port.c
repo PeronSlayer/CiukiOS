@@ -3,6 +3,7 @@
 #include <ciuki/net_bridge_port.h>
 #include <ciuki/cpu.h>
 #include <ciuki/ipx_wire.h>
+#include <ciuki/ipx_config.h>
 
 bool net_bridge_port_acquire(struct net_bridge_port *p)
 {
@@ -30,6 +31,10 @@ static int receive_mode(void *arg, bool on)
 }
 void net_bridge_port_carrier(struct net_bridge_port *p)
 {
+    unsigned setting=net_ipx_frame_type();
+    if (setting!=p->bridge.frame_type) {
+        p->bridge.frame_type=setting; p->bridge.wire_framing=ipx_frame_wire(setting);
+    }
     struct netif *d = p->device;
     if (d && p->epoch != d->bridge_epoch) {
         net_bridge_link(&p->bridge, false);
@@ -71,7 +76,8 @@ int net_bridge_port_open(struct net_bridge_port *p, struct bridge_pool *pool, st
     struct bridge_ops ops = {p,wire_transmit,receive_mode};
     int error = net_bridge_init(&p->bridge, pool, &ops, id, physical, count, interface, p->generation);
     if (error) return error;
-    p->bridge.wire_framing=IPX_II;
+    p->bridge.frame_type=net_ipx_frame_type();
+    p->bridge.wire_framing=ipx_frame_wire(p->bridge.frame_type);
     net_bridge_port_carrier(p);
     error = net_bridge_tap_register(BRIDGE_IPX_TYPE, frame_tap, p);
     if (!error) {
@@ -85,6 +91,7 @@ int net_bridge_port_close(struct net_bridge_port *p)
 {
     if (!p) return -EINVAL;
     if (!net_bridge_port_acquire(p)) return -16;
+    if (p->device) net_bridge_port_carrier(p); /* Retire an idle hub on a stopped/replaced NIC. */
     if (p->bridge.count || p->bridge.host_input) { net_bridge_port_release(p); return -16; }
     /* Revocation can wait for a tap callback; never wait with its gate held. */
     bool registered = p->registered; p->registered = false; p->closing = true;

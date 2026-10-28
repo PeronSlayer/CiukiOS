@@ -22,8 +22,7 @@ Ethernet-II-only, network-zero admission; IPX still bypasses lwIP's IP stack.
   the most prevalent router response. It does **not** specify a fixed probe
   ordering. Probe LLC, raw, Ethernet II, SNAP; count distinct router replies
   during a bounded discovery window. Ties prefer LLC, raw, II, SNAP; with no
-  router, retain Ethernet II for the already qualified DOS LAN. This fallback
-  is Ciuki policy, not a claim about an undocumented Windows 98 fallback.
+  router, use Ethernet 802.2 (LLC), as superseded by f6-27 below.
 - Microsoft's [IPX protocol identifiers](https://learn.microsoft.com/en-us/windows/win32/winsock/ipx-family-of-protocol-identifiers-2)
   define 1000–1255 for datagrams (packet type = protocol minus 1000) and 1256
   for SPX streams and sequenced packets. Protocol zero selects the type's
@@ -76,6 +75,41 @@ guests with a runner-owned socket segment or host bridge (never user NAT),
 verify broadcast discovery and directed datagrams in both framings, run an
 SPX stream and sequenced connection with packet loss, and run Win32-to-DOS
 IPXSETUP discovery on the same host and across the segment. Repeat discovery
-with five nodes and qualify the T23 physical NIC. The directive's two-guest
-plan conflicts with the older one-QEMU contract limit; execution/concurrency
-belongs to the lead. No QEMU evidence is produced in this worktree.
+with five modeled nodes and qualify the T23 physical NIC. The f6-27 directive
+authorizes two live guests, at most three, for the lead's
+[current LAN plan](../validation/f6-27-lan-round2.md). No QEMU evidence is
+produced in this worktree.
+
+## f6-27 framing configuration and peer replies
+
+The lead's round-two decision supersedes the Ethernet II fallback. Microsoft's
+[Encyclopedia of Networking, IPX/SPX-Compatible Protocol](https://flylib.com/books/en/3.369.1.761/1/)
+explicitly describes Windows 95/98 and the 802.2 fallback when detection finds
+no frame type. This is Microsoft's published text preserved by an archive.
+The local Resource Kit sections `wrkc15_4.htm`
+and `wrkappd_1.htm` establish RIP prevalence and Auto=4; the
+[Windows 95 Resource Kit NWLink section](https://techshelps.github.io/MSDN/DNWIN95/HTML/S736A.HTM)
+confirms the numeric settings. Ethernet SNAP=3 is a CiukiOS extension to that
+Ethernet-only table, required by the lead.
+
+Use one machine setting: raw=0, LLC=1, II=2, SNAP=3, Auto=4. The SYSTEM
+SETTING service validates and persists `/System/Settings/ipx.cfg`.
+Standard/Guest writes and direct administrator file writes are refused.
+Publish runtime intent only after successful durable publication. Boot reads
+the bounded text before network attachment. The existing 400-byte network
+observation record names a formerly reserved word for this selection; IPv4
+configuration and existing field offsets stay fixed.
+
+Auto retains the one-second distinct-router vote window and LLC/raw/II/SNAP
+tie order. Manual settings do not probe. All formats remain admissible.
+Bounded 32-entry node caches remember the last valid framing: directed replies
+use it, broadcasts use the selected framing. This mixed-framing policy is an
+explicit CiukiOS choice, not a claim that NWLink binds all formats at once.
+
+The gate-held native hub start also runs when a DOS VM attaches, so DOS-only
+sessions perform Auto discovery. A fresh hub starts from current intent rather
+than copying a previous bridge's detected framing. An idle hub retires after
+discovery or immediately on link loss; close refreshes carrier state before
+checking ownership, allowing a stopped or replaced NIC to release its idle hub.
+Host fixtures cover these paths and live setting changes through the physical
+port gate.

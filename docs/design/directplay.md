@@ -19,8 +19,9 @@ existing CiukiOS upper-DLL pipeline; it does not import Microsoft's DLLs.
 The readable Windows 98 Resource Kit `wrkc12_1.htm` describes DirectPlay as
 game connectivity over modem or network; it does not specify the IPX provider
 wire format. It is not redistributed. Windows 98 AF_IPX is a Winsock provider,
-not a V86 or NT NTVDM interface. No DOS bridge or kernel ABI change is needed
-by this directive.
+not a V86 or NT NTVDM interface. The f6-26 provider work did not require a DOS
+bridge or kernel ABI change; f6-27 adds the machine framing setting described
+in [win32-ipx.md](win32-ipx.md).
 
 ## Validation boundaries
 
@@ -37,9 +38,11 @@ private framing or equating SPX with DirectPlay's reliable protocol would not
 establish Windows 98 compatibility. This remains an explicit qualification
 item; neither a registry entry nor a host fake can supply that evidence.
 
-## Lead's two-guest and title plan (unrun)
+## Baseline f6-26 guest and title plan (superseded)
 
-Use the canonical image and two separate runner-owned overlays on the
+The f6-27 live two-guest plan supersedes this earlier concurrency restriction;
+see [the current LAN plan](../validation/f6-27-lan-round2.md).
+The original f6-26 proposal used the canonical image and two separate runner-owned overlays on the
 qemu-t23 profile. Run the guests sequentially under the project's QEMU caps,
 with a host Winsock/frame peer preserving the other guest's recorded protocol
 exchange, or obtain explicit authorization for a simultaneous two-guest
@@ -70,7 +73,7 @@ multiplayer connection choices. This is a research-selected title, not a claim
 that a licensed fixture is present or has passed. Quake/WinQuake remains the
 raw Winsock control, based on id Software's source linked above.
 
-## Current host evidence and outstanding work
+## Baseline f6-26 host evidence and outstanding work
 
 The final patched PEs build twice identically, with zero unresolved eager
 imports or forwarders. H0 production-loader binding passes for all nineteen
@@ -94,8 +97,56 @@ sanitizer passes.
 
 The independent replay covers the MS-DPDX EnumQuery layout and malformed
 variants and distinguishes it from DirectPlay 4 framing. It does not add a
-DirectPlay 8 stack. IPX transport, full IDirectPlay2/3/4 multi-peer conformance,
+DirectPlay 8 stack. Windows 98 IPX transport interoperability, full IDirectPlay2/3/4 multi-peer conformance,
 DirectPlay reliable-protocol/session flags, complete lobby lifecycle and
 Windows 98 interoperability remain open. In particular, the inherited Wine
 lobby message worker/lifetime and shared-memory handoff need end-to-end
 validation before the launch path is qualified.
+
+## f6-27 provider choices before implementation
+
+The Microsoft [MS-DPDX transport](https://learn.microsoft.com/en-us/openspecs/windows_protocols/ms-dpdx/2246db93-82c5-4fc0-bc85-981449b4f173)
+uses datagrams and shares its IPX/UDP format, but describes DXDiag/DirectPlay 8.
+[MS-DPSP](https://learn.microsoft.com/en-us/openspecs/windows_protocols/ms-dpsp/3e44be62-2067-472a-9ef0-e937298b68fb)
+is Digest authentication. Neither specifies Windows 98 DirectPlay 2–4's IPX
+provider. [MC-DPL4CS transport](https://learn.microsoft.com/en-us/openspecs/windows_protocols/mc-dpl4cs/e61a374b-be48-42a1-9fd4-c7a6efbd8b4b)
+specifies TCP/IP addresses and ports, not an IPX socket assignment. The pinned
+[Wine provider](https://raw.githubusercontent.com/wine-mirror/wine/wine-10.0/dlls/dpwsockx/dpwsockx_main.c)
+rejects IPX; its session core has no migration implementation. The archived
+[DirectX 7 SDK sequence](https://library.thedatadungeon.com/directx7/devdoc/live/directx/dpover_6ddl.content.htm)
+defines the service-provider boundary; it supplies no missing IPX wire format.
+
+Implement an explicitly CiukiOS IPX profile through AF_IPX: retain Wine's
+20-byte provider header with a zero-padded 14-byte SOCKADDR_IPX in its address
+slot, 32-byte paired stream/datagram player addresses, broadcast enumeration
+to IPX socket 47624 (0xBA08), and endpoint sockets 2300–2399. These socket
+assignments and provider framing are assumptions for host tests and require
+Windows 98 capture qualification. Guaranteed messages use classic SPX streams;
+this is a CiukiOS transport choice, not MC-DPL4R or a claim about Microsoft's
+provider. Do not advertise optional DirectPlay reliable-protocol or migration
+session flags as implemented. Preserve TCP/IP's wire format and reliability.
+
+For lobby launches, the SDK's suspended-child/connection-settings sequence and
+[Wine lobby source](https://raw.githubusercontent.com/wine-mirror/wine/wine-10.0/dlls/dplayx/dplobby.c)
+are the references. Propagate reservation, settings, notification-worker and
+resume failures; terminate a failed suspended child and release local and
+remote duplicated handles. Exercise the actual launch helper with OS seams.
+
+The f6-27 callback model runs both providers with two through five endpoints,
+including peer node/socket addressing, discovery/reply, bounded datagrams,
+short/interrupted stream writes, failed-stream replacement and cleanup. Actual
+kernel fixtures independently inject TCP and SPX packet loss/reordering.
+The provider fake supplies stream semantics; it does not itself prove the
+kernel transport. The lobby model executes the patched launch and notification
+helpers, all nine failure stages, A/W conversion and copied connection fields.
+Its shared-memory and child-process APIs are seams, not live Windows processes.
+The authored Win32 fixtures and current live plan in
+[f6-27-lan-round2.md](../validation/f6-27-lan-round2.md) are the next COM gate.
+
+The IPX path uses NSPROTO_IPX datagrams (packet type zero) and does not request
+SO_REUSEADDR, which the exclusive per-node endpoint hub does not implement.
+The host fake rejects that option on AF_IPX. One host enumeration listener per
+machine is supported by this profile; additional concurrent hosts on the same
+machine are not advertised. The inherited lobby SendLobbyMessage and
+ReceiveLobbyMessage channel remains unqualified; event lifetime checks alone
+are not evidence for that channel.

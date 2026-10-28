@@ -41,7 +41,7 @@ static bool boot_input(const struct policy_volume *v,const struct policy_label *
 {
     if (node_named(v,p->trie,"System",0)) return path_equal(name,"HWPROF.CFG");
     if (!node_named(v,p->trie,"Settings","System")) return false;
-    return path_equal(name,"performance.cfg") || path_equal(name,"hwprofiles.cfg") ||
+    return path_equal(name,"performance.cfg") || path_equal(name,"hwprofiles.cfg") || path_equal(name,"ipx.cfg") ||
            path_wildcard("accel*.cfg",name) || (display_attempt_file && display_attempt_file(name));
 }
 /* ---- end sec-sysvc2 ---- */

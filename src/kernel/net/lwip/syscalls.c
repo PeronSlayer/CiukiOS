@@ -244,7 +244,7 @@ int32_t net_socket_call(struct trap_frame *tf)
         if (e) return e;
         if (record.version != CIUKI_NETCTL_VERSION) return -EOPNOTSUPP;
         if (record.size != sizeof(record) || record.reserved0[0] || record.reserved0[1] ||
-            record.reserved[0] || record.reserved[1] || record.reserved[2]) return -EINVAL;
+            record.reserved[0] || record.reserved[1]) return -EINVAL;
         /* Validate writable output before any configuration side effect. */
         struct user_operation output = {.process = p};
         struct proc_thread *t = proc_thread_for(g_current);

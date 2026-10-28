@@ -3,6 +3,7 @@
 #include <ciuki/ipx.h>
 #include <ciuki/net_bridge_port.h>
 #include <ciuki/net_stack.h>
+#include <ciuki/ipx_config.h>
 static struct ipx_stack stack;
 static struct net_bridge_port *port;
 static int transmit(void *arg,const uint8_t *p,unsigned n)
@@ -22,16 +23,20 @@ static void import_network(void)
 }
 static void receive(void *arg,const uint8_t *p,unsigned n,uint64_t now)
 {
+    (void)ipx_set_framing(&stack,net_ipx_frame_type());
     (void)arg; if(now>stack.now)stack.now=now;
     ipx_input(&stack,p,n); publish_network(); port->bridge.wire_framing=stack.framing; net_input_changed();
 }
 static void retire_idle(void)
 {
+    if (port->bridge.count || (stack.link && stack.frame_type==CIUKI_IPX_FRAME_AUTO &&
+        (!stack.probed || stack.now<=stack.discovery_end))) return;
     for(unsigned i=0;i<IPX_ENDPOINTS;i++)if(stack.endpoint[i].used)return;
     port->bridge.host_input=NULL;port->bridge.host_tick=NULL;
 }
 static void tick(void *arg,bool link,uint64_t now)
 {
+    (void)ipx_set_framing(&stack,net_ipx_frame_type());
     (void)arg; int before[IPX_ENDPOINTS];
     for(unsigned i=0;i<IPX_ENDPOINTS;i++)before[i]=ipx_events(&stack,i);
     import_network(); stack.linkspeed=port->device->speed*1250u;
@@ -47,15 +52,23 @@ static int acquire(bool create)
     if(create) { int e=net_bridge_primary_port(&p);if(e)return e; }
     if(!p)return -EBADF;
     if(!net_bridge_port_acquire(p))return IPX_PORT_BUSY;
-    if(!port || !p->bridge.host_input) {
-        port=p; ipx_init(&stack,p->device->address,p,transmit); ipx_link(&stack,p->bridge.link);
-        stack.framing=p->bridge.wire_framing;
+    net_ipx_port_start(p);
+    (void)ipx_set_framing(&stack,net_ipx_frame_type()); import_network();return 0;
+}
+static void release(void) { net_bridge_port_release(port); net_input_changed(); }
+void net_ipx_port_start(struct net_bridge_port *p)
+{
+    if (!p) return;
+    if (!p->bridge.host_input) {
+        port=p; ipx_init(&stack,p->device->address,p,transmit);
+        unsigned setting=net_ipx_frame_type();
+        (void)ipx_set_framing(&stack,setting);
+        p->bridge.frame_type=setting; p->bridge.wire_framing=stack.framing;
+        ipx_link(&stack,p->bridge.link); import_network();
         memcpy(p->bridge.host_node,stack.node,6);
         p->bridge.host_arg=p; p->bridge.host_input=receive; p->bridge.host_tick=tick;
     }
-    import_network();return 0;
 }
-static void release(void) { net_bridge_port_release(port); net_input_changed(); }
 int net_ipx_open(unsigned type,unsigned protocol)
 {
     int r=acquire(true); if(r)return r;

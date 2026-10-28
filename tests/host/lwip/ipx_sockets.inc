@@ -4,6 +4,10 @@ static struct ciuki_sockaddr_in ipx_carrier(const struct ciuki_sockaddr_ipx *a)
 static void ipx_socket_tests(void)
 {
     extern void cu_ipx_test_busy(unsigned);
+    extern unsigned cu_ipx_test_wire(void);
+    extern int cu_ipx_test_dos_only(void);
+    CHECK(!cu_ipx_test_dos_only());
+    net_ipx_frame_publish(CIUKI_IPX_FRAME_II); /* Deliberately stale bridge observation is still LLC. */
     cu_ipx_test_busy(3); /* Owner contention is retried, never exposed as errno. */
     int a=net_socket_create(&client,AF_IPX,SOCK_DGRAM|SOCK_NONBLOCK,NSPROTO_IPX+4);
     int b=net_socket_create(&client,AF_IPX,SOCK_DGRAM|SOCK_NONBLOCK,NSPROTO_IPX+4);CHECK(a>=0 && b>=0);
@@ -16,6 +20,14 @@ static void ipx_socket_tests(void)
     char data[16];unsigned out;CHECK(net_socket_receive(&client,b,data,2,0,&address,NULL,&out)==2 && out==MSG_TRUNC && !memcmp(data,"IP",2));
     struct ciuki_ipx_address_data info={0};unsigned length=sizeof(info);
     CHECK(!net_socket_option(&client,a,0,NSPROTO_IPX,IPX_ADDRESS,&info,&length,NULL) && !info.wan && info.maxpkt==1462 && length==24);
+    struct ciuki_sockaddr_ipx remote={.family=AF_IPX,.node={2,0,0,0,0,99},.socket=0x326c};
+    struct ciuki_sockaddr_in wire=ipx_carrier(&remote);
+    CHECK(net_socket_io(&client,a,"net",3,0,&wire,true,NULL)==3 && cu_ipx_test_wire()==IPX_II);
+    for(unsigned setting=0;setting<=CIUKI_IPX_FRAME_AUTO;setting++) {
+        net_ipx_frame_publish(setting);
+        CHECK(net_socket_io(&client,a,"net",3,0,&wire,true,NULL)==3);
+        CHECK(cu_ipx_test_wire()==ipx_frame_wire(setting));
+    }
     extern void cu_ipx_test_network(uint32_t);
     cu_ipx_test_network(0x04030201);length=sizeof(info);
     CHECK(!net_socket_option(&client,a,0,NSPROTO_IPX,IPX_ADDRESS,&info,&length,NULL) && info.netnum[0]==1 && info.netnum[3]==4);
@@ -38,5 +50,5 @@ static void ipx_socket_tests(void)
         CHECK(!file_close(&client,a));CHECK(!file_close(&client,b));CHECK(!file_close(&client,listener));drain();
         any=(struct ciuki_sockaddr_ipx){.family=AF_IPX};address=ipx_carrier(&any);
     }
-    puts("PASS f6-25 native socket/request/fd/poll IPX datagram, adapter options and SPX stream/seqpacket local connections");
+    puts("PASS f6-27 DOS-only RIP/fallback, stale bridge/manual first open, live frame changes, native socket/request/fd/poll IPX and SPX stream/seqpacket");
 }

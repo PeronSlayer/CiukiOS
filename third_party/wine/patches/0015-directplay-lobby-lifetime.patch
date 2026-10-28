@@ -1,0 +1,460 @@
+CiukiOS Wine 10.0: transactional lobby launch and child-owned notification lifetime
+Pinned base: b073859675060c9211fcbccfd90e4e87520dc2c2 (after patches 0011-0013)
+Modified by CiukiOS, 2026-10-28. LGPL-2.1-or-later. See docs/design/directplay.md.
+
+--- a/dlls/dplayx/dplobby.c
++++ b/dlls/dplayx/dplobby.c
+@@ -711,51 +711,30 @@
+     return FALSE;
+ }
+ 
+-static BOOL DPL_CreateAndSetLobbyHandles( DWORD dwDestProcessId, HANDLE hDestProcess,
+-                                   LPHANDLE lphStart, LPHANDLE lphDeath,
+-                                   LPHANDLE lphRead )
+-{
+-  /* These are the handles for the created process */
+-  HANDLE hAppStart = 0, hAppDeath = 0, hAppRead  = 0;
+-  SECURITY_ATTRIBUTES s_attrib;
+-
+-  s_attrib.nLength              = sizeof( s_attrib );
+-  s_attrib.lpSecurityDescriptor = NULL;
+-  s_attrib.bInheritHandle       = TRUE;
+-
+-  *lphStart = CreateEventW( &s_attrib, TRUE, FALSE, NULL );
+-  *lphDeath = CreateEventW( &s_attrib, TRUE, FALSE, NULL );
+-  *lphRead  = CreateEventW( &s_attrib, TRUE, FALSE, NULL );
+-
+-  if( ( !DuplicateHandle( GetCurrentProcess(), *lphStart,
+-                          hDestProcess, &hAppStart,
+-                          0, FALSE, DUPLICATE_SAME_ACCESS ) ) ||
+-      ( !DuplicateHandle( GetCurrentProcess(), *lphDeath,
+-                          hDestProcess, &hAppDeath,
+-                          0, FALSE, DUPLICATE_SAME_ACCESS ) ) ||
+-      ( !DuplicateHandle( GetCurrentProcess(), *lphRead,
+-                          hDestProcess, &hAppRead,
+-                          0, FALSE, DUPLICATE_SAME_ACCESS ) )
+-    )
+-  {
+-    if (*lphStart) { CloseHandle(*lphStart); *lphStart = 0; }
+-    if (*lphDeath) { CloseHandle(*lphDeath); *lphDeath = 0; }
+-    if (*lphRead)  { CloseHandle(*lphRead);  *lphRead  = 0; }
+-    /* FIXME: Handle leak... */
+-    ERR( "Unable to dup handles\n" );
++static void DPL_CloseRemote(HANDLE process, HANDLE remote)
++{
++    HANDLE local;
++    if (remote && DuplicateHandle(process,remote,GetCurrentProcess(),&local,0,FALSE,
++                                  DUPLICATE_CLOSE_SOURCE|DUPLICATE_SAME_ACCESS)) CloseHandle(local);
++}
++static BOOL DPL_CreateAndSetLobbyHandles(DWORD id,HANDLE process,HANDLE *start,HANDLE *death,HANDLE *read)
++{
++    HANDLE remote[3]={0};
++    HANDLE *local[3]={start,death,read};
++    for(unsigned i=0;i<3;i++) *local[i]=NULL;
++    for(unsigned i=0;i<3;i++) {
++        *local[i]=CreateEventW(NULL,TRUE,FALSE,NULL);
++        if(!*local[i] || !DuplicateHandle(GetCurrentProcess(),*local[i],process,&remote[i],0,FALSE,DUPLICATE_SAME_ACCESS)) goto failed;
++    }
++    if(DPLAYX_SetLobbyHandles(id,remote[0],remote[1],remote[2])) return TRUE;
++failed:
++    for(unsigned i=0;i<3;i++) {
++        DPL_CloseRemote(process,remote[i]);
++        if(*local[i]) CloseHandle(*local[i]);
++        *local[i]=NULL;
++    }
+     return FALSE;
+-  }
+-
+-  if( !DPLAYX_SetLobbyHandles( dwDestProcessId,
+-                               hAppStart, hAppDeath, hAppRead ) )
+-  {
+-    /* FIXME: Handle leak... */
+-    return FALSE;
+-  }
+-
+-  return TRUE;
+-}
+-
++}
+ 
+ /********************************************************************
+  *
+@@ -775,7 +754,8 @@
+   PROCESS_INFORMATION newProcessInfo;
+   LPSTR appName;
+   DWORD dwSuspendCount;
+-  HANDLE hStart, hDeath, hSettingRead;
++  HANDLE hStart=NULL, hDeath=NULL, hSettingRead=NULL, abortEvent=NULL;
++  DWORD worker=0; BOOL reserved=FALSE;
+ 
+   TRACE( "(%p)->(0x%08lx,%p,%p,%p)\n",
+          This, dwFlags, lpdwAppID, lpConn, hReceiveEvent );
+@@ -787,7 +767,7 @@
+ 
+   if( DPLAYX_AnyLobbiesWaitingForConnSettings() )
+   {
+-    FIXME( "Waiting lobby not being handled correctly\n" );
++    return DPERR_UNAVAILABLE;
+   }
+ 
+   EnterCriticalSection( &This->lock );
+@@ -798,16 +778,15 @@
+ 
+   /* Our callback function will fill up the enumData structure with all the information
+      required to start a new process */
+-  IDirectPlayLobby_EnumLocalApplications( iface, RunApplicationA_EnumLocalApplications,
+-                                          (&enumData), 0 );
+-
+-  if (!enumData.lpszPath || !enumData.lpszFileName || !*enumData.lpszFileName ||
++  hr=DPL_EnumApplications(This,RunApplicationA_EnumLocalApplications,&enumData,0,TRUE);
++
++  if (FAILED(hr) || !enumData.lpszPath || !enumData.lpszFileName || !*enumData.lpszFileName ||
+       !enumData.lpszCommandLine || !enumData.lpszCurrentDirectory)
+   {
+       free(enumData.lpszPath); free(enumData.lpszFileName);
+       free(enumData.lpszCommandLine); free(enumData.lpszCurrentDirectory);
+       LeaveCriticalSection(&This->lock);
+-      return DPERR_UNKNOWNAPPLICATION;
++      return FAILED(hr) ? hr : DPERR_UNKNOWNAPPLICATION;
+   }
+   pathSize = strlen(enumData.lpszPath) + strlen(enumData.lpszFileName) + 2;
+   commandSize = pathSize + (enumData.lpszCommandLine ? strlen(enumData.lpszCommandLine) : 0) + 4;
+@@ -860,55 +839,38 @@
+   free( enumData.lpszCommandLine );
+   free( enumData.lpszCurrentDirectory );
+ 
+-  /* Reserve this global application id! */
+-  if( !DPLAYX_CreateLobbyApplication( newProcessInfo.dwProcessId ) )
+-  {
+-    ERR( "Unable to create global application data for 0x%08lx\n",
+-           newProcessInfo.dwProcessId );
+-  }
+-
+-  hr = IDirectPlayLobby_SetConnectionSettings( iface, 0, newProcessInfo.dwProcessId, lpConn );
+-
+-  if( hr != DP_OK )
+-  {
+-    ERR( "SetConnectionSettings failure %s\n", DPLAYX_HresultToString( hr ) );
+-    TerminateProcess(newProcessInfo.hProcess, 1);
+-    CloseHandle(newProcessInfo.hThread);
+-    CloseHandle(newProcessInfo.hProcess);
+-    LeaveCriticalSection( &This->lock );
+-    return hr;
+-  }
+-
+-  /* Setup the handles for application notification */
+-  if (!DPL_CreateAndSetLobbyHandles( newProcessInfo.dwProcessId,
+-                                newProcessInfo.hProcess,
+-                                &hStart, &hDeath, &hSettingRead ))
+-  {
+-      TerminateProcess(newProcessInfo.hProcess, 1);
+-      CloseHandle(newProcessInfo.hThread); CloseHandle(newProcessInfo.hProcess);
+-      LeaveCriticalSection(&This->lock);
+-      return DPERR_CANTCREATEPROCESS;
+-  }
+-
+-  /* Setup the message thread ID */
+-  This->msgtid = CreateLobbyMessageReceptionThread( hReceiveEvent, hStart, hDeath, hSettingRead );
+-
+-  DPLAYX_SetLobbyMsgThreadId( newProcessInfo.dwProcessId, This->msgtid );
+-
+-  LeaveCriticalSection( &This->lock );
+-
+-  /* Everything seems to have been set correctly, update the dwAppID */
+-  *lpdwAppID = newProcessInfo.dwProcessId;
+-
+-  /* Unsuspend the process - should return the prev suspension count */
+-  if( ( dwSuspendCount = ResumeThread( newProcessInfo.hThread ) ) != 1 )
+-  {
+-    ERR( "ResumeThread failed with 0x%08lx\n", dwSuspendCount );
+-  }
+-
+-  CloseHandle(newProcessInfo.hThread);
+-  CloseHandle(newProcessInfo.hProcess);
+-  return dwSuspendCount == 1 ? DP_OK : DPERR_CANTCREATEPROCESS;
++  hr=DPERR_CANTCREATEPROCESS;
++  if (!(reserved=DPLAYX_CreateLobbyApplication(newProcessInfo.dwProcessId))) goto failed;
++  hr=DPLAYX_SetConnectionSettingsA(0,newProcessInfo.dwProcessId,lpConn);
++  if (FAILED(hr)) goto failed;
++  hr=DPERR_CANTCREATEPROCESS;
++  if (!DPL_CreateAndSetLobbyHandles(newProcessInfo.dwProcessId,newProcessInfo.hProcess,&hStart,&hDeath,&hSettingRead)) goto failed;
++  abortEvent=CreateEventW(NULL,TRUE,FALSE,NULL);
++  if (!abortEvent) goto failed;
++  worker=CreateLobbyMessageReceptionThread(hReceiveEvent,hStart,hDeath,hSettingRead,
++                                         newProcessInfo.hProcess,abortEvent,newProcessInfo.dwProcessId);
++  if (!worker) goto failed;
++  /* The worker now owns the three local notification handles. */
++  hStart=hDeath=hSettingRead=NULL;
++  if (!DPLAYX_SetLobbyMsgThreadId(newProcessInfo.dwProcessId,worker)) goto failed;
++  dwSuspendCount=ResumeThread(newProcessInfo.hThread);
++  if (dwSuspendCount!=1) goto failed;
++  This->msgtid=worker;
++  *lpdwAppID=newProcessInfo.dwProcessId;
++  CloseHandle(abortEvent);
++  CloseHandle(newProcessInfo.hThread);CloseHandle(newProcessInfo.hProcess);
++  LeaveCriticalSection(&This->lock);
++  return DP_OK;
++failed:
++  if (abortEvent) { SetEvent(abortEvent);CloseHandle(abortEvent); }
++  if (hStart) CloseHandle(hStart);
++  if (hDeath) CloseHandle(hDeath);
++  if (hSettingRead) CloseHandle(hSettingRead);
++  TerminateProcess(newProcessInfo.hProcess,1);
++  if (reserved && !worker) DPLAYX_ReleaseLobbyApplication(newProcessInfo.dwProcessId);
++  CloseHandle(newProcessInfo.hThread);CloseHandle(newProcessInfo.hProcess);
++  LeaveCriticalSection(&This->lock);
++  return hr;
+ }
+ 
+ static char *DPL_Ansi( const WCHAR *text )
+--- a/dlls/dplayx/dplayx_global.c
++++ b/dlls/dplayx/dplayx_global.c
+@@ -249,6 +249,18 @@
+   return FALSE;
+ }
+ 
++void DPLAYX_ReleaseLobbyApplication(DWORD id)
++{
++    LPDPLAYX_LOBBYDATA data;
++    if(!id) return;
++    DPLAYX_AcquireSemaphore();
++    if(DPLAYX_IsAppIdLobbied(id,&data)) {
++        DPLAYX_PrivHeapFree(data->lpConn);
++        DPLAYX_InitializeLobbyDataEntry(data);
++    }
++    DPLAYX_ReleaseSemaphore();
++}
++
+ BOOL DPLAYX_SetLobbyHandles( DWORD dwAppID,
+                              HANDLE hStart, HANDLE hDeath, HANDLE hConnRead )
+ {
+@@ -935,13 +947,11 @@
+     return DPERR_INVALIDPARAMS;
+   }
+ 
+-  /* Free the existing memory */
+-  DPLAYX_PrivHeapFree( lpDplData->lpConn );
+-
+-  lpDplData->lpConn = DPLAYX_PrivHeapAlloc( HEAP_ZERO_MEMORY,
+-                                            DPLAYX_SizeOfLobbyDataA( lpConn ) );
+-
+-  DPLAYX_CopyConnStructA( lpDplData->lpConn, lpConn );
++  DPLCONNECTION *replacement=DPLAYX_PrivHeapAlloc(HEAP_ZERO_MEMORY,DPLAYX_SizeOfLobbyDataA(lpConn));
++  if(!replacement) { DPLAYX_ReleaseSemaphore(); return DPERR_OUTOFMEMORY; }
++  DPLAYX_CopyConnStructA(replacement,lpConn);
++  DPLAYX_PrivHeapFree(lpDplData->lpConn);
++  lpDplData->lpConn=replacement;
+ 
+ 
+   DPLAYX_ReleaseSemaphore();
+@@ -986,13 +996,11 @@
+     return DPERR_NOTLOBBIED;
+   }
+ 
+-  /* Free the existing memory */
+-  DPLAYX_PrivHeapFree( lpDplData->lpConn );
+-
+-  lpDplData->lpConn = DPLAYX_PrivHeapAlloc( HEAP_ZERO_MEMORY,
+-                                            DPLAYX_SizeOfLobbyDataW( lpConn ) );
+-
+-  DPLAYX_CopyConnStructW( lpDplData->lpConn, lpConn );
++  DPLCONNECTION *replacement=DPLAYX_PrivHeapAlloc(HEAP_ZERO_MEMORY,DPLAYX_SizeOfLobbyDataW(lpConn));
++  if(!replacement) { DPLAYX_ReleaseSemaphore(); return DPERR_OUTOFMEMORY; }
++  DPLAYX_CopyConnStructW(replacement,lpConn);
++  DPLAYX_PrivHeapFree(lpDplData->lpConn);
++  lpDplData->lpConn=replacement;
+ 
+ 
+   DPLAYX_ReleaseSemaphore();
+--- a/dlls/dplayx/dplayx_global.h
++++ b/dlls/dplayx/dplayx_global.h
+@@ -57,4 +57,7 @@
+ /* Convert a DP or DPL HRESULT code into a string for human consumption */
+ LPCSTR DPLAYX_HresultToString( HRESULT hr );
+ 
++/* CiukiOS: failed launches and completed child lifetimes retire the reservation. */
++void DPLAYX_ReleaseLobbyApplication(DWORD);
++
+ #endif /* __WINE_DPLAYX_GLOBAL */
+--- a/dlls/dplayx/dplayx_messages.c
++++ b/dlls/dplayx/dplayx_messages.c
+@@ -39,120 +39,56 @@
+ 
+ typedef struct tagMSGTHREADINFO
+ {
+-  HANDLE hStart;
+-  HANDLE hDeath;
+-  HANDLE hSettingRead;
+-  HANDLE hNotifyEvent;
+-} MSGTHREADINFO, *LPMSGTHREADINFO;
+-
+-static DWORD CALLBACK DPL_MSG_ThreadMain( LPVOID lpContext );
++    HANDLE start,death,read,notify,process,abort;
++    DWORD appid;
++} MSGTHREADINFO;
++
++static void DPL_MSG_Free(MSGTHREADINFO *info)
++{
++    HANDLE handles[]={info->start,info->death,info->read,info->notify,info->process,info->abort};
++    for(unsigned i=0;i<ARRAY_SIZE(handles);i++) if(handles[i]) CloseHandle(handles[i]);
++    free(info);
++}
++static DWORD CALLBACK DPL_MSG_ThreadMain(void *context)
++{
++    MSGTHREADINFO *info=context;
++    HANDLE stages[]={info->start,info->read};
++    for(unsigned i=0;i<ARRAY_SIZE(stages);i++) {
++        HANDLE wait[]={info->abort,info->process,stages[i]};
++        if(WaitForMultipleObjects(3,wait,FALSE,INFINITE)!=WAIT_OBJECT_0+2) goto done;
++        if(info->notify) SetEvent(info->notify);
++    }
++    HANDLE wait[]={info->abort,info->process};
++    WaitForMultipleObjects(2,wait,FALSE,INFINITE);
++    if(info->notify) SetEvent(info->notify);
++done:
++    DPLAYX_ReleaseLobbyApplication(info->appid);
++    DPL_MSG_Free(info);
++    return 0;
++}
++DWORD CreateLobbyMessageReceptionThread(HANDLE notify,HANDLE start,HANDLE death,HANDLE read,
++                                        HANDLE process,HANDLE abort,DWORD appid)
++{
++    MSGTHREADINFO *info=calloc(1,sizeof(*info));
++    HANDLE thread; DWORD id=0;
++    if(!info) return 0;
++    HANDLE self=GetCurrentProcess();
++    if((notify && !DuplicateHandle(self,notify,self,&info->notify,0,FALSE,DUPLICATE_SAME_ACCESS)) ||
++       !DuplicateHandle(self,process,self,&info->process,0,FALSE,DUPLICATE_SAME_ACCESS) ||
++       !DuplicateHandle(self,abort,self,&info->abort,0,FALSE,DUPLICATE_SAME_ACCESS)) goto failed;
++    info->start=start;info->death=death;info->read=read;info->appid=appid;
++    thread=CreateThread(NULL,0,DPL_MSG_ThreadMain,info,0,&id);
++    if(!thread) goto failed;
++    CloseHandle(thread);return id;
++failed:
++    /* On failure, the caller still owns its three input events. */
++    info->start=info->death=info->read=NULL;
++    DPL_MSG_Free(info);return 0;
++}
++
+ static HRESULT DP_MSG_ExpectReply( IDirectPlayImpl *This, DPSP_SENDEXDATA *data, DWORD dwWaitTime,
+         WORD *replyCommandIds, DWORD replyCommandIdCount, void **lplpReplyMsg,
+         DWORD *lpdwMsgBodySize, void **replyMsgHeader );
+-
+-
+-/* Create the message reception thread to allow the application to receive
+- * asynchronous message reception
+- */
+-DWORD CreateLobbyMessageReceptionThread( HANDLE hNotifyEvent, HANDLE hStart,
+-                                         HANDLE hDeath, HANDLE hConnRead )
+-{
+-  DWORD           dwMsgThreadId;
+-  LPMSGTHREADINFO lpThreadInfo;
+-  HANDLE          hThread;
+-
+-  lpThreadInfo = malloc( sizeof( *lpThreadInfo ) );
+-  if( lpThreadInfo == NULL )
+-  {
+-    return 0;
+-  }
+-
+-  /* The notify event may or may not exist. Depends if async comm or not */
+-  if( hNotifyEvent &&
+-      !DuplicateHandle( GetCurrentProcess(), hNotifyEvent,
+-                        GetCurrentProcess(), &lpThreadInfo->hNotifyEvent,
+-                        0, FALSE, DUPLICATE_SAME_ACCESS ) )
+-  {
+-    ERR( "Unable to duplicate event handle\n" );
+-    goto error;
+-  }
+-
+-  /* These 3 handles don't need to be duplicated because we don't keep a
+-   * reference to them where they're created. They're created specifically
+-   * for the message thread
+-   */
+-  lpThreadInfo->hStart       = hStart;
+-  lpThreadInfo->hDeath       = hDeath;
+-  lpThreadInfo->hSettingRead = hConnRead;
+-
+-  hThread = CreateThread( NULL,                  /* Security attribs */
+-                          0,                     /* Stack */
+-                          DPL_MSG_ThreadMain,    /* Msg reception function */
+-                          lpThreadInfo,          /* Msg reception func parameter */
+-                          0,                     /* Flags */
+-                          &dwMsgThreadId         /* Updated with thread id */
+-                        );
+-  if ( hThread == NULL )
+-  {
+-    ERR( "Unable to create msg thread\n" );
+-    goto error;
+-  }
+-
+-  CloseHandle(hThread);
+-
+-  return dwMsgThreadId;
+-
+-error:
+-
+-  free( lpThreadInfo );
+-
+-  return 0;
+-}
+-
+-static DWORD CALLBACK DPL_MSG_ThreadMain( LPVOID lpContext )
+-{
+-  LPMSGTHREADINFO lpThreadInfo = lpContext;
+-  DWORD dwWaitResult;
+-
+-  TRACE( "Msg thread created. Waiting on app startup\n" );
+-
+-  /* Wait to ensure that the lobby application is started w/ 1 min timeout */
+-  dwWaitResult = WaitForSingleObject( lpThreadInfo->hStart, 10000 /* 10 sec */ );
+-  if( dwWaitResult == WAIT_TIMEOUT )
+-  {
+-    FIXME( "Should signal app/wait creation failure (0x%08lx)\n", dwWaitResult );
+-    goto end_of_thread;
+-  }
+-
+-  /* Close this handle as it's not needed anymore */
+-  CloseHandle( lpThreadInfo->hStart );
+-  lpThreadInfo->hStart = 0;
+-
+-  /* Wait until the lobby knows what it is */
+-  dwWaitResult = WaitForSingleObject( lpThreadInfo->hSettingRead, INFINITE );
+-  if( dwWaitResult == WAIT_TIMEOUT )
+-  {
+-    ERR( "App Read connection setting timeout fail (0x%08lx)\n", dwWaitResult );
+-  }
+-
+-  /* Close this handle as it's not needed anymore */
+-  CloseHandle( lpThreadInfo->hSettingRead );
+-  lpThreadInfo->hSettingRead = 0;
+-
+-  TRACE( "App created && initialized starting main message reception loop\n" );
+-
+-  for ( ;; )
+-  {
+-    MSG lobbyMsg;
+-    GetMessageW( &lobbyMsg, 0, 0, 0 );
+-  }
+-
+-end_of_thread:
+-  TRACE( "Msg thread exiting!\n" );
+-  free( lpThreadInfo );
+-
+-  return 0;
+-}
+ 
+ /* DP messaging stuff */
+ static HANDLE DP_MSG_BuildAndLinkReplyStruct( IDirectPlayImpl *This,
+--- a/dlls/dplayx/dplayx_messages.h
++++ b/dlls/dplayx/dplayx_messages.h
+@@ -45,8 +45,7 @@
+   DPID *shortcutIds;
+ } DPPLAYERINFO;
+ 
+-DWORD CreateLobbyMessageReceptionThread( HANDLE hNotifyEvent, HANDLE hStart,
+-                                         HANDLE hDeath, HANDLE hConnRead );
++DWORD CreateLobbyMessageReceptionThread(HANDLE,HANDLE,HANDLE,HANDLE,HANDLE,HANDLE,DWORD);
+ 
+ DWORD DP_MSG_ComputeMessageSize( SGBUFFER *buffers, DWORD bufferCount );
+ HRESULT DP_MSG_SendRequestPlayerId( IDirectPlayImpl *This, DWORD dwFlags,

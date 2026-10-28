@@ -25,6 +25,8 @@ struct ipx_stack {
     uint8_t node[6], network[4], networks[IPX_FRAMINGS][4];
     uint16_t next_socket, next_id;
     unsigned framing, scores[IPX_FRAMINGS], routers, linkspeed;
+    unsigned frame_type;
+    struct ipx_frame_cache frames;
     uint8_t router_node[16][6], router_framing[16];
     uint64_t now, discovery_end;
     bool link, probed;
@@ -45,6 +47,7 @@ void ipx_close(struct ipx_stack *, unsigned);
 int ipx_shutdown(struct ipx_stack *, unsigned, unsigned);
 void ipx_input(struct ipx_stack *, const uint8_t *, unsigned);
 void ipx_tick(struct ipx_stack *, uint64_t);
+int ipx_set_framing(struct ipx_stack *, unsigned);
 void ipx_link(struct ipx_stack *, bool);
 int ipx_events(struct ipx_stack *, unsigned);
 /* Production bridge owner. Token = slot+1; zero means no endpoint. */
@@ -54,6 +57,8 @@ int net_ipx_option(unsigned, bool, int, unsigned, void *, unsigned *);
 int net_ipx_names(unsigned, struct ciuki_sockaddr_ipx *, struct ciuki_sockaddr_ipx *);
 int net_ipx_events(unsigned);
 int net_ipx_close(unsigned);
+struct net_bridge_port;
+void net_ipx_port_start(struct net_bridge_port *); /* port gate held */
 enum { IPX_CALL_BIND, IPX_CALL_CONNECT, IPX_CALL_LISTEN, IPX_CALL_ACCEPT,
        IPX_CALL_SEND, IPX_CALL_RECV, IPX_CALL_SHUTDOWN, IPX_CALL_STATUS };
 #endif

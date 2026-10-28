@@ -26,6 +26,7 @@
 #include <ciuki/systime.h>
 #include <ciuki/tzrule.h>
 #include <ciuki/system_settings.h>
+#include <ciuki/ipx_config.h>
 #ifdef FS_HOST
 #include <stdio.h>
 #define SCANDISK_TEXT_VFORMAT vsnprintf
@@ -123,6 +124,7 @@ int sysvc_setting_set(struct security_subject *s, unsigned setting, const char *
     if ((length && !text) || length > CIUKI_SYSTEM_SETTING_MAX) return -EINVAL;
     const char *path = 0; size_t keep = 0;
     struct system_perf perf;
+    unsigned ipx=CIUKI_IPX_FRAME_AUTO;
     switch (setting) {
     case CIUKI_SYSTEM_SETTING_HWPROFILES:
         if (!sysvc_printable(text, length)) return -EINVAL;
@@ -136,9 +138,19 @@ int sysvc_setting_set(struct security_subject *s, unsigned setting, const char *
         if (!retry_request(text, length)) return -EINVAL;
         path = SYSVC_ACCEL_RETRY; keep = 47;
         break;
+    case CIUKI_SYSTEM_SETTING_IPX_FRAME:
+        if (!ipx_config_parse(text,length,&ipx)) return -EINVAL;
+        path = "/System/Settings/ipx.cfg"; keep = IPX_CONFIG_BYTES;
+        break;
     default: return -EINVAL;
     }
+    bool framing=setting==CIUKI_SYSTEM_SETTING_IPX_FRAME;
+    if (framing && !net_ipx_config_lock()) return -EBUSY;
     int e = sysvc_system_rewrite(path, text, length, keep);
+    if (framing) {
+        if (!e) net_ipx_frame_publish(ipx);
+        net_ipx_config_unlock();
+    }
     job_log("[sysvc] setting saved uid=%u setting=%u bytes=%u result=%d", c ? c->uid : 0, setting, (unsigned)length, e);
     return e;
 }

@@ -5,6 +5,29 @@
 #include <ciuki/kernel.h>
 #include <ciuki/abi.h>
 enum ipx_framing { IPX_LLC, IPX_RAW, IPX_II, IPX_SNAP, IPX_FRAMINGS };
+static inline unsigned ipx_frame_wire(unsigned setting)
+{
+    return setting==CIUKI_IPX_FRAME_RAW ? IPX_RAW : setting==CIUKI_IPX_FRAME_II ? IPX_II :
+        setting==CIUKI_IPX_FRAME_SNAP ? IPX_SNAP : IPX_LLC;
+}
+#define IPX_FRAME_PEERS 32u
+struct ipx_frame_cache { uint8_t node[IPX_FRAME_PEERS][6], framing[IPX_FRAME_PEERS]; unsigned count, next; };
+static inline void ipx_frame_remember(struct ipx_frame_cache *c, const uint8_t node[6], unsigned f)
+{
+    if (node[0]&1) return;
+    unsigned i=0; while (i<c->count && memcmp(c->node[i],node,6)) i++;
+    if (i==c->count) {
+        if (c->count<IPX_FRAME_PEERS) c->count++;
+        else { i=c->next; c->next=(c->next+1)%IPX_FRAME_PEERS; }
+        memcpy(c->node[i],node,6);
+    }
+    c->framing[i]=(uint8_t)f;
+}
+static inline unsigned ipx_frame_reply(const struct ipx_frame_cache *c, const uint8_t node[6], unsigned fallback)
+{
+    for (unsigned i=0;i<c->count;i++) if (!memcmp(c->node[i],node,6)) return c->framing[i];
+    return fallback;
+}
 static inline unsigned ipx_be16(const uint8_t *p) { return (unsigned)p[0] << 8 | p[1]; }
 static inline void ipx_put16(uint8_t *p, unsigned v) { p[0] = v >> 8; p[1] = v; }
 static inline bool ipx_all(const uint8_t *p)

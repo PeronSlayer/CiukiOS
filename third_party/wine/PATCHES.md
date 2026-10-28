@@ -123,3 +123,17 @@ compatibility or add a DirectPlay 8 runtime. See
 [`docs/design/directplay.md`](../../docs/design/directplay.md) for the source
 research, test boundaries and outstanding gates. The source offer covers
 these patches and the three added PE builds under LGPL-2.1-or-later.
+
+## F6-27 (2026-10-28)
+
+14. `patches/0014-directplay-ipx.patch`: AF_IPX datagrams and SPX streams in
+    the actual Wine provider, correctly sized socket addresses and node keys,
+    broadcast enumeration and truthful datagram caps. Unsupported migration
+    and DirectPlay reliable-protocol session engines fail explicitly. The IPX
+    enumeration socket/provider header/SPX selection are documented CiukiOS
+    assumptions; Windows 98 wire compatibility is not claimed.
+15. `patches/0015-directplay-lobby-lifetime.patch`: transactional A/W launch,
+    reservation/settings/notification/resume failure rollback, remote handle
+    cleanup, allocation failure preservation, and a notification worker whose
+    owned handles and reservation end with the child or launch cancellation.
+    The worker retains no lobby-object pointer.

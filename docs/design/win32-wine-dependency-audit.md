@@ -276,9 +276,9 @@ Wine `b073859675060c9211fcbccfd90e4e87520dc2c2`, archive SHA-256 `c5e0b3f5f7efaf
 | msvcrt.dll | `0x748d0000` | 606,208 | 614,400 | 148 | 5 | 3 | `8161d40c05af35d2` | reused, qualified (staged builtin) |
 | coml2.dll | `0x74970000` | 86,016 | 86,016 | 21 | 2 | 0 | `a503cc5b92f4bd1e` | reused, qualified (staged builtin) |
 | shcore.dll | `0x74990000` | 77,824 | 77,824 | 19 | 3 | 0 | `c0a9ea8c303f6f6e` | reused, qualified (staged builtin) |
-| dplayx.dll | `0x749b0000` | 200,704 | 200,704 | 49 | 2 | 6 | `c27b7d9a8a0ee8d2` | build candidate, pending H1 |
-| dplay.dll | `0x749f0000` | 24,576 | 24,576 | 6 | 1 | 3 | `0ed89cc3472bcf0c` | build candidate, pending H1 |
-| dpwsockx.dll | `0x74a00000` | 53,248 | 53,248 | 13 | 2 | 6 | `7fea3de795289a99` | build candidate, pending H1 |
+| dplayx.dll | `0x749b0000` | 196,608 | 196,608 | 48 | 2 | 6 | `70af7c0a6f4e47fc` | build candidate, pending H1 |
+| dplay.dll | `0x749e0000` | 24,576 | 24,576 | 6 | 1 | 3 | `781fc1f42428ae06` | build candidate, pending H1 |
+| dpwsockx.dll | `0x749f0000` | 57,344 | 57,344 | 14 | 2 | 6 | `c308629e8b22bbd0` | build candidate, pending H1 |
 
 `dplay.dll`: f6-26: H0 binds; H1 execution is blocked by sandbox SIGSYS; DirectPlay end-to-end and Windows 98 interoperability gates remain.
 
@@ -301,6 +301,8 @@ Wine `b073859675060c9211fcbccfd90e4e87520dc2c2`, archive SHA-256 `c5e0b3f5f7efaf
 | `0011-directplay-lan.patch` | `bfd3ed25ec82479e` |
 | `0012-directplay-lobby.patch` | `7a48280f6b928187` |
 | `0013-directplay-enumeration.patch` | `fa3d13ff507e75f0` |
+| `0014-directplay-ipx.patch` | `694344d687101098` |
+| `0015-directplay-lobby-lifetime.patch` | `28699775c3b60229` |
 
 `0006-shell32-icon-trim.json` (resource filter): 430 icon images (1,776,519 bytes) in, 235 (357,298 bytes) out.
 
@@ -341,7 +343,7 @@ Missing eager imports, delayed imports and unresolved export forwarders of the c
 | f5-14b | `wine-compile-in` | 212 |
 | f5-14b | `wine-patch-remove` | 3 |
 | f5-14b | `wine-retarget` | 197 |
-| f5-20b | `core-implement` | 222 |
+| f5-20b | `core-implement` | 221 |
 | f5-20c | `core-implement` | 8 |
 | f5-20c | `core-w21-stub` | 8 |
 | f5-20c | `not-reused` | 38 |
@@ -470,7 +472,7 @@ Surface: the 88 MSVCRT functions the reused DLLs import.
 | Candidate | Bytes | Pages (model) | Surface covered | Notes |
 | --- | ---: | ---: | ---: | --- |
 | Wine 10.0 `msvcrt.dll` PE | 606,208 file, 614,400 SizeOfImage | 153 (148 seed + 5 COW) | 88/88 | 1290 exported names, MSVCRT ABI |
-| CiukiOS newlib port (SDK `libc.a` `e5dfc95851ece618`) | 104,438 text + 460 data | 27 | 75/88 | missing: __iob_func, _assert, _create_locale, _findclose, _free_locale, _snwprintf_l, _wcslwr, _wfindfirst, _wfindnext, _wfopen, _wgetenv, _wopen, wcscpy_s; no MSVCRT ABI |
+| CiukiOS newlib port (SDK `libc.a` `bf5a953a2007065d`) | 104,438 text + 460 data | 27 | 75/88 | missing: __iob_func, _assert, _create_locale, _findclose, _free_locale, _snwprintf_l, _wcslwr, _wfindfirst, _wfindnext, _wfopen, _wgetenv, _wopen, wcscpy_s; no MSVCRT ABI |
 
 Wine side: actual PE and section-store model. Newlib side: static CiukiOS SDK ELF with every covered surface function referenced, --gc-sections, minus an empty program; MSVCRT ABI glue (FILE/_iob layout, _errno, locale, SEH/C++ EH, startup) not included.
 

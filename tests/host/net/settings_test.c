@@ -3,6 +3,7 @@
 #include <ciuki/kernel.h>
 #include <ciuki/files.h>
 #include <ciuki/net_control.h>
+#include <ciuki/ipx_config.h>
 #include <assert.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -12,6 +13,8 @@ static char disk[NET_SETTINGS_BYTES],temporary[NET_SETTINGS_BYTES],last_record[2
 static size_t length,temp_length;
 static int present,fail_read,fail_write,fail_commit,open_fd,tables,swapped,fail_rename;
 static struct vfs volume;
+static char ipx_text[14]="frame_type=4\n";
+static int ipx_present;
 static void reseal(char *text)
 {
     char *end=strstr(text,"checksum=");assert(end);uint32_t h=2166136261u;
@@ -45,13 +48,14 @@ int vfs_open(struct vfs_table *t,const char *path,unsigned flags,enum vfs_share 
 {
     (void)t;(void)share;(void)attr;assert(!open_fd);
     if(!strcmp(path,"C:\\SYSTEM\\NETWORK.NEW")) { assert(flags&VFS_TRUNCATE);temp_length=0;open_fd=1;return 8; }
+    if(!strcmp(path,"C:\\SYSTEM\\SETTINGS\\ipx.cfg")) { if(!ipx_present)return -FS_ENOENT;open_fd=1;return 9; }
     assert(!strcmp(path,"C:\\SYSTEM\\NETWORK.INI"));
     if(!present)return -FS_ENOENT;
     open_fd=1;return 7;
 }
-int vfs_close(struct vfs_table *t,int fd){(void)t;assert((fd==7 || fd==8) && open_fd);open_fd=0;return 0;}
+int vfs_close(struct vfs_table *t,int fd){(void)t;assert((fd==7 || fd==8 || fd==9) && open_fd);open_fd=0;return 0;}
 int vfs_read(struct vfs_table *t,int fd,void *out,size_t cap,size_t *done)
-{(void)t;assert(fd==7);if(fail_read)return -FS_EIO;*done=length<cap ? length : cap;memcpy(out,disk,*done);return 0;}
+{(void)t;if(fd==9){*done=cap<13?cap:13;memcpy(out,ipx_text,*done);return 0;}assert(fd==7);if(fail_read)return -FS_EIO;*done=length<cap ? length : cap;memcpy(out,disk,*done);return 0;}
 int vfs_write(struct vfs_table *t,int fd,const void *data,size_t bytes,size_t *done)
 {(void)t;assert(fd==8 && bytes<sizeof(temporary));*done=fail_write ? bytes/2 : bytes;memcpy(temporary,data,*done);temp_length=*done;return 0;}
 int vfs_commit(struct vfs_table *t,int fd){(void)t;assert(fd==8);return fail_commit ? -FS_EIO : 0;}
@@ -85,6 +89,9 @@ int main(void)
     fail_rename=1;assert(net_settings_save(0,&c)==-EIO);fail_rename=0;assert(length==old_length && !memcmp(old,disk,length));
     fail_commit=1;assert(net_settings_save(0,&c)==-EIO);fail_commit=0;assert(!net_settings_save(0,&c));
     memset(disk,'x',sizeof(disk));length=sizeof(disk);net_settings_load(&volume);assert(strstr(last_record,"boot=invalid fallback=dhcp"));
+    ipx_present=1;
+    for(unsigned f=0;f<=4;f++){ipx_text[11]=(char)('0'+f);net_settings_load(&volume);assert(net_ipx_frame_type()==f);}
+    ipx_text[11]='9';net_settings_load(&volume);assert(net_ipx_frame_type()==CIUKI_IPX_FRAME_AUTO);
     net_settings_load(NULL);assert(strstr(last_record,"storage_absent"));assert(net_settings_save(0,&c)==-ENODEV);
     assert(!tables && !open_fd);puts("PASS f2-100 persistence: committed round trip, boot load, missing/corrupt/oversized/read failure DHCP fallback, stable PCI/MAC binding across enumeration reorder, atomic replacement, short write/commit/rename errors, no handle leaks");return 0;
 }

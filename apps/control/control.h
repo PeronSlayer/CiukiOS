@@ -75,6 +75,7 @@ struct cp_preview_done {
     unsigned decode_ms, render_ms;
     uint32_t *preview;              /* caller-supplied 192*144 buffer, filled when rendered */
 };
+#define CP_NET_IPX 5u /* SYSTEM framing setting. */
 #define CP_NET_TEST 4u /* UI worker command; never passed to syscall 90. */
 struct cp_network_result {
     struct ciuki_net_control adapters[2];
@@ -250,9 +251,9 @@ struct cp_app {
     struct cp_network_result network;
     struct ciuki_net_config network_edit;
     struct du_menu_item saver_items[4];
-    struct du_item network_items[2], network_tabs[3];
+    struct du_item network_items[2], network_tabs[4], network_frames[5];
     char network_names[2][64], network_message[96], network_test_name[128];
-    unsigned network_selected, network_tab;
+    unsigned network_selected, network_tab, network_frame_type;
     int network_busy, network_loaded, building;
     struct dp_plan *pack;
     char pack_root[DP_PATH], pack_names[32][192], pack_reason[160];

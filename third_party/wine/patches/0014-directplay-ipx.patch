@@ -1,0 +1,427 @@
+CiukiOS Wine 10.0: AF_IPX LAN profile and SPX streams
+Pinned base: b073859675060c9211fcbccfd90e4e87520dc2c2 (after patches 0011-0013)
+Modified by CiukiOS, 2026-10-28. LGPL-2.1-or-later. See docs/design/directplay.md.
+
+--- a/dlls/dpwsockx/dpwsockx_main.c
++++ b/dlls/dpwsockx/dpwsockx_main.c
+@@ -23,6 +23,8 @@
+ #include "windef.h"
+ #include "winbase.h"
+ #include "winsock2.h"
++#include "wsipx.h"
++#include "wsnwlink.h"
+ #include "winuser.h"
+ #include "dplobby.h"
+ #include "dpwsockx_dll.h"
+@@ -46,6 +48,37 @@
+ #define DPWS_START_UDP_PORT 2350
+ #define DPWS_END_UDP_PORT   2400
+ 
++/* IPX uses the existing 16-byte carrier, copied without aliasing. Its wire
++ * profile is a documented CiukiOS choice; see docs/design/directplay.md. */
++static int DPWS_Family(const DPWS_DATA *s) { return s->ipx ? AF_IPX : AF_INET; }
++static int DPWS_Protocol(const DPWS_DATA *s, BOOL stream)
++{ return s->ipx ? (stream ? NSPROTO_SPX : NSPROTO_IPX) : (stream ? IPPROTO_TCP : IPPROTO_UDP); }
++static int DPWS_AddrSize(const SOCKADDR_IN *a)
++{ return a->sin_family==AF_IPX ? sizeof(SOCKADDR_IPX) : sizeof(*a); }
++static WORD DPWS_Port(const SOCKADDR_IN *a)
++{ WORD port; if(a->sin_family!=AF_IPX) return a->sin_port; memcpy(&port,(const char *)a+12,2); return port; }
++static void DPWS_Address(DPWS_DATA *s, SOCKADDR_IN *a, WORD port, BOOL broadcast)
++{
++    memset(a,0,sizeof(*a));
++    if(s->ipx) {
++        SOCKADDR_IPX ipx={0}; ipx.sa_family=AF_IPX; ipx.sa_socket=port;
++        if(broadcast) memset(ipx.sa_nodenum,255,6);
++        memcpy(a,&ipx,sizeof(ipx));
++    } else { a->sin_family=AF_INET; a->sin_port=port; a->sin_addr.s_addr=broadcast ? s->enumTarget : INADDR_ANY; }
++}
++static void DPWS_Node(SOCKADDR_IN *to, const SOCKADDR_IN *from)
++{
++    if(to->sin_family==AF_IPX) memcpy((char *)to+2,(const char *)from+2,10);
++    else to->sin_addr=from->sin_addr;
++}
++static void DPWS_CompleteAddress(SOCKADDR_IN *to, const SOCKADDR_IN *from)
++{
++    static const char zero[10];
++    if(to->sin_family!=from->sin_family) return;
++    if(to->sin_family==AF_IPX) { if(!memcmp((char *)to+2,zero,10)) DPWS_Node(to,from); }
++    else if(!to->sin_addr.s_addr) DPWS_Node(to,from);
++}
++
+ static HRESULT DPWS_SendImpl( DPWS_DATA *, DPWS_PLAYER *, SGBUFFER *, DWORD, DWORD, BOOL, BOOL );
+ 
+ /* TCP is a byte stream: a successful short write is not a dropped message. */
+@@ -70,15 +103,17 @@
+     DPWS_OUT_CONNECTION *connection = RB_ENTRY_VALUE( entry, DPWS_OUT_CONNECTION, entry );
+     DPWS_CONNECTION_KEY *connection_key = (DPWS_CONNECTION_KEY *)key;
+ 
+-    if ( connection_key->addr.sin_port < connection->key.addr.sin_port )
+-        return -1;
+-    if ( connection_key->addr.sin_port > connection->key.addr.sin_port )
+-        return 1;
+-
+-    if ( connection_key->addr.sin_addr.s_addr < connection->key.addr.sin_addr.s_addr )
+-        return -1;
+-    if ( connection_key->addr.sin_addr.s_addr > connection->key.addr.sin_addr.s_addr )
+-        return 1;
++    int order;
++    if(connection_key->addr.sin_family!=connection->key.addr.sin_family)
++        return connection_key->addr.sin_family<connection->key.addr.sin_family ? -1 : 1;
++    if(connection_key->addr.sin_family==AF_IPX)
++        order=memcmp((const char *)&connection_key->addr+2,(const char *)&connection->key.addr+2,12);
++    else {
++        if(connection_key->addr.sin_port!=connection->key.addr.sin_port)
++            return connection_key->addr.sin_port<connection->key.addr.sin_port ? -1 : 1;
++        order=memcmp(&connection_key->addr.sin_addr,&connection->key.addr.sin_addr,4);
++    }
++    if(order) return order;
+ 
+     if ( connection_key->guaranteed < connection->key.guaranteed )
+         return -1;
+@@ -95,19 +130,16 @@
+     return DPWS_CompareConnections( key, &connectionRef->connection->entry );
+ }
+ 
+-static HRESULT DPWS_BindToFreePort( SOCKET sock, SOCKADDR_IN *addr, int startPort, int endPort )
++static HRESULT DPWS_BindToFreePort( DPWS_DATA *state, SOCKET sock, SOCKADDR_IN *addr, int startPort, int endPort )
+ {
+     int port;
+ 
+-    memset( addr, 0, sizeof( *addr ) );
+-    addr->sin_family = AF_INET;
+-    addr->sin_addr.s_addr = htonl( INADDR_ANY );
+ 
+     for ( port = startPort; port < endPort; ++port )
+     {
+-        addr->sin_port = htons( port );
+-
+-        if ( SOCKET_ERROR != bind( sock, (SOCKADDR *) addr, sizeof( *addr ) ) )
++        DPWS_Address(state,addr,htons(port),FALSE);
++
++        if ( SOCKET_ERROR != bind( sock, (SOCKADDR *) addr, DPWS_AddrSize(addr) ) )
+             return DP_OK;
+ 
+         if ( WSAGetLastError() == WSAEADDRINUSE )
+@@ -241,8 +273,7 @@
+     int messageBodySize;
+     int messageSize;
+ 
+-    if ( connection->header.SockAddr.sin_addr.s_addr == INADDR_ANY )
+-        connection->header.SockAddr.sin_addr = connection->addr.sin_addr;
++    DPWS_CompleteAddress(&connection->header.SockAddr,&connection->addr);
+ 
+     messageSize = DPSP_MSG_SIZE( connection->header.mixed );
+     messageBodySize = messageSize - sizeof( DPSP_MSG_HEADER );
+@@ -320,7 +351,7 @@
+ /* Called only by the receive thread. The enumeration socket is nonblocking. */
+ static void DPWS_ReceiveEnum( DPWS_DATA *state )
+ {
+-    SOCKADDR_IN source;
++    SOCKADDR_IN source={0};
+     DPSP_MSG_HEADER *header = (DPSP_MSG_HEADER *)state->enumBuffer;
+     int sourceSize = sizeof(source), count;
+     WSANETWORKEVENTS events;
+@@ -329,14 +360,14 @@
+     if (WSAEnumNetworkEvents( state->enumSock, state->enumEvent, &events )) return;
+     count = recvfrom( state->enumSock, state->enumBuffer, sizeof(state->enumBuffer), 0,
+                      (SOCKADDR *)&source, &sourceSize );
+-    if (count <= 0 || (unsigned)count < sizeof(*header) + 8 || sourceSize != sizeof(source)) return;
++    if (count <= 0 || (unsigned)count < sizeof(*header) + 8 || sourceSize != DPWS_AddrSize(&source)) return;
+     memcpy( &magic, state->enumBuffer + sizeof(*header), sizeof(magic) );
+     if (DPSP_MSG_SIZE(header->mixed) != count || magic != 0x79616c70 ||
+         state->enumBuffer[sizeof(*header) + 4] != 2 ||
+         state->enumBuffer[sizeof(*header) + 5] != 0 ||
+         DPSP_MSG_TOKEN(header->mixed) != DPSP_MSG_TOKEN_REMOTE ||
+-        header->SockAddr.sin_family != AF_INET || !header->SockAddr.sin_port) return;
+-    header->SockAddr.sin_addr = source.sin_addr;
++        header->SockAddr.sin_family != DPWS_Family(state) || !DPWS_Port(&header->SockAddr)) return;
++    DPWS_Node(&header->SockAddr,&source);
+     IDirectPlaySP_HandleMessage( state->lpISP, state->enumBuffer + sizeof(*header),
+                                 count - sizeof(*header), header );
+ }
+@@ -364,7 +395,7 @@
+         DPWS_IN_CONNECTION *connection;
+         WSANETWORKEVENTS networkEvents;
+         WSAEVENT events[3];
+-        SOCKADDR_IN addr;
++        SOCKADDR_IN addr={0};
+         DWORD waitResult;
+         int addrSize;
+         SOCKET sock;
+@@ -440,14 +471,14 @@
+     if ( dpwsData->started )
+         return S_OK;
+ 
+-    dpwsData->tcpSock = socket( AF_INET, SOCK_STREAM, IPPROTO_TCP );
++    dpwsData->tcpSock = socket( DPWS_Family(dpwsData), SOCK_STREAM, DPWS_Protocol(dpwsData,TRUE) );
+     if ( dpwsData->tcpSock == INVALID_SOCKET )
+     {
+         ERR( "socket() failed\n" );
+         return DPERR_UNAVAILABLE;
+     }
+ 
+-    hr = DPWS_BindToFreePort( dpwsData->tcpSock, &dpwsData->tcpAddr, DPWS_START_TCP_PORT,
++    hr = DPWS_BindToFreePort( dpwsData, dpwsData->tcpSock, &dpwsData->tcpAddr, DPWS_START_TCP_PORT,
+                               DPWS_END_TCP_PORT );
+     if ( FAILED( hr ) )
+     {
+@@ -480,7 +511,7 @@
+ 
+     list_init( &dpwsData->inConnections );
+ 
+-    dpwsData->udpSock = socket( AF_INET, SOCK_DGRAM, IPPROTO_UDP );
++    dpwsData->udpSock = socket( DPWS_Family(dpwsData), SOCK_DGRAM, DPWS_Protocol(dpwsData,FALSE) );
+     if ( dpwsData->udpSock == INVALID_SOCKET )
+     {
+         ERR( "socket() failed\n" );
+@@ -489,7 +520,7 @@
+         return DPERR_UNAVAILABLE;
+     }
+ 
+-    hr = DPWS_BindToFreePort( dpwsData->udpSock, &dpwsData->udpAddr, DPWS_START_UDP_PORT,
++    hr = DPWS_BindToFreePort( dpwsData, dpwsData->udpSock, &dpwsData->udpAddr, DPWS_START_UDP_PORT,
+                               DPWS_END_UDP_PORT );
+     if ( FAILED( hr ) )
+     {
+@@ -671,14 +702,14 @@
+         return hr;
+ 
+     if (dpwsData->addressInvalid) return DPERR_INVALIDPARAMS;
+-    if (!data->bReturnStatus && !dpwsData->targetChosen)
++    if (!dpwsData->ipx && !data->bReturnStatus && !dpwsData->targetChosen)
+     {
+         if (DialogBoxParamW( GetModuleHandleW(L"dpwsockx.dll"), MAKEINTRESOURCEW(101), NULL,
+                              DPWS_AddressDialog, (LPARAM)dpwsData ) != IDOK)
+             return DPERR_USERCANCEL;
+     }
+ 
+-    sock = socket( AF_INET, SOCK_DGRAM, IPPROTO_UDP );
++    sock = socket( DPWS_Family(dpwsData), SOCK_DGRAM, DPWS_Protocol(dpwsData,FALSE) );
+     if ( sock == INVALID_SOCKET )
+     {
+         ERR( "socket() failed\n" );
+@@ -696,16 +727,12 @@
+ 
+     memset( header, 0, sizeof( DPSP_MSG_HEADER ) );
+     header->mixed = DPSP_MSG_MAKE_MIXED( data->dwMessageSize, DPSP_MSG_TOKEN_REMOTE );
+-    header->SockAddr.sin_family = AF_INET;
+-    header->SockAddr.sin_port = dpwsData->tcpAddr.sin_port;
+-
+-    memset( &addr, 0, sizeof( addr ) );
+-    addr.sin_family = AF_INET;
+-    addr.sin_addr.s_addr = dpwsData->enumTarget;
+-    addr.sin_port = htons( DPWS_PORT );
++    header->SockAddr=dpwsData->tcpAddr;
++
++    DPWS_Address(dpwsData,&addr,htons(DPWS_PORT),TRUE);
+ 
+     if ( SOCKET_ERROR == sendto( sock, data->lpMessage, data->dwMessageSize, 0, (SOCKADDR *) &addr,
+-                                 sizeof( addr ) ) )
++                                 DPWS_AddrSize(&addr) ) )
+     {
+         ERR( "sendto() failed\n" );
+         closesocket( sock );
+@@ -725,18 +752,18 @@
+     SOCKET sock;
+     HRESULT hr;
+     if (!request || !reply || data->dwMessageSize < sizeof(*reply) ||
+-        request->SockAddr.sin_family != AF_INET || !request->SockAddr.sin_port)
++        (request->SockAddr.sin_family!=AF_INET && request->SockAddr.sin_family!=AF_IPX) || !DPWS_Port(&request->SockAddr))
+         return DPERR_INVALIDPARAMS;
+     hr = IDirectPlaySP_GetSPData( data->lpISP, (void **)&state, &size, DPSET_LOCAL );
+     if (FAILED(hr)) return hr;
+     if (!state->started) return DPERR_UNINITIALIZED;
++    if (request->SockAddr.sin_family!=DPWS_Family(state)) return DPERR_INVALIDPARAMS;
+     memset( reply, 0, sizeof(*reply) );
+     reply->mixed = DPSP_MSG_MAKE_MIXED(data->dwMessageSize, DPSP_MSG_TOKEN_REMOTE);
+-    reply->SockAddr.sin_family = AF_INET;
+-    reply->SockAddr.sin_port = state->tcpAddr.sin_port;
+-    sock = socket( AF_INET, SOCK_STREAM, IPPROTO_TCP );
++    reply->SockAddr=state->tcpAddr;
++    sock = socket( DPWS_Family(state), SOCK_STREAM, DPWS_Protocol(state,TRUE) );
+     if (sock == INVALID_SOCKET) return DPERR_UNAVAILABLE;
+-    hr = connect( sock, (SOCKADDR *)&request->SockAddr, sizeof(request->SockAddr) ) == SOCKET_ERROR
++    hr = connect( sock, (SOCKADDR *)&request->SockAddr, DPWS_AddrSize(&request->SockAddr) ) == SOCKET_ERROR
+          ? DPERR_UNAVAILABLE : DPWS_WriteAll( sock, reply, data->dwMessageSize );
+     closesocket( sock );
+     return hr;
+@@ -906,17 +933,13 @@
+     if ( data->lpSPMessageHeader )
+     {
+         DPSP_MSG_HEADER *header = data->lpSPMessageHeader;
+-        if ( !playerData->tcpAddr.sin_addr.s_addr )
+-            playerData->tcpAddr.sin_addr = header->SockAddr.sin_addr;
+-        if ( !playerData->udpAddr.sin_addr.s_addr )
+-            playerData->udpAddr.sin_addr = header->SockAddr.sin_addr;
++        DPWS_CompleteAddress(&playerData->tcpAddr,&header->SockAddr);
++        DPWS_CompleteAddress(&playerData->udpAddr,&header->SockAddr);
+     }
+     else
+     {
+-        playerData->tcpAddr.sin_family = AF_INET;
+-        playerData->tcpAddr.sin_port = dpwsData->tcpAddr.sin_port;
+-        playerData->udpAddr.sin_family = AF_INET;
+-        playerData->udpAddr.sin_port = dpwsData->udpAddr.sin_port;
++        playerData->tcpAddr=dpwsData->tcpAddr;
++        playerData->udpAddr=dpwsData->udpAddr;
+     }
+ 
+     hr = IDirectPlaySP_SetSPPlayerData( data->lpISP, data->idPlayer, (void *) &playerPlaceholder,
+@@ -1033,8 +1056,9 @@
+ 
+ static HRESULT WINAPI DPWSCB_GetCaps( LPDPSP_GETCAPSDATA data )
+ {
+-    TRACE( "(%ld,%p,0x%08lx,%p)\n",
+-           data->idPlayer, data->lpCaps, data->dwFlags, data->lpISP );
++    DPWS_DATA *state; DWORD size;
++    HRESULT hr=IDirectPlaySP_GetSPData(data->lpISP,(void **)&state,&size,DPSET_LOCAL);
++    if(FAILED(hr)) return hr;
+ 
+     data->lpCaps->dwFlags = ( DPCAPS_GUARANTEEDOPTIMIZED |
+                               DPCAPS_GUARANTEEDSUPPORTED );
+@@ -1053,7 +1077,7 @@
+     }
+     else
+     {
+-        data->lpCaps->dwMaxBufferSize = DPWS_MAXBUFFERSIZE;
++        data->lpCaps->dwMaxBufferSize = state->ipx ? 1442 : DPWS_MAXBUFFERSIZE;
+         data->lpCaps->dwMaxPlayers    = DPWS_MAXPLAYERS;
+     }
+ 
+@@ -1076,6 +1100,8 @@
+     if ( FAILED( hr ) )
+         return hr;
+ 
++    if(data->dwSessionFlags & (DPSESSION_MIGRATEHOST | DPSESSION_DIRECTPLAYPROTOCOL)) return DPERR_UNSUPPORTED;
++
+     hr = DPWS_Start( dpwsData );
+     if ( FAILED (hr) )
+         return hr;
+@@ -1085,13 +1111,12 @@
+         SOCKADDR_IN enumeration = {0};
+         BOOL reuse = TRUE;
+         if (dpwsData->enumSock != INVALID_SOCKET) return DPERR_ALREADYINITIALIZED;
+-        dpwsData->enumSock = socket( AF_INET, SOCK_DGRAM, IPPROTO_UDP );
++        dpwsData->enumSock = socket( DPWS_Family(dpwsData), SOCK_DGRAM, DPWS_Protocol(dpwsData,FALSE) );
+         if (dpwsData->enumSock == INVALID_SOCKET) return DPERR_UNAVAILABLE;
+-        enumeration.sin_family = AF_INET;
+-        enumeration.sin_port = htons(DPWS_PORT);
+-        if (setsockopt( dpwsData->enumSock, SOL_SOCKET, SO_REUSEADDR,
+-                        (const char *)&reuse, sizeof(reuse) ) == SOCKET_ERROR ||
+-            bind( dpwsData->enumSock, (SOCKADDR *)&enumeration, sizeof(enumeration) ) == SOCKET_ERROR ||
++        DPWS_Address(dpwsData,&enumeration,htons(DPWS_PORT),FALSE);
++        if ((!dpwsData->ipx && setsockopt( dpwsData->enumSock, SOL_SOCKET, SO_REUSEADDR,
++                        (const char *)&reuse, sizeof(reuse) ) == SOCKET_ERROR) ||
++            bind( dpwsData->enumSock, (SOCKADDR *)&enumeration, DPWS_AddrSize(&enumeration) ) == SOCKET_ERROR ||
+             WSAEventSelect( dpwsData->enumSock, dpwsData->enumEvent, FD_READ ) == SOCKET_ERROR)
+         {
+             closesocket( dpwsData->enumSock );
+@@ -1100,13 +1125,10 @@
+         }
+         return DP_OK;
+     }
+-    if (!header || header->SockAddr.sin_family != AF_INET || !header->SockAddr.sin_port)
++    if (!header || header->SockAddr.sin_family != DPWS_Family(dpwsData) || !DPWS_Port(&header->SockAddr))
+         return DPERR_INVALIDPARAMS;
+ 
+-    memset( &nameserverAddr, 0, sizeof( nameserverAddr ) );
+-    nameserverAddr.sin_family = AF_INET;
+-    nameserverAddr.sin_addr = header->SockAddr.sin_addr;
+-    nameserverAddr.sin_port = header->SockAddr.sin_port;
++    nameserverAddr=header->SockAddr;
+ 
+     rb_init( &dpwsData->nameserver.connectionRefs, DPWS_CompareConnectionRefs );
+ 
+@@ -1210,15 +1232,17 @@
+     DPWS_CONNECTION_REF *connectionRef;
+     DPSP_MSG_HEADER header = { 0 };
+     HRESULT sendResult;
++    void *savedFirst;
+ 
+     if (!dpwsData->started) return DPERR_UNINITIALIZED;
++    if (!guaranteed && dpwsData->ipx && messageSize>1462) return DPERR_SENDTOOBIG;
+     if (!buffers || !bufferCount || messageSize > 0xfffff ||
+         ((guaranteed || system) && buffers[0].len != sizeof(header))) return DPERR_INVALIDPARAMS;
++    savedFirst=buffers[0].pData;
+     if ( guaranteed || system )
+     {
+         header.mixed = DPSP_MSG_MAKE_MIXED( messageSize, DPSP_MSG_TOKEN_REMOTE );
+-        header.SockAddr.sin_family = AF_INET;
+-        header.SockAddr.sin_port = dpwsData->tcpAddr.sin_port;
++        header.SockAddr=dpwsData->tcpAddr;
+ 
+         buffers[ 0 ].pData = (unsigned char *) &header;
+     }
+@@ -1236,21 +1260,23 @@
+             if ( connection->tcpSock != INVALID_SOCKET )
+                 continue;
+ 
+-            connection->tcpSock = socket( AF_INET, SOCK_STREAM, IPPROTO_TCP );
++            connection->tcpSock = socket( DPWS_Family(dpwsData), SOCK_STREAM, DPWS_Protocol(dpwsData,TRUE) );
+             if ( connection->tcpSock == INVALID_SOCKET )
+             {
+                 ERR( "socket() failed\n" );
+                 LeaveCriticalSection( &dpwsData->sendCs );
++                buffers[0].pData=savedFirst;
+                 return DPERR_UNAVAILABLE;
+             }
+ 
+             if ( SOCKET_ERROR == connect( connection->tcpSock, (SOCKADDR *) &connection->key.addr,
+-                                          sizeof( connection->key.addr ) ) )
++                                          DPWS_AddrSize(&connection->key.addr) ) )
+             {
+                 ERR( "connect() failed\n" );
+                 closesocket( connection->tcpSock );
+                 connection->tcpSock = INVALID_SOCKET;
+                 LeaveCriticalSection( &dpwsData->sendCs );
++                buffers[0].pData=savedFirst;
+                 return DPERR_UNAVAILABLE;
+             }
+         }
+@@ -1275,7 +1301,7 @@
+         }
+         else if (WSASendTo( dpwsData->udpSock, (WSABUF *)buffers, bufferCount,
+                             &transferred, 0, (SOCKADDR *)&connection->key.addr,
+-                            sizeof(connection->key.addr), NULL, NULL ) == SOCKET_ERROR ||
++                            DPWS_AddrSize(&connection->key.addr), NULL, NULL ) == SOCKET_ERROR ||
+                  transferred != messageSize)
+             hr = DPERR_UNAVAILABLE;
+         if (FAILED(hr)) sendResult = hr;
+@@ -1283,6 +1309,7 @@
+ 
+     LeaveCriticalSection( &dpwsData->sendCs );
+ 
++    buffers[0].pData=savedFirst;
+     return sendResult;
+ }
+ 
+@@ -1417,7 +1444,7 @@
+            wine_dbgstr_guid(lpspData->lpGuid), debugstr_w(lpspData->lpszName) );
+ 
+     /* We only support TCP/IP service */
+-    if ( !IsEqualGUID(lpspData->lpGuid, &DPSPGUID_TCPIP) )
++    if ( !IsEqualGUID(lpspData->lpGuid, &DPSPGUID_TCPIP) && !IsEqualGUID(lpspData->lpGuid, &DPSPGUID_IPX) )
+     {
+         return DPERR_UNAVAILABLE;
+     }
+@@ -1435,8 +1462,9 @@
+     /* Initialize internal data */
+     memset( &dpwsData, 0, sizeof(DPWS_DATA) );
+     dpwsData.lpISP = lpspData->lpISP;
++    dpwsData.ipx=IsEqualGUID(lpspData->lpGuid,&DPSPGUID_IPX);
+     dpwsData.enumTarget = INADDR_BROADCAST;
+-    if (lpspData->lpAddress && FAILED(IDirectPlaySP_EnumAddress( lpspData->lpISP,
++    if (!dpwsData.ipx && lpspData->lpAddress && FAILED(IDirectPlaySP_EnumAddress( lpspData->lpISP,
+         DPWS_ReadAddress, lpspData->lpAddress, lpspData->dwAddressSize, &dpwsData )))
+     {
+         WSACleanup();
+--- a/dlls/dpwsockx/dpwsockx_dll.h
++++ b/dlls/dpwsockx/dpwsockx_dll.h
+@@ -130,6 +130,7 @@
+     DPWS_CONNECTION_REF   nameserverConnectionRef;
+     struct rb_tree        connections;
+ 
++    BOOL                  ipx;
+     BOOL                  started;
+     HANDLE                thread;
+     WSAEVENT              stopEvent;

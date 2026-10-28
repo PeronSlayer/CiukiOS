@@ -51,6 +51,14 @@ static void *network_job(void *arg)
     struct cp_network_worker *w=arg;
     memset(&w->result,0,sizeof(w->result));
     if (w->operation==CP_NET_TEST) network_test_job(w);
+    else if (w->operation==CP_NET_IPX) {
+        char text[32];
+        int n=snprintf(text,sizeof(text),"frame_type=%u\n",w->request.ipx_frame_type);
+        if (ciuki_system_setting_set(CIUKI_SYSTEM_SETTING_IPX_FRAME,text,(size_t)n)) {
+            w->result.error=-errno;
+            snprintf(w->result.message,sizeof(w->result.message),"IPX frame type could not be saved: %s (%d).",strerror(errno),errno);
+        }
+    }
     else if (w->operation!=CIUKI_NETCTL_GET && ciuki_net_control(w->operation,&w->request)) {
         w->result.error=-errno;
         snprintf(w->result.message,sizeof(w->result.message),"Network operation failed: %s (%d).",strerror(errno),errno);
@@ -67,7 +75,7 @@ static void *network_job(void *arg)
         if (i+1>=n->count) break;
     }
     if (!w->result.error && !w->result.message[0]) snprintf(w->result.message,sizeof(w->result.message),"%s",
-        w->operation==CIUKI_NETCTL_SET ? "Network settings saved and applied." : w->operation==CIUKI_NETCTL_RENEW ? "DHCP renewal requested." :
+        w->operation==CP_NET_IPX ? "IPX frame type saved and applied." : w->operation==CIUKI_NETCTL_SET ? "Network settings saved and applied." : w->operation==CIUKI_NETCTL_RENEW ? "DHCP renewal requested." :
         w->operation==CIUKI_NETCTL_RELEASE ? "DHCP lease released." : "Network status refreshed.");
     atomic_store_explicit(&w->done,1,memory_order_release); return NULL;
 }

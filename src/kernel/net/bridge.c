@@ -73,7 +73,7 @@ int net_bridge_init(struct net_bridge *b, struct bridge_pool *pool, const struct
         (count && !physical) || !generation) return -EINVAL;
     uint8_t nonzero = 0; for (unsigned i = 0; i < 16; i++) nonzero |= id[i];
     if (!nonzero) return -EINVAL; /* Caller must load/create AND persist random identity first. */
-    memset(b, 0, sizeof(*b)); b->wire_framing=IPX_II; b->pool = pool; b->ops = *ops;
+    memset(b, 0, sizeof(*b)); b->wire_framing=IPX_LLC; b->frame_type=CIUKI_IPX_FRAME_AUTO; b->pool = pool; b->ops = *ops;
     memcpy(b->host_id, id, 16); if (count) memcpy(b->physical, physical, count * 6);
     b->physical_count = count; b->interface = interface; b->generation = generation; b->identity_ready = true;
     return 0;
@@ -174,6 +174,7 @@ void net_bridge_ingress(struct net_bridge *b, uint32_t interface, uint32_t gener
     if (!frame_ok(p, n)) { b->malformed++; return; }
     if(b->host_input && !memcmp(p+6,b->host_node,6)) { b->filtered++;return; }
     for(unsigned i=0;i<BRIDGE_VMS;i++)if(b->vm[i].enabled && !memcmp(p+6,b->vm[i].mac,6)) { b->filtered++;return; }
+    unsigned f; (void)ipx_decode(p,n,&f); ipx_frame_remember(&b->frames,p+6,f);
     if (b->host_input) b->host_input(b->host_arg,p,n,now);
     bool any = false;
     for (unsigned i = 0; i < BRIDGE_VMS; i++) if (b->vm[i].enabled) {
@@ -247,6 +248,6 @@ int net_bridge_host_send(struct net_bridge *b,const uint8_t *p,unsigned n)
 int net_bridge_send_ipx(struct net_bridge *b,struct bridge_key key,const uint8_t *p,unsigned n,uint64_t now)
 {
     if(!b)return -EINVAL;
-    uint8_t wire[1514];int size=ipx_encode(wire,p,n,b->wire_framing);
+    uint8_t wire[1514];int size=ipx_encode(wire,p,n,ipx_frame_reply(&b->frames,p,b->wire_framing));
     return size<0 ? size : net_bridge_send(b,key,wire,(unsigned)size,now);
 }

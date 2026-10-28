@@ -8,6 +8,7 @@
 #include "../../../src/kernel/vm/dosvm_ipx.h"
 #define CHECK(c) do { if(!(c)) { fprintf(stderr,"IPX line %u: %s\n",__LINE__,#c); exit(1); } checks++; } while(0)
 static unsigned checks,active_nodes=5;
+static bool windows98_llc;
 static struct ipx_stack nodes[5];
 struct queued { uint8_t frame[1514]; unsigned size,from; };
 static struct queued queue[256];
@@ -34,6 +35,8 @@ static void pump(void)
     while(count) {
         CHECK(budget--); struct queued q=queue[head];head=(head+1)%256;count--;
         for(unsigned i=0;i<active_nodes;i++)if(i!=q.from) {
+            unsigned format;CHECK(ipx_decode(q.frame,q.size,&format));
+            if(windows98_llc && i==1 && format!=IPX_LLC)continue;
             if(i==0)net_bridge_ingress(&bridge,0,1,q.frame,q.size,now);
             else ipx_input(&nodes[i],q.frame,q.size);
         }
@@ -68,7 +71,11 @@ static void datagrams(void)
     CHECK(receive(1,fd[1],b,2,MSG_PEEK,&out)==2 && out==MSG_TRUNC);
     CHECK(receive(1,fd[1],b,32,0,&out)==5 && !out);
     for(unsigned f=0;f<IPX_FRAMINGS;f++) {
-        nodes[0].framing=f; CHECK(ipx_send(&nodes[0],fd[0],"frame",5,&to)==5);pump();CHECK(receive(1,fd[1],b,32,0,&out)==5);
+        CHECK(!ipx_set_framing(&nodes[0],CIUKI_IPX_FRAME_AUTO)); nodes[0].framing=f; memset(&nodes[0].frames,0,sizeof(nodes[0].frames)); CHECK(ipx_send(&nodes[0],fd[0],"frame",5,&to)==5);pump();CHECK(receive(1,fd[1],b,32,0,&out)==5);
+        CHECK(ipx_frame_reply(&nodes[1].frames,nodes[0].node,IPX_FRAMINGS)==f);
+        struct ciuki_sockaddr_ipx reply=address(0,0x869c);
+        CHECK(ipx_send(&nodes[1],fd[1],"reply",5,&reply)==5);pump();
+        CHECK(receive(0,fd[0],b,32,0,&out)==5);
     }
     struct ciuki_ipx_address_data a={0};unsigned n=sizeof(a);CHECK(!ipx_option(&nodes[0],fd[0],false,NSPROTO_IPX,IPX_ADDRESS,&a,&n));
     CHECK(n==24 && !a.wan && !a.status && !memcmp(a.nodenum,nodes[0].node,6));
@@ -76,8 +83,42 @@ static void datagrams(void)
     for(unsigned i=0;i<active_nodes;i++)ipx_close(&nodes[i],fd[i]);
     printf("PASS %u-node IPX broadcast, directed datagrams, ptype filtering, peek/truncation, four framings, adapter query\n",active_nodes);
 }
+static void mixed_framings(void)
+{
+    const unsigned types[]={CIUKI_IPX_FRAME_LLC,CIUKI_IPX_FRAME_LLC,CIUKI_IPX_FRAME_RAW,CIUKI_IPX_FRAME_II,CIUKI_IPX_FRAME_SNAP};
+    windows98_llc=true;
+    for(active_nodes=2;active_nodes<=5;active_nodes++) {
+        unsigned fd[5];char b[16];unsigned flags;
+        for(unsigned i=0;i<active_nodes;i++) {CHECK(!ipx_set_framing(&nodes[i],types[i]));fd[i]=(unsigned)bound(i,SOCK_DGRAM,0x6c32);}
+        struct ciuki_sockaddr_ipx broadcast=address(1,0x6c32);memset(broadcast.node,255,6);set(1,fd[1],SOL_SOCKET,SO_BROADCAST,1);
+        CHECK(ipx_send(&nodes[1],fd[1],"discover",8,&broadcast)==8);pump();
+        for(unsigned i=0;i<active_nodes;i++)CHECK(receive(i,fd[i],b,sizeof(b),0,&flags)==8);
+        struct ciuki_sockaddr_ipx peer=address(1,0x6c32);
+        for(unsigned i=0;i<active_nodes;i++)if(i!=1)CHECK(ipx_send(&nodes[i],fd[i],"reply",5,&peer)==5);
+        pump();
+        for(unsigned i=1;i<active_nodes;i++)CHECK(receive(1,fd[1],b,sizeof(b),0,&flags)==5);
+        CHECK(receive(1,fd[1],b,sizeof(b),0,&flags)==-EAGAIN);
+        if(active_nodes>2) {
+            set(2,fd[2],SOL_SOCKET,SO_BROADCAST,1);
+            CHECK(ipx_send(&nodes[2],fd[2],"raw",3,&broadcast)==3);pump();
+            CHECK(receive(1,fd[1],b,sizeof(b),0,&flags)==-EAGAIN); /* A Win98 802.2 binding refuses raw. */
+            for(unsigned i=0;i<active_nodes;i++)if(i!=1)CHECK(receive(i,fd[i],b,sizeof(b),0,&flags)==3);
+        }
+        for(unsigned i=0;i<active_nodes;i++)ipx_close(&nodes[i],fd[i]);
+    }
+    active_nodes=5;windows98_llc=false;
+    puts("PASS 2-5 mixed-framing peers: strict Windows 98-style LLC binding receives every directed reply; manual broadcasts retain their framing");
+}
 static void framing(void)
 {
+    struct ipx_stack fallback;uint8_t fallback_node[6]={2,1,2,3,4,5};
+    ipx_init(&fallback,fallback_node,NULL,NULL);CHECK(fallback.framing==IPX_LLC);
+    ipx_tick(&fallback,0);ipx_tick(&fallback,1001);CHECK(fallback.framing==IPX_LLC);
+    for(unsigned type=0;type<=CIUKI_IPX_FRAME_AUTO;type++) {
+        CHECK(!ipx_set_framing(&fallback,type));CHECK(fallback.framing==ipx_frame_wire(type));
+        ipx_tick(&fallback,2000+type*2000);CHECK(fallback.probed==(type==CIUKI_IPX_FRAME_AUTO));
+    }
+    CHECK(ipx_set_framing(&fallback,5)==-EINVAL);
     struct ipx_stack s;uint8_t node[6]={2,3,4,5,6,7};ipx_init(&s,node,NULL,NULL);s.probed=true;s.discovery_end=1000;
     uint8_t p[60]={0},wire[1514];memcpy(p,node,6);p[6]=2;p[7]=99;ipx_put16(p+12,0x8137);
     p[14]=p[15]=255;ipx_put16(p+16,40);p[19]=1;p[32]=0x12;memcpy(p+24,p,6);memcpy(p+36,p+6,6);
@@ -221,7 +262,7 @@ int main(void)
     for(unsigned i=0;i<5;i++) { uint8_t node[6]={2,0,0,0,0,(uint8_t)(i+1)};
         ipx_init(&nodes[i],node,(void *)(uintptr_t)i,i?segment:native_send); }
     memcpy(bridge.host_node,nodes[0].node,6);bridge.host_input=native_receive;
-    tick(0);for(active_nodes=2;active_nodes<=5;active_nodes++)datagrams();active_nodes=5;framing();exhaustion();spx(SOCK_STREAM);spx(SOCK_SEQPACKET);timeouts();dos_test();
+    tick(0);for(active_nodes=2;active_nodes<=5;active_nodes++)datagrams();active_nodes=5;mixed_framings();framing();exhaustion();spx(SOCK_STREAM);spx(SOCK_SEQPACKET);timeouts();dos_test();
     for(unsigned i=0;i<5;i++)for(unsigned e=0;e<IPX_ENDPOINTS;e++)if(nodes[i].endpoint[e].used)ipx_close(&nodes[i],e);
     for(unsigned i=0;i<5;i++)ipx_link(&nodes[i],false);
     net_bridge_shutdown(&bridge);CHECK(!pool.used);printf("PASS f6-25 IPX/SPX: %u checks\n",checks);return 0;

@@ -12,7 +12,7 @@ for unit in vm_source opl3 mixer; do
         -c "$root/src/kernel/audio/$unit.c" -o "$out/dosvm_audio_$unit.o"
 done
 pool="$(python3 "$root/tests/host/vm/pool_build.py" "$root" "$out/vm")"
-network_sources=("$root/src/kernel/net/bridge.c" "$root/src/kernel/vm/dosvm_ipx.c" "$root/src/kernel/vm/dosvm_ne2000.c")
+network_sources=("$root/src/kernel/net/ipx_config.c" "$root/src/kernel/net/bridge.c" "$root/src/kernel/vm/dosvm_ipx.c" "$root/src/kernel/vm/dosvm_ne2000.c")
 guest_cpu=()
 if [[ -f /usr/include/x86emu.h ]]; then
     guest_cpu=(-DCIUKI_DOSVM_GUEST_CPU "$root/tests/host/dosvm_guest_cpu.c" -lx86emu)

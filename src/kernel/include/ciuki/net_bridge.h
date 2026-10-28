@@ -3,6 +3,7 @@
 #define CIUKI_NET_BRIDGE_H
 #include <ciuki/kernel.h>
 #include <ciuki/net_packet.h>
+#include <ciuki/ipx_wire.h>
 
 #define BRIDGE_VMS 2u
 #define BRIDGE_QUEUE 8u
@@ -52,6 +53,8 @@ struct net_bridge {
     void (*host_input)(void *, const uint8_t *, unsigned, uint64_t);
     void (*host_tick)(void *, bool, uint64_t);
     unsigned wire_framing;
+    unsigned frame_type;
+    struct ipx_frame_cache frames;
     uint32_t ipx_network; /* atomic carrier of four network-order bytes */
 };
 int bridge_pool_copy(struct bridge_pool *, const uint8_t *, unsigned, uint32_t, uint32_t);

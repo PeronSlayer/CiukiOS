@@ -1253,6 +1253,16 @@ DHCP renew/release are transient. No user pointers occur in these records.
 #define CIUKI_NET_MEDIA_AUTO 1u
 #define CIUKI_NET_MEDIA_10 2u
 #define CIUKI_NET_MEDIA_100 4u
+```
+
+Windows 9x Frame_Type values; SNAP extends its Ethernet-only table.
+
+```c
+#define CIUKI_IPX_FRAME_RAW 0u
+#define CIUKI_IPX_FRAME_LLC 1u
+#define CIUKI_IPX_FRAME_II 2u
+#define CIUKI_IPX_FRAME_SNAP 3u
+#define CIUKI_IPX_FRAME_AUTO 4u
 struct ciuki_net_config {
     uint32_t enabled;
     uint32_t dhcp;
@@ -1296,7 +1306,13 @@ struct ciuki_net_control {
     uint64_t rx_errors;
     uint64_t tx_errors;
     uint32_t generation;
-    uint32_t reserved[3];
+    uint32_t ipx_frame_type;
+```
+
+observation; writes use SYSTEM SETTING
+
+```c
+uint32_t reserved[2];
 };
 ```
 
@@ -3964,6 +3980,7 @@ uint32_t reserved[4];
 #define CIUKI_SYSTEM_SETTING_HWPROFILES 1u
 #define CIUKI_SYSTEM_SETTING_PERFORMANCE 2u
 #define CIUKI_SYSTEM_SETTING_ACCEL_RETRY 3u
+#define CIUKI_SYSTEM_SETTING_IPX_FRAME 4u
 #define CIUKI_SYSTEM_SETTING_MAX 24575u
 struct ciuki_system_setting {
     uint32_t version;

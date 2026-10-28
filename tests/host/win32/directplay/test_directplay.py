@@ -23,12 +23,12 @@ class DirectPlayProvider(unittest.TestCase):
         self.addCleanup(self.temp.cleanup)
         self.directory = Path(self.temp.name)
         for module, names in {'dpwsockx': ('dpwsockx_main.c', 'dpwsockx_dll.h', 'Makefile.in'),
-                              'dplayx': ('dplobby.c', 'Makefile.in')}.items():
+                              'dplayx': ('dplobby.c', 'dplayx_global.c', 'dplayx_global.h', 'dplayx_messages.c', 'dplayx_messages.h', 'Makefile.in')}.items():
             target = self.directory / 'dlls' / module
             target.mkdir(parents=True)
             for name in names:
                 shutil.copyfile(SOURCE / 'dlls' / module / name, target / name)
-        for patch in ('0011-directplay-lan.patch', '0012-directplay-lobby.patch'):
+        for patch in ('0011-directplay-lan.patch', '0012-directplay-lobby.patch', '0014-directplay-ipx.patch', '0015-directplay-lobby-lifetime.patch'):
             subprocess.run(['patch', '--batch', '--fuzz=0', '-p1', '-i',
                             str(ROOT / 'third_party/wine/patches' / patch)],
                            cwd=self.directory, check=True, capture_output=True, text=True)
@@ -73,7 +73,12 @@ class DirectPlayProvider(unittest.TestCase):
                                  source.index('static HRESULT WINAPI IDirectPlayLobby3Impl_EnumLocalApplications(')]
             registration = source[source.index('static WCHAR *DPL_Wide('):
                                   source.index('static HRESULT WINAPI IDirectPlayLobby3Impl_RegisterApplication(')]
-            body = prefix + enumeration + registration
+            launch = source[source.index('typedef struct tagRunApplicationEnumStruct'):
+                            source.index('static HRESULT WINAPI IDirectPlayLobby3AImpl_SendLobbyMessage(')]
+            worker = (self.directory / 'dlls/dplayx/dplayx_messages.c').read_text()
+            worker = worker[worker.index('typedef struct tagMSGTHREADINFO'):
+                            worker.index('static HRESULT DP_MSG_ExpectReply(')]
+            body = prefix + enumeration + registration + launch + worker
         else:
             body = '#include "' + include + '"\n'
         (self.directory / (kind + '-under-test.c')).write_text(body)
@@ -83,7 +88,7 @@ class DirectPlayProvider(unittest.TestCase):
                    '-fsanitize=address,undefined', '-fno-omit-frame-pointer',
                    '-ffunction-sections', '-fdata-sections', '-Wl,--gc-sections',
                    '-Wno-pragma-pack', '-Wno-format', '-Wno-incompatible-pointer-types-discards-qualifiers',
-                   '-I' + str(self.directory), '-I' + str(SOURCE / 'include'),
+                   '-I' + str(self.directory), '-I' + str(self.directory / 'dlls/dplayx'), '-I' + str(SOURCE / 'include'),
                    '-I' + str(SOURCE / 'dlls/dplayx'),
                    str(Path(__file__).with_name(kind + '_test.c')), '-o', str(program)]
         build = subprocess.run(command, capture_output=True, text=True)
@@ -99,7 +104,7 @@ class DirectPlayProvider(unittest.TestCase):
         print(run.stdout.strip())
 
     def test_patched_wine_provider_on_winsock_model(self):
-        self.compile_and_run('provider', 'dlls/dpwsockx/dpwsockx_main.c', 'PASS patched Wine TCP provider')
+        self.compile_and_run('provider', 'dlls/dpwsockx/dpwsockx_main.c', 'PASS patched Wine TCP/IP and IPX providers')
 
     def test_patched_wine_lobby_on_registry_model(self):
         self.compile_and_run('lobby', 'dlls/dplayx/dplobby.c', 'PASS patched Wine lobby')

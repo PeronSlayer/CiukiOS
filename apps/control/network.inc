@@ -2,7 +2,7 @@
  * SPDX-License-Identifier: MIT */
 enum { N_LIST=1400, N_TABS, N_AUTO, N_STATIC, N_IP, N_MASK, N_GATEWAY,
        N_DNS1, N_DNS2, N_DNS3, N_HOST, N_DOMAIN, N_ENABLED, N_MEDIA,
-       N_APPLY, N_REFRESH, N_RENEW, N_RELEASE, N_TEST_NAME, N_TEST };
+       N_APPLY, N_REFRESH, N_RENEW, N_RELEASE, N_TEST_NAME, N_TEST, N_FRAME };
 static void network_build(struct cp_app *a);
 static void network_ip(char out[16], uint32_t ip)
 { const uint8_t *b=(const void *)&ip; snprintf(out,16,"%u.%u.%u.%u",b[0],b[1],b[2],b[3]); }
@@ -41,6 +41,7 @@ static void network_begin(struct cp_app *a,unsigned op)
     if (a->network_busy || !a->host.network_begin) return;
     struct ciuki_net_control record={.version=1,.size=sizeof(record),.index=a->network_selected,.config=a->network_edit};
     if (a->network_selected<a->network.count) record.generation=a->network.adapters[a->network_selected].generation;
+    record.ipx_frame_type=a->network_frame_type;
     const char *name=a->network_test_name[0] ? a->network_test_name : "example.com";
     int e=a->host.network_begin(a->host.ctx,op,&record,name);
     if (e) { network_note(a,"The network operation could not start."); return; }
@@ -54,7 +55,7 @@ static void network_poll(struct cp_app *a)
     a->network_busy=0; result.count=result.count>2 ? 0 : result.count;
     a->network=result; a->network_loaded=1;
     if (a->network_selected>=result.count) a->network_selected=0;
-    if (result.count) a->network_edit=result.adapters[a->network_selected].config;
+    if (result.count) { a->network_edit=result.adapters[a->network_selected].config; a->network_frame_type=result.adapters[a->network_selected].ipx_frame_type; }
     network_note(a,result.message[0] ? result.message : result.error ? "Network settings could not be read or applied." : "Network settings are current.");
     if (a->page==CP_NETWORK) build(a);
 }
@@ -76,9 +77,9 @@ static void network_build(struct cp_app *a)
     w->items=a->network_items; w->count=a->network.count; w->active=a->network_selected;
     w->view=DU_DETAILS; w->column_count=1; w->columns[0]=(struct du_column){"Network adapters",484,0};
     du_set_text(w,a->network_busy ? "Reading adapters..." : "No network adapter detected."); w->disabled=(uint8_t)a->network_busy;
-    static const char *const tabs[]={"Adapter Properties","TCP/IP Properties","Status"};
-    for (unsigned i=0;i<3;i++) a->network_tabs[i]=(struct du_item){.text={tabs[i]}};
-    w=add(a,DU_TABS,N_TABS,24,102,508,28,""); w->items=a->network_tabs; w->count=3; w->active=a->network_tab;
+    static const char *const tabs[]={"Adapter Properties","TCP/IP Properties","Status","IPX/SPX Properties"};
+    for (unsigned i=0;i<4;i++) a->network_tabs[i]=(struct du_item){.text={tabs[i]}};
+    w=add(a,DU_TABS,N_TABS,24,102,508,28,""); w->items=a->network_tabs; w->count=4; w->active=a->network_tab;
     if (!a->network.count) { add(a,DU_LABEL,1510,24,148,508,18,"No configurable network adapter is available."); }
     else {
         struct ciuki_net_control *n=&a->network.adapters[a->network_selected];
@@ -107,6 +108,16 @@ static void network_build(struct cp_app *a)
             network_field(a,N_DNS3,284,244,"DNS server 3:",a->network_edit.dns[2],0);
             add(a,DU_LABEL,1515,24,286,244,14,"Host name:"); add(a,DU_EDIT,N_HOST,24,301,244,22,a->network_edit.hostname);
             add(a,DU_LABEL,1516,284,286,244,14,"Domain:"); add(a,DU_EDIT,N_DOMAIN,284,301,244,22,a->network_edit.domain);
+        } else if (a->network_tab==3) {
+            static const char *const frames[]={"Auto","Ethernet 802.2","Ethernet 802.3","Ethernet II","Ethernet SNAP"};
+            static const unsigned selection[]={2,1,3,4,0};
+            add(a,DU_LABEL,1510,24,144,508,18,"IPX/SPX-compatible Protocol - Advanced");
+            add(a,DU_LABEL,1511,24,182,508,18,"Frame type (machine setting):");
+            for(unsigned i=0;i<5;i++)a->network_frames[i]=(struct du_item){.text={frames[i]}};
+            w=add(a,DU_COMBO,N_FRAME,24,210,300,26,"");
+            du_combo_set(w,a->network_frames,5,selection[a->network_frame_type<=4 ? a->network_frame_type : 4]);
+            add(a,DU_LABEL,1512,24,258,508,18,"Auto detects routers; without routers it uses Ethernet 802.2.");
+            add(a,DU_LABEL,1513,24,286,508,18,"An administrator can save this setting for all adapters.");
         } else {
             network_ip(ip,n->address); network_ip(mask,n->mask);
             snprintf(line,sizeof(line),"IP: %s   Mask: %s",ip,mask); add(a,DU_LABEL,1510,24,140,508,18,line);
@@ -125,7 +136,7 @@ static void network_build(struct cp_app *a)
     add(a,DU_BUTTON,N_REFRESH,24,336,88,24,"Refresh")->disabled=(uint8_t)a->network_busy;
     if (a->network_busy) for (unsigned i=0;i<a->ui->count;i++) {
         struct du_widget *busy=&a->ui->widgets[i];
-        if (busy->id>=N_LIST && busy->id<=N_TEST) busy->disabled=1;
+        if (busy->id>=N_LIST && busy->id<=N_FRAME) busy->disabled=1;
     }
     text(a,C_STATUS,a->network_message);
 }
@@ -133,12 +144,16 @@ static int network_event(struct cp_app *a,const struct du_event *e)
 {
     if (a->page!=CP_NETWORK) return 0;
     if (e->id==N_LIST && e->type==DU_EV_SELECT && !a->network_busy && e->index>=0 && (unsigned)e->index<a->network.count) {
-        a->network_selected=(unsigned)e->index; a->network_edit=a->network.adapters[a->network_selected].config; build(a); return 1;
+        a->network_selected=(unsigned)e->index; a->network_edit=a->network.adapters[a->network_selected].config; a->network_frame_type=a->network.adapters[a->network_selected].ipx_frame_type; build(a); return 1;
     }
-    if (e->id==N_TABS && e->type==DU_EV_SELECT && e->index>=0 && e->index<3) {
+    if (e->id==N_TABS && e->type==DU_EV_SELECT && e->index>=0 && e->index<4) {
         if (!network_read_edits(a)) return 1; a->network_tab=(unsigned)e->index; build(a); return 1;
     }
     if (a->network_busy) return 0;
+    if (e->id==N_FRAME && e->type==DU_EV_SELECT && e->index>=0 && e->index<5) {
+        static const unsigned values[]={4,1,0,2,3};
+        a->network_frame_type=values[e->index];return 1;
+    }
     if (e->type==DU_EV_CHANGE && e->id==N_ENABLED) { a->network_edit.enabled=(uint32_t)e->index; return 1; }
     if (e->type==DU_EV_CHANGE && (e->id==N_AUTO || e->id==N_STATIC)) {
         if (!network_read_edits(a)) return 1; a->network_edit.dhcp=e->id==N_AUTO; build(a); return 1;
@@ -154,7 +169,7 @@ static int network_event(struct cp_app *a,const struct du_event *e)
     }
     unsigned op;
     if (e->id==N_REFRESH) op=CIUKI_NETCTL_GET;
-    else if (e->id==N_APPLY) { if (!network_read_edits(a)) return 1; op=CIUKI_NETCTL_SET; }
+    else if (e->id==N_APPLY) { if (!network_read_edits(a)) return 1; op=a->network_tab==3 ? CP_NET_IPX : CIUKI_NETCTL_SET; }
     else if (e->id==N_RENEW) op=CIUKI_NETCTL_RENEW;
     else if (e->id==N_RELEASE) op=CIUKI_NETCTL_RELEASE;
     else if (e->id==N_TEST) { struct du_widget *w=du_get(a->ui,N_TEST_NAME); snprintf(a->network_test_name,sizeof(a->network_test_name),"%s",w ? w->text : ""); op=CP_NET_TEST; }
