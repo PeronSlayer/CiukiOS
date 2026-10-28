@@ -259,6 +259,47 @@ static void worker_pages(void)
     network_worker_stop(&m.network_worker); finish_panel(&m); adopted=NULL;
     puts("PASS User Accounts and Network adopt their worker results on the turn after the completion, without a heartbeat; a failed READ is reported once");
 }
+/* A game result cannot consume the independent Start Menu mailbox. */
+static void no_work(void *ctx) { (void)ctx; }
+static void independent_jobs(void)
+{
+    static struct cp_main m; init_panel(&m,CP_HOME);
+    assert(!cp_job_start(&m.menu_job,no_work,NULL,notify_completion,&m));
+    await_completion(&m);
+    assert(!game_begin(&m,1,NULL)); await_completion(&m);
+    struct cp_game_result game;
+    assert(game_poll_result(&m,&game)==1);
+    assert(m.menu_job.started && cp_job_ready(&m.menu_job));
+    m.app.host.menu_poll=menu_poll_io; m.app.menu_busy=1;
+    cp_menu_poll(&m.app); assert(!m.app.menu_busy && !m.menu_job.started);
+    finish_panel(&m); puts("PASS game adoption preserves the independent menu completion");
+}
+static void guarded_adoption(void)
+{
+    static struct cp_main m;
+    for (int capture=0;capture<2;capture++) {
+        init_panel(&m,CP_HOME); m.app.host.game_begin=game_begin; m.app.host.game_poll=game_poll_result;
+        cp_game_open(&m.app,1); assert(m.app.game_busy); await_completion(&m);
+        if (capture) m.ui.capture=1;
+        else { static const char *const buttons[]={"OK"};
+            du_message(&m.ui,999,"Keep open","A modal dialog",0,buttons,1,0,0); }
+        /* All callers: direct adopter, tick, ready-game idle, heartbeat,
+         * pending navigation and pending close. */
+        cp_jobs_poll(&m.app); assert(m.app.game_busy);
+        cp_tick(&m.app); assert(m.app.game_busy);
+        idle(&m); assert(m.app.game_busy);
+        m.app.display_write=1; m.app.navigation_pending=1; m.app.next_page=CP_JOYSTICK;
+        idle(&m); assert(m.app.game_busy);
+        m.app.close_pending=1;
+        idle(&m); assert(m.app.game_busy);
+        assert(capture ? m.ui.capture==1 : m.ui.dialog.kind==DU_DLG_MESSAGE);
+        m.app.display_write=m.app.navigation_pending=m.app.close_pending=m.app.quit=0;
+        m.ui.capture=-1; if (!capture) du_dialog_close(&m.ui);
+        cp_jobs_poll(&m.app); assert(!m.app.game_busy && !m.game_job.started);
+        finish_panel(&m);
+    }
+    puts("PASS modal/capture guard applies to every shared adoption caller");
+}
 static struct ciuki_settings input_saved;
 static unsigned input_applied;
 static int input_load(void *ctx,char *text,size_t size,size_t *length)
@@ -291,6 +332,6 @@ int main(int argc,char **argv)
 {
     setvbuf(stdout,NULL,_IONBF,0);
     setvbuf(stdout,NULL,_IONBF,0);
-    assert(argc==2); input_properties();idle_pages(); jobs(argv[1]); worker_pages();
+    assert(argc==2); input_properties();idle_pages(); jobs(argv[1]); worker_pages(); independent_jobs(); guarded_adoption();
     puts("PASS Control Panel event-driven jobs"); fflush(stdout); return 0;
 }

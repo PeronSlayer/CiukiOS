@@ -227,9 +227,9 @@ struct cp_app {
     struct cpa_request account_request;
     struct du_item account_items[CPA_MAX];
     char account_labels[CPA_MAX][64], account_note[192];
-    int account_busy, account_loaded, account_task, account_password_page, machine_locked;
+    int account_busy, account_notice_pending, account_loaded, account_task, account_password_page, machine_locked;
     unsigned account_action, account_count;
-    uint32_t account_uid, account_shown[CPA_MAX];
+    uint32_t account_uid, account_submitted_uid, account_shown[CPA_MAX];
     int secure_resume;                       /* LOGON session: secure_resume preference (Power page) */
     /* --- end sec-user-04 --- */
     struct regional regional_edit;

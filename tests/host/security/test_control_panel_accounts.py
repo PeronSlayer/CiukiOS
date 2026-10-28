@@ -7,9 +7,9 @@ the H10/H12 kernel host harness with the production LOGON coordinator and
 ACCOUNT server (logon_service_test.c, -DCIUKI_H12_ACCOUNTS
 -DCIUKI_CONTROL_PANEL, control_accounts_test.inc). Its ACCOUNTS link and
 QUERY_SELF cross the kernel model's syscall boundary like every harness
-process. Replaced only: the desktop window turn, the clock, the completion
-pair's transport (host socketpair) and poll()'s 120 s bound
-(control_panel_test.c). Administrator, Standard user and Guest each READ and
+process. Uses production startup/teardown, window queuing and flushing,
+and desktop dispatch; host adapters are confined to channels, surfaces, native
+service calls and the bounded poll wait (control_panel_test.c). Administrator, Standard user and Guest each READ and
 change through the page; the page must adopt every worker result on the loop
 turn after its completion token (the 2026-10-28 "Reading the accounts..."
 hang: idle() adopted results only on one-second pages). ASan/UBSan with leak
@@ -35,10 +35,19 @@ USER = ('sdk/private/accounts_link.c', 'tests/host/security/fake.c', 'apps/deskt
 # The Control Panel process, as tests/host/desktop/test_control_jobs.py builds it.
 PANEL = ['tests/host/security/control_panel_test.c', 'apps/control/app.c', 'apps/desktop/power_policy.c',
          'apps/systools/devctl.c', 'apps/systools/profiles.c', 'apps/control/driver_pack_ui.c', 'apps/control/display.c',
-         'apps/control/fonts.c', 'sdk/libfont/font.c', 'apps/libdeskui/text_ttf.c', 'apps/desktop/protocol.c',
+         'apps/control/fonts.c', 'apps/libdeskui/client.c', 'apps/libdeskui/clipboard.c', 'apps/libdeskui/clipstore.c',
+         'apps/desktop/client.c', 'apps/desktop/shell.c', 'apps/desktop/input.c', 'apps/desktop/keymap.c',
+         'apps/desktop/autoplay.c', 'apps/desktop/autoplay_content.c', 'apps/desktop/folder.c', 'apps/files/transfer.c', 'sdk/libfont/font.c', 'apps/libdeskui/text_ttf.c', 'apps/desktop/protocol.c',
          *(f'apps/desktop/{n}.c' for n in ('settings', 'settings_io', 'sounds', 'wallpaper', 'image', 'compositor', 'theme')),
          *(f'apps/libdeskui/{n}.c' for n in ('draw', 'widgets', 'list', 'menu', 'dialog', 'controls', 'commdlg', 'textarea',
                                              'icons', 'icon_map', 'iconx', 'fileicon'))]
+
+PANEL += ['tests/host/security/control_desktop_test.c', 'apps/control/decoder.c', 'apps/control/programs.c', 'apps/control/driver_pack.c',
+          'apps/control/driver_pack_io.c', 'src/kernel/ndis/package.c', 'apps/desktop/users_io.c',
+          'apps/desktop/sound_storage.c', 'apps/desktop/autoplay_registry.c', 'apps/desktop/win32_native.c',
+          'apps/files/model.c', 'apps/files/vfs.c', 'apps/files/clipboard.c', 'apps/files/registry_transport.c',
+          'apps/desktop/win32_service.c', 'apps/desktop/win32_syscall.c', 'sdk/libreg/hardware.c',
+          'sdk/libreg/registry.c', 'sdk/libreg/storage.c', 'sdk/libreg/transport.c']
 
 
 def _module(name, path):
@@ -71,6 +80,7 @@ class ControlPanelAccountsTests(unittest.TestCase):
         for source in PANEL:
             obj = OUT / (source.replace('/', '_') + '.o')
             subprocess.run(['clang', *WARN, '-D_POSIX_C_SOURCE=200809L', *SANITIZE,
+                            '-include', str(ROOT / 'tests/host/desktop/replay_base.h'),
                             f'-DDOSBOX_SETTINGS_DIR="{OUT / "settings"}"', *icons.defines(),
                             '-I', str(include), '-I', str(ROOT / 'src/kernel/include'), '-I', str(ROOT / 'sdk/win32/include'),
                             '-idirafter', str(ROOT / 'sdk/sysroot-overlay/include'), *ft.includes(),
@@ -97,6 +107,15 @@ class ControlPanelAccountsTests(unittest.TestCase):
         self.assertIn('H10 logon service control-panel: PASS', result.stdout)
         for marker in ('H12 Control Panel administrator:', 'H12 Control Panel Standard user:', 'H12 Control Panel Guest:'):
             self.assertIn(marker, result.stdout)
+
+    def test_first_password_completion_reaches_logon(self):
+        for case in ('close', 'selection', 'other', 'modal', 'capture', 'queue', 'accept'):
+            with self.subTest(case=case):
+                result = subprocess.run([str(self.program), 'control-panel-' + case], capture_output=True,
+                                        text=True, env=self.env, timeout=900)
+                print(result.stdout, end='')
+                self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+                self.assertIn('real desktop notification and LOGON state PASS', result.stdout)
 
 
 if __name__ == '__main__':

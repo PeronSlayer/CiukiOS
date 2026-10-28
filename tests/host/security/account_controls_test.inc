@@ -432,6 +432,7 @@ static int h12_scenario(const char *name)
     if (!strcmp(name, "accounts")) scenario_accounts();
 #ifdef CIUKI_CONTROL_PANEL
     else if (!strcmp(name, "control-panel")) scenario_control_panel();
+    else if (!strncmp(name,"control-panel-",14)) scenario_control_completion(name+14);
 #endif
     else if (!strcmp(name, "saver")) scenario_saver();
     else if (!strcmp(name, "saver-blank")) scenario_saver_blank();

@@ -58,7 +58,7 @@ static void accounts_submit(struct cp_app *a, unsigned action)
     if (action==CPA_PICTURE) q->picture[0]=0;   /* the default picture: no installed picture set yet */
     int e=a->host.accounts_begin(a->host.ctx,q);
     accounts_wipe(a);
-    a->account_action=action;
+    a->account_action=action; a->account_submitted_uid=q->uid;
     if (e) { char line[96]; snprintf(line,sizeof(line),"The account service is not available (%d).",e); accounts_note(a,line); }
     else { a->account_busy=1; accounts_note(a,action==CPA_READ ? "Reading the accounts..." : "Applying the change..."); }
     du_invalidate(a->ui,(struct du_rect){0,0,a->ui->canvas.width,a->ui->canvas.height});
@@ -240,9 +240,18 @@ static int accounts_event(struct cp_app *a, const struct du_event *e)
     }
     return 0;
 }
+static void accounts_notice(struct cp_app *a)
+{
+    if (a->account_notice_pending && a->host.apply &&
+        !a->host.apply(a->host.ctx,DESK_SETTINGS_PASSWORD_SET,0,0)) a->account_notice_pending=0;
+}
 static void accounts_poll(struct cp_app *a)
 {
-    if (a->building || !a->account_busy || !a->host.accounts_poll) return;
+    if (a->building) return;
+    /* A full window FIFO defers the notice, and normal close, until a turn
+     * has flushed it. Never repeat the committed service operation. */
+    accounts_notice(a);
+    if (!a->account_busy || !a->host.accounts_poll) return;
     struct cpa_view v; int e=0;
     if (!a->host.accounts_poll(a->host.ctx,&v,&e)) return;
     a->account_busy=0;
@@ -267,9 +276,10 @@ static void accounts_poll(struct cp_app *a)
             /* A changed own password: tell LOGON through the session desktop
              * that Lock and the protected saver can now lock (SESSION_EVENT
              * notice PASSWORD); the account service already holds it. */
-            if (a->account_action==CPA_PASSWORD && a->account_uid==a->accounts.self_uid && a->host.apply)
-                (void)a->host.apply(a->host.ctx,DESK_SETTINGS_PASSWORD_SET,0,0);
-            if (a->account_action==CPA_DELETE) a->account_uid=a->accounts.self_uid;
+            if (a->account_action==CPA_PASSWORD && a->account_submitted_uid==a->accounts.self_uid && a->host.apply)
+                a->account_notice_pending=1;
+            accounts_notice(a);
+            if (a->account_action==CPA_DELETE && a->account_uid==a->account_submitted_uid) a->account_uid=a->accounts.self_uid;
             a->account_task=0;
         }
     }

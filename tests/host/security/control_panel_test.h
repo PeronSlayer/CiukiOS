@@ -2,8 +2,9 @@
  * fx-uaccounts: the production Control Panel (apps/control/main.c + app.c)
  * hosted as one session process of the kernel host harness
  * (control_panel_test.c), driven by control_accounts_test.inc. Every call
- * runs on the harness's thread while no Control Panel worker is running;
- * cpt_settle() runs the production native loop, whose workers drive the
+ * runs on the harness's UI thread; only the account worker drives the
+ * kernel model until it publishes. cpt_settle runs the production loop;
+ * its workers drive the
  * kernel model through the supplied system seam until they complete. */
 #ifndef CIUKI_CONTROL_PANEL_TEST_H
 #define CIUKI_CONTROL_PANEL_TEST_H
@@ -16,10 +17,11 @@ enum { CPT_LIST = 1620, CPT_LINE0 = 1622, CPT_TASK0 = 1630, CPT_NAME = 1642, CPT
        CPT_NEW = 1647, CPT_CONFIRM = 1649, CPT_GO = 1650, CPT_CANCEL = 1651, CPT_NOTE = 1652, CPT_NOTE2 = 1654 };
 enum { CPT_CREATE, CPT_RENAME, CPT_PASSWORD, CPT_PICTURE, CPT_TYPE, CPT_ENABLE, CPT_DELETE };   /* task buttons */
 
-/* Starts the Control Panel on `page` (its --panel= name) with the accounts
- * link's system seam bound to `sys`, exactly as main() attaches it in a
- * profile session. Opening the page submits the READ worker. */
-void cpt_open(const struct lgn_client_sys *sys, const char *page);
+/* Runs production control_init on `page` (its --panel= name). The accounts
+ * and desktop LOGON transports use the kernel syscall adapters supplied
+ * here; profile launch labels are installed by the kernel fixture. */
+void cpt_open(const struct lgn_client_sys *sys, const struct lgn_client_sys *desktop_sys,
+              const char *page, uint32_t pid, uint32_t session, const char *profile);
 /* Runs the production loop (control_run) until it would sleep with no
  * worker left. 0, or -1 when a completion token woke the loop and the page
  * still held a finished worker's result after idle() (the "Reading the
@@ -28,6 +30,14 @@ int cpt_settle(void);
 /* The Control Panel's main() shutdown: joins workers, closes the link. */
 void cpt_close(void);
 
+void cpt_request_close(void);
+void cpt_accept_close(void);
+void cpt_full_queue(void);
+int cpt_closed(void);
+void cpt_wait_ready(void);
+void cpt_hold(int capture);
+int cpt_guarded_turn(int capture);
+void cpt_release(int capture);
 int cpt_busy(void);                         /* a User Accounts request is in flight */
 const struct cpa_view *cpt_view(void);      /* the page's adopted view */
 const char *cpt_note(void);                 /* the page's note (both lines) */

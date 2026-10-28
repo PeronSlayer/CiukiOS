@@ -27,7 +27,9 @@ static void control_start(const char *page)
     const struct ciuki_credential *c = security_credential(ctl_p), *dc = security_credential(d);
     CHECK(ctl_p->ppid == d->pid && security_role(ctl_p) == CIUKI_SECURITY_ROLE_NONE);
     CHECK(c->uid == dc->uid && c->session_id == logon.session.id && c->group_count == dc->group_count);
-    cpt_open(&ctl_sys, page);
+    /* Kernel-generated profile location at the host process boundary. */
+    char profile[96]; snprintf(profile,sizeof(profile),"/Windows/Profiles/u%08x",c->uid);
+    cpt_open(&ctl_sys, &desk_sys, page, ctl_p->pid, logon.session.id, profile);
     CHECK(cpt_busy());   /* opening the page started the READ worker */
 }
 static void control_settle(void)
@@ -130,4 +132,44 @@ static void scenario_control_panel(void)
     control_stop();
     puts("H12 Control Panel Guest: Passwords opens the own-password task after READ, password changed with the old "
          "one PASS");
+}
+
+/* First-password cases expose a missing notice as LOGON still being blank.
+ * Each is a fresh process/scenario, with real FIFO delivery and desktop dispatch. */
+static void scenario_control_completion(const char *mode)
+{
+    boot(1); active(); CHECK(logon.session.blank);
+    control_start("users"); control_settle();
+    int other=!strcmp(mode,"other");
+    if (other) cpt_select_row((unsigned)cpt_find("Guest (Guest, off)"));
+    cpt_activate(CPT_TASK0+CPT_PASSWORD);
+    cpt_type(CPT_NEW,"ciukipass1"); cpt_type(CPT_CONFIRM,"ciukipass1");
+    cpt_activate(CPT_GO); CHECK(cpt_busy());
+    if (!strcmp(mode,"selection")) cpt_select_row((unsigned)cpt_find("Guest (Guest, off)"));
+    if (other) cpt_select_row((unsigned)cpt_find("CiukiUser (Admin)"));
+    if (!strcmp(mode,"close")) { cpt_request_close(); CHECK(!cpt_closed()); }
+    if (!strcmp(mode,"modal") || !strcmp(mode,"capture") || !strcmp(mode,"accept")) {
+        int capture=!strcmp(mode,"capture");
+        cpt_hold(capture);
+        if (!strcmp(mode,"accept")) cpt_accept_close();
+        cpt_wait_ready();
+        CHECK(cpt_guarded_turn(capture));
+        CHECK(logon.session.blank && !cpt_password_notices());
+        cpt_release(capture);
+    }
+    if (!strcmp(mode,"queue")) cpt_full_queue();
+    control_settle();
+    CHECK(cpt_password_notices()==(other ? 0u : 1u));
+    CHECK(logon.session.blank==other);
+    if (!strcmp(mode,"close") || !strcmp(mode,"queue") || !strcmp(mode,"accept")) CHECK(cpt_closed());
+    if (!other) {
+        CHECK(!(desk_event(LGN_NOTICE_QUERY).flags&LGN_EVENT_BLANK));
+        struct lgn_progress p;
+        CHECK(!desk_lock(&p) && !p.status && gate_trusted() && logon.mode==LGN_MODE_LOCKED);
+        RUN_UNTIL(!logon.enter_reason,100);
+        p=authenticate(3,1000,NULL,"ciukipass1");
+        CHECK(p.disposition==LGN_AUTHENTICATED && !gate_trusted());
+    }
+    control_stop();
+    printf("H12 Control Panel completion %s: real desktop notification and LOGON state PASS\n",mode);
 }

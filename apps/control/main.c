@@ -619,7 +619,6 @@ static int game_begin(void *ctx,unsigned game,const struct game_ports_settings *
 static int game_poll_result(void *ctx,struct cp_game_result *r)
 {
     struct cp_main *m=ctx;if (!cp_job_ready(&m->game_job)) return 0;
-    cp_job_finish(&m->menu_job);
     cp_job_finish(&m->game_job);*r=m->game_result;return 1;
 }
 static int joystick_request(void *ctx, const struct ciuki_joystick_control *c)
@@ -890,7 +889,7 @@ static void idle(void *arg)
      * to keep "Reading the accounts..." forever. A modal dialog or a
      * pointer capture defers adoption to the turn that ends it, as the
      * program inventory does (the adoption rebuilds the page). */
-    if (m->ui.capture<0 && !m->ui.dialog.kind) cp_jobs_poll(&m->app);
+    cp_jobs_poll(&m->app);
     int error;
     if (settings_result(m,&error)) {
         if (m->reload_pending) {unsigned request=(unsigned)m->reload_pending;m->reload_pending=0; if (!error) apply(m,request,0,0); }
@@ -906,6 +905,11 @@ static void idle(void *arg)
         cp_tick(&m->app); m->tick_next=mono+1000000000ull;
     } else if (!ticking) m->tick_next=0;
     if (m->app.close_pending || m->app.navigation_pending) cp_tick(&m->app);
+    /* OK/Apply completion can request quit directly, too. Preserve the
+     * same account-completion ordering as the native close callback. */
+    if (m->app.quit && (m->app.account_busy || m->app.account_notice_pending)) {
+        m->app.quit=0; m->app.close_pending=1;
+    }
     if (settings_busy(m) && m->app.quit) return;
     if (m->app.quit) { remember_size(m); du_window_close(&m->window); m->app.quit = 0; }
 }
@@ -1080,27 +1084,10 @@ static int internet_programs(void *ctx)
     desk_put32(request.data+12+t,n);memcpy(request.data+16+t,arg,n);
     return du_window_queue(&m->window,&request);
 }
-int main(int argc, char **argv)
+/* Shared production lifecycle: the host integration test uses these same paths. */
+static int control_init(struct cp_main *m,int channel,int page,unsigned game,const char *set_wallpaper)
 {
-    int channel = 3, page = CP_HOME;
-    const char *set_wallpaper=NULL;
-    unsigned game=0;
-    for (int i = 1; i < argc; i++) {
-        if (!strncmp(argv[i], "--channel-fd=", 13)) {
-            char *end; long n = strtol(argv[i] + 13, &end, 10);
-            if (!argv[i][13] || *end || n < 3 || n >= 128) return 2;
-            channel = (int)n;
-        } else if (!strncmp(argv[i], "--panel=", 8)) page = cp_page_index(argv[i] + 8);
-        else if (!strncmp(argv[i],"--set-wallpaper=",16)) { set_wallpaper=argv[i]+16; page=CP_DISPLAY; }
-        else if (!strncmp(argv[i],"--game=",7)) {
-            char *end;unsigned long n=strtoul(argv[i]+7,&end,10);
-            if (!argv[i][7] || *end || !n || n>DESK_GAME_COUNT) return 2;
-            game=(unsigned)n;page=CP_JOYSTICK;
-        } else return 2;
-    }
-    struct cp_main *m = calloc(1, sizeof(*m));
-    if (!m) return 1;
-    if (completion_start(m)) { free(m); return 1; }
+    if (completion_start(m)) { return 1; }
     m->network_worker.notify=notify_completion; m->network_worker.notify_ctx=m; /* fx-uaccounts */
     snprintf(m->settings_temp,sizeof(m->settings_temp),"%s.cpl",profile_settings());
     m->writer.notify=notify_completion; m->writer.notify_ctx=m;
@@ -1152,17 +1139,20 @@ int main(int argc, char **argv)
          du_window_open(&m->window, &m->ui, channel, CP_WIDTH, CP_HEIGHT, "Control Panel"))) {
         fprintf(stderr, "Control Panel: desktop connection failed: %s\n", strerror(errno));
         if (m->writer_started) cfg_writer_stop(&m->writer);
-        completion_stop(m); free(m->hwid_pci); free(m->hwid_usb); free(m); return 1;
+        completion_stop(m); free(m->hwid_pci); free(m->hwid_usb); return 1;
     }
     du_help_topic(&m->ui, "control");   /* G15: F1 opens this program's Help topic */
     m->window.message = on_message; m->window.close_request = close_request; m->window.user = m;
     if (cp_attach(&m->app, &m->ui, game ? CP_HOME : page)) {
-        du_window_destroy(&m->window); if (m->writer_started) cfg_writer_stop(&m->writer); completion_stop(m); free(m->hwid_pci); free(m->hwid_usb); free(m); return 1;
+        du_window_destroy(&m->window); if (m->writer_started) cfg_writer_stop(&m->writer); completion_stop(m); free(m->hwid_pci); free(m->hwid_usb); return 1;
     }
     if (game) cp_game_open(&m->app,game);
     if (set_wallpaper && cp_wallpaper_set(&m->app,set_wallpaper)) fprintf(stderr,"control: wallpaper path is not a supported image\n");
     if (du_file_icons_start(m->ui.wake, m->ui.wake_ctx)) fprintf(stderr,"control: icon worker unavailable\n");   /* fx-exeicons */
-    int r = control_run(m);
+    return 0;
+}
+static void control_destroy(struct cp_main *m)
+{
     du_file_icons_stop();
     cp_decoder_stop();
     cp_job_finish(&m->users_worker.job);
@@ -1175,6 +1165,30 @@ int main(int argc, char **argv)
     if (!m->assets_ready) { free(m->pci_cache); free(m->usb_cache); }
     if (m->writer_started) cfg_writer_stop(&m->writer);
     network_worker_stop(&m->network_worker);
-    cp_detach(&m->app); completion_stop(m); du_window_destroy(&m->window); free(m->hwid_pci); free(m->hwid_usb); free(m);
+    cp_detach(&m->app); completion_stop(m); du_window_destroy(&m->window); free(m->hwid_pci); free(m->hwid_usb);
+}
+int main(int argc, char **argv)
+{
+    int channel = 3, page = CP_HOME;
+    const char *set_wallpaper=NULL;
+    unsigned game=0;
+    for (int i = 1; i < argc; i++) {
+        if (!strncmp(argv[i], "--channel-fd=", 13)) {
+            char *end; long n = strtol(argv[i] + 13, &end, 10);
+            if (!argv[i][13] || *end || n < 3 || n >= 128) return 2;
+            channel = (int)n;
+        } else if (!strncmp(argv[i], "--panel=", 8)) page = cp_page_index(argv[i] + 8);
+        else if (!strncmp(argv[i],"--set-wallpaper=",16)) { set_wallpaper=argv[i]+16; page=CP_DISPLAY; }
+        else if (!strncmp(argv[i],"--game=",7)) {
+            char *end;unsigned long n=strtoul(argv[i]+7,&end,10);
+            if (!argv[i][7] || *end || !n || n>DESK_GAME_COUNT) return 2;
+            game=(unsigned)n;page=CP_JOYSTICK;
+        } else return 2;
+    }
+    struct cp_main *m = calloc(1, sizeof(*m));
+    if (!m) return 1;
+    if (control_init(m,channel,page,game,set_wallpaper)) { free(m); return 1; }
+    int r = control_run(m);
+    control_destroy(m); free(m);
     return r < 0 ? 1 : 0;
 }

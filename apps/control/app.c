@@ -268,6 +268,8 @@ int cp_close(struct cp_app *a)
         game_note(a,"Waiting for game properties to finish saving...");return 0;
     }
     a->close_pending = 1; a->display_accept = a->navigation_pending = 0;
+    /* Adopt an admitted account change and queue its session notice first. */
+    if (a->account_busy || a->account_notice_pending) return 0;
     if (!cp_display_leave(a)) return 0;
     a->close_pending = 0; a->quit = 1; return 1;
 }
@@ -602,6 +604,8 @@ void cp_audio_result(struct cp_app *a, int result)
  * heartbeat, so adoption must never depend on cp_tick. */
 void cp_jobs_poll(struct cp_app *a)
 {
+    /* Every caller, including cp_tick, must preserve modal/capture ownership. */
+    if (a->ui->capture>=0 || a->ui->dialog.kind) return;
     user_poll(a);
     network_poll(a);
     game_poll(a);
