@@ -366,6 +366,14 @@ int security_bootstrap_desktop(struct process *p)
     struct ciuki_credential c = { .version = 1, .size = 64, .uid = 1000,
         .primary_gid = 545, .group_count = 2, .groups = {544, 545}, .flags = CIUKI_CRED_INTERACTIVE };
     struct ciuki_security_profile profile = { .version = 1, .size = 112, .uid = 1000 };
+    /* sec-own: once OWNER has committed uid 1000's profile (CiukiUser on a
+     * ready image, Setup's first administrator), the interim session carries
+     * that committed descriptor; until then it has none (k05 legacy stores). */
+    extern int owner_system_profile(uint32_t, struct ciuki_security_profile *) __attribute__((weak));
+    struct ciuki_security_profile committed;
+    if (owner_system_profile && !owner_system_profile(1000, &committed) &&
+        !profile_template(&committed, 1000) && security_owner_verify && !security_owner_verify(&committed)) profile = committed;
+    /* end sec-own */
     uint32_t id;
     int err = session_reserve(&c, &profile, &id);
     if (!err) session_find(id)->bootstrap = true;
@@ -487,7 +495,8 @@ int security_subject_check(const struct security_subject *s, uint32_t action, ui
     uint32_t service=action>>16, op=action&65535u, r=s->role;
     if (!service) return action ? -EINVAL : 0;
     if (!s->origin || !channel_peer_service || channel_peer_service(&s->peer)!=service) return -EACCES;
-    if (!op || (service==2 && op>9) || (service==3 && op>7)) return -EOPNOTSUPP;
+    /* sec-own: OWNER query operations 8..14 (fs/owner_system.h). */
+    if (!op || (service==2 && op>9) || (service==3 && op>14)) return -EOPNOTSUPP;
     if (service==1) return r==1 ? (op>=1 && op<=7 ? 0 : -EOPNOTSUPP) :
         r==2 && op==1 ? 0 : -EPERM;
     if (service==5) {

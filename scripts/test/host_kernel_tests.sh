@@ -585,6 +585,11 @@ python3 -B -m unittest discover -s "$root/tests/host/security" -p test_file_enfo
 # this suite's dosvm_test (default sequence) and run_persistent_saves.sh.
 python3 -B -m unittest discover -s "$root/tests/host/security" -p test_dos_identity.py -k test_identity_views_and_stores
 # --- sec-k05 block (end) ---
+# ---- sec-own H15 (one block): system-volume OWNER binding, gated first-boot
+# store, kernel OWNER queries, ready-seed publication through the production
+# ACCOUNT service, bound policy, reboot and SID-without-store refusal.
+python3 -B -m unittest discover -s "$root/tests/host/security" -p test_system_owner.py
+# ---- end sec-own ----
 
 # F2 production parser, mappings, wait queues, stack and lifecycle with fake
 # physical memory/scheduling; no guest execution or host runner lock.

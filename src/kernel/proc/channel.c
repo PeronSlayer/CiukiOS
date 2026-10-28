@@ -12,6 +12,7 @@ extern void net_fd_changed(struct process *, unsigned) __attribute__((weak));
 #include <ciuki/signal.h>
 #include <ciuki/security.h>
 #include "../fs/owner_channel.h"
+#pragma weak proc_notify /* sec-own: channel harnesses without the process table */
 
 struct channel_message {
     struct ciuki_message wire;
@@ -279,6 +280,9 @@ int channel_send(struct process *p, int32_t fd, uint32_t message, uint32_t flags
             if (!err) {
                 kwait_wake_all(&c->changed[peer]);
                 if (net_fd_changed) net_fd_changed(0,0);
+                /* sec-own: PID 1 serves OWNER in its maintenance turn; wake
+                 * it for a complete request instead of the 100-tick poll. */
+                if (c->service==CIUKI_SECURITY_SERVICE_OWNER && !d->u.endpoint.side && c->complete[0] && proc_notify) proc_notify();
             }
             return channel_end(op,err);
         }
@@ -694,7 +698,8 @@ static int channel_security_frame(struct channel *c, unsigned side, const struct
         h[9]>192 || m->length!=64+h[9] || h[13]>8192 ||
         h[14]>h[13] || h[9]>h[13]-h[14] || h[15] ||
         (!h[9] && h[13]) || (int32_t)h[12]>0 || (!side && h[12]) || (h[12] && h[13])) return -EINVAL;
-    static const uint32_t max_op[]={0,7,9,7,0xffffffffu,7,0xffffffffu};
+    /* sec-own: OWNER (service 3) adds the query operations 8..14. */
+    static const uint32_t max_op[]={0,7,9,14,0xffffffffu,7,0xffffffffu};
     if (!h[4] || h[4]>max_op[c->service]) return -EOPNOTSUPP;
     bool first=!c->exchange;
     if (first) {

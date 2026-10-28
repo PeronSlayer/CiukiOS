@@ -13,7 +13,8 @@ tests explicitly select test mode. No fake endpoint is installed at runtime.
 ## Image binding (sec-int-01)
 
 `build_accounts.py` links the core with `kernel_adapter.c`, `server.c`,
-`kernel_sys_ciuki.c`, `owner_interim.c`, `storage_posix.c`, `main.c` and the
+`kernel_sys_ciuki.c`, `owner_kernel.c` and `tree_posix.c` (sec-own; the image
+no longer links `owner_interim.c`), `storage_posix.c`, `main.c` and the
 private `sdk/private/accounts_link.c` into `/System/Services/accounts`, the
 kernel's fixed ACCOUNT role image. PID 1 starts it from the sealed manifest and
 respawns it with a fresh role generation; `main.c` never exits on its own.
@@ -44,9 +45,27 @@ G32 desktop logon and the interim uid-1000 desktop are unchanged.
   retries a refused open every 30 s and closes/reopens after a storage fault.
   CANCEL is a client operation; the server drops partial exchanges with
   `acct_transport_drop` instead.
-- `owner_interim.c` stands in for sec-k02 (decision u01-D2): every owner-store
-  operation, `root_occupied` included, returns ENOSYS, so a provisioned store
-  never opens and no owner transaction is published.
+- `owner_kernel.c` (sec-own) is the production OWNER adapter: the role-bound
+  OWNER link (call 101 SERVICE_CONNECT, service 3) to the kernel supervisor
+  (PID 1, OWNER role) carries the contract 3.5 batch operations 1..7 and the
+  query operations 8..14 (`src/kernel/fs/owner_system.h`: IDENTITY, GENERATION,
+  BINDING, ROOT_OCCUPIED, SNAPSHOT, RECOVER_ORPHANS, CHECKPOINT_FLOOR). `main.c`
+  takes the system volume identity (partition LBA << 32 | FAT serial, the value
+  the builder and Setup stage) from IDENTITY. Staging builds each binding's
+  tree below `/System/Security/Staging/g<G>/p<uid>` (a fresh profile gets the
+  shell-folder skeleton and `Settings`; a retained G32 root is copied from its
+  proven old root; KEEP/RETIRE bindings an empty tree), hashes it with the same
+  canonical stream as the kernel's `owner_vfs_tree_digest`, and prunes earlier
+  generations that hold only empty directories. SNAPSHOT images come back
+  through the SYSTEM-only `/System/Security/Owner/snapshot` file, checked against
+  the reply's size and digest. `tree_posix.c` binds the native file access.
+  After every open with a published database, `server.c` moves old machine DOS
+  title data (`/System/DOS/SAVES`) into the first administrator's
+  `<profile>/Settings/DOS` (sec-k05 layout); an entry already present at the
+  destination, or still open, stays where it is.
+- `owner_interim.c` stood in for sec-k02 (decision u01-D2): every owner-store
+  operation returns ENOSYS. The image no longer uses it; the host adapter test
+  keeps exercising it as the fail-closed table of a kernel without OWNER.
 - `storage_posix.c` stores the protected files below `/System/Security`;
   absolute names must lie below it (the OWNER staging tree) and get their
   missing directories created; barriers commit the base and every changed

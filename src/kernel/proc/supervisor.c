@@ -292,6 +292,11 @@ void supervisor_bootstrap(void)
         if (pager_bootstrap_complete) pager_bootstrap_complete();
         return;
     }
+    /* sec-own: the system volume's OWNER store, policy and lease are bound
+     * before any service or desktop starts (fs/owner_system.c). */
+    extern void owner_system_boot(void) __attribute__((weak));
+    if (owner_system_boot) owner_system_boot();
+    /* end sec-own */
     /* sec-user-01 supplies this sealed image. Its absence during the k01
      * transition leaves the existing boot working; other failures are visible. */
     struct process *accounts = 0;

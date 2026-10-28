@@ -10,6 +10,7 @@
 #include "firstboot.h"
 
 #define ACCT_SERVER_OPEN_RETRY_MS 30000u
+struct acct_tree_io; /* sec-own: production.h */
 struct acct_server {
     struct acct_kernel_adapter kernel;
     struct acct_store tables;   /* kernel table bound to the adapter above */
@@ -23,6 +24,8 @@ struct acct_server {
      * no G32 migration) and the last adapter result, for diagnostics. */
     const struct acct_legacy_io *legacy;
     int firstboot_result;
+    /* sec-own: native file access for the DOS saves migration (NULL: none). */
+    const struct acct_tree_io *tree;
 };
 /* Binds the production kernel adapter beside the supplied OWNER/storage
  * tables and volume. host_test is set only by host harnesses; the image
