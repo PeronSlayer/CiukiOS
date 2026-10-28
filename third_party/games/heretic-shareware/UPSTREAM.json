@@ -5,12 +5,40 @@
   "sources": [
     "https://www.gamers.org/pub/idgames/idstuff/heretic/htic_v12.zip"
   ],
-  "sha256": "lead-pins",
-  "size": null,
-  "status": "lead-pins",
-  "license": "Original shareware package only. Exact package terms and licence member hashes await lead download/read-back; no bundling grant asserted.",
-  "license_files": [],
-  "redistribution": "test-media only; package review pending",
+  "sha256": "5ffbb47e4a5750fef144c312973ee5782266b4a63474b77478103b6c1aaed39d",
+  "size": 2898794,
+  "status": "pinned",
+  "license": "LICENSE.DOC sections 1-4: personal use; no commercial exploitation or distribution for consideration. Royalty-free electronic distribution only in compressed form. VENDOR.DOC reserves reseller distribution to GT Interactive and directs direct-sale vendors to obtain a licence. No installed OS-image bundling grant established.",
+  "license_files": [
+    {
+      "name": "LICENSE.DOC",
+      "source": "htic_v12.zip!HTIC_V12.1+HTIC_V12.2!LICENSE.DOC",
+      "sha256": "d91e4c0571f67cde0ffdf0fe8e5958bd57debda2d31e823c84ca4463c0761279"
+    },
+    {
+      "name": "VENDOR.DOC",
+      "source": "htic_v12.zip!HTIC_V12.1+HTIC_V12.2!VENDOR.DOC",
+      "sha256": "c8efc8346f7176828e939a6986bcb83eac490f2b93ca4c98d78069bb10606c4a"
+    }
+  ],
+  "redistribution": "test-media only; no OS-image bundling permission established",
   "game_data": "No retail, registered or abandonware payload. Never commit game bytes.",
-  "qualification": "Pin the download, inspect original installer and manual, record exact licence clauses and installed tree before running."
+  "qualification": "Original package terms reviewed; installed tree, sound setup and image-bound gameplay/input calibration remain pending.",
+  "licence": {
+    "source": "htic_v12.zip!HTIC_V12.1+HTIC_V12.2!LICENSE.DOC",
+    "terms": "LICENSE.DOC sections 1-4: personal use; no commercial exploitation or distribution for consideration. Royalty-free electronic distribution only in compressed form. VENDOR.DOC reserves reseller distribution to GT Interactive and directs direct-sale vendors to obtain a licence. No installed OS-image bundling grant established.",
+    "verification": "Read original licence and vendor documents from the exact size/SHA-256-verified pinned archive; member hash is over unmodified bytes. No OS-image redistribution permission asserted.",
+    "distribution": "Local acceptance test media only; never included in images or releases.",
+    "class": "test-media",
+    "sha256": "d91e4c0571f67cde0ffdf0fe8e5958bd57debda2d31e823c84ca4463c0761279"
+  },
+  "edition": "1.2, shareware Episode One (City of the Damned)",
+  "installation": {
+    "type": "split-zip-sfx",
+    "member": "HTIC_V12.1+HTIC_V12.2 (concatenated in that order, as HTIC_V12.EXE)",
+    "executable": "HERETIC.EXE",
+    "executable_verified": true,
+    "host_extractable": true,
+    "lead_action": "Payload is host-extractable; preserve every original file/document, run real sound setup and pin the measured tree. Extraction alone is not installation/gameplay evidence."
+  }
 }

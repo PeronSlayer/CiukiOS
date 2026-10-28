@@ -5,12 +5,40 @@
   "sources": [
     "https://image.dosgamesarchive.com/games/jazz.zip"
   ],
-  "sha256": "lead-pins",
-  "size": null,
-  "status": "lead-pins",
-  "license": "Original shareware package only. Exact package terms and licence member hashes await lead download/read-back; no bundling grant asserted.",
-  "license_files": [],
-  "redistribution": "test-media only; package review pending",
+  "sha256": "ed025415c0bc5ebc3a41e7a070551bdfdfb0b65b5314241152d8bd31f87c22da",
+  "size": 1421049,
+  "status": "pinned",
+  "license": "LICENSE.DOC permits unchanged modem sharing; charged downloads/single-game floppies must cost less than $9. Commercial CD/multi-disk collections: at most 10 programs and 3 Epic titles, front-cover credits/shareware labels and a copy sent to Epic. Free unchanged bundling with new hardware is allowed. Other distribution needs contact; no general OS-image grant established.",
+  "license_files": [
+    {
+      "name": "LICENSE.DOC",
+      "source": "jazz.zip!LICENSE.DOC",
+      "sha256": "0441795688ccd5904a7d73380988c0fef1784f08cdf6d0f7d99d59b75f48cfe2"
+    },
+    {
+      "name": "VENDOR.DOC",
+      "source": "jazz.zip!VENDOR.DOC",
+      "sha256": "400fbaf5c3aa7ae5b3db990518e7a033bdbe2243d5517c3f725342b250aef326"
+    }
+  ],
+  "redistribution": "test-media only; no OS-image bundling permission established",
   "game_data": "No retail, registered or abandonware payload. Never commit game bytes.",
-  "qualification": "Pin the download, inspect original installer and manual, record exact licence clauses and installed tree before running."
+  "qualification": "Original package terms reviewed; installed tree, sound setup and image-bound gameplay/input calibration remain pending.",
+  "licence": {
+    "source": "jazz.zip!LICENSE.DOC",
+    "terms": "LICENSE.DOC permits unchanged modem sharing; charged downloads/single-game floppies must cost less than $9. Commercial CD/multi-disk collections: at most 10 programs and 3 Epic titles, front-cover credits/shareware labels and a copy sent to Epic. Free unchanged bundling with new hardware is allowed. Other distribution needs contact; no general OS-image grant established.",
+    "verification": "Read original licence and vendor documents from the exact size/SHA-256-verified pinned archive; member hash is over unmodified bytes. No OS-image redistribution permission asserted.",
+    "distribution": "Local acceptance test media only; never included in images or releases.",
+    "class": "test-media",
+    "sha256": "0441795688ccd5904a7d73380988c0fef1784f08cdf6d0f7d99d59b75f48cfe2"
+  },
+  "edition": "1.1 per FILE_ID.DIZ; VENDOR.DOC retains Version 1.0 heading",
+  "installation": {
+    "type": "zip",
+    "member": null,
+    "executable": "JAZZ.EXE",
+    "executable_verified": true,
+    "host_extractable": true,
+    "lead_action": "Payload is host-extractable; preserve every original file/document, run real sound setup and pin the measured tree. Extraction alone is not installation/gameplay evidence."
+  }
 }

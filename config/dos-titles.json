@@ -329,211 +329,239 @@
       "id": "heretic",
       "archive": "htic_v12.zip",
       "url": "https://www.gamers.org/pub/idgames/idstuff/heretic/htic_v12.zip",
-      "sha256": "lead-pins",
-      "size": null,
-      "status": "lead-pins",
+      "sha256": "5ffbb47e4a5750fef144c312973ee5782266b4a63474b77478103b6c1aaed39d",
+      "size": 2898794,
+      "status": "pinned",
       "licence": {
-        "source": "third_party/games/heretic-shareware/UPSTREAM.json",
-        "terms": "Original shareware package only. Exact package terms and licence member hashes await lead download/read-back; no bundling grant asserted.",
-        "verification": "lead-pins",
+        "source": "htic_v12.zip!HTIC_V12.1+HTIC_V12.2!LICENSE.DOC",
+        "terms": "LICENSE.DOC sections 1-4: personal use; no commercial exploitation or distribution for consideration. Royalty-free electronic distribution only in compressed form. VENDOR.DOC reserves reseller distribution to GT Interactive and directs direct-sale vendors to obtain a licence. No installed OS-image bundling grant established.",
+        "verification": "Read original licence and vendor documents from the exact size/SHA-256-verified pinned archive; member hash is over unmodified bytes. No OS-image redistribution permission asserted.",
         "distribution": "Local acceptance test media only; never included in images or releases.",
-        "class": "test-media"
-      }
+        "class": "test-media",
+        "sha256": "d91e4c0571f67cde0ffdf0fe8e5958bd57debda2d31e823c84ca4463c0761279"
+      },
+      "provenance": "third_party/games/heretic-shareware/UPSTREAM.json"
     },
     {
       "id": "hexen",
       "archive": "hexndemo.zip",
       "url": "https://www.gamers.org/pub/idgames/idstuff/hexen/hexndemo.zip",
-      "sha256": "lead-pins",
-      "size": null,
-      "status": "lead-pins",
+      "sha256": "469ee3a254959d2fca624aec7391292fbd1ac3ebd9074b65f05cbc74de3c4572",
+      "size": 5664734,
+      "status": "pinned",
       "licence": {
-        "source": "third_party/games/hexen-demo/UPSTREAM.json",
-        "terms": "Original demo package only. Exact package terms and licence member hashes await lead download/read-back; no bundling grant asserted.",
-        "verification": "lead-pins",
+        "source": "hexndemo.zip!README.TXT",
+        "terms": "README.TXT identifies the four-level demo re-released October 18, 1995 and states it is not shareware. No licence/vendor document or explicit sharing or bundling grant is present in the pinned ZIP; no redistribution permission inferred.",
+        "verification": "Read README.TXT and DM.DOC and inspected every pinned ZIP member; no separate licence/vendor document or explicit redistribution grant found. README hash records demo identification, not a licence grant.",
         "distribution": "Local acceptance test media only; never included in images or releases.",
-        "class": "test-media"
-      }
+        "class": "test-media",
+        "sha256": "052ab6d0f513ebef8484b359d3a744cb7af8a519b68b68361a02ba32eee3afdb"
+      },
+      "provenance": "third_party/games/hexen-demo/UPSTREAM.json"
     },
     {
       "id": "descent",
       "archive": "desc14sw.zip",
       "url": "https://image.dosgamesarchive.com/games/desc14sw.zip",
-      "sha256": "lead-pins",
-      "size": null,
-      "status": "lead-pins",
+      "sha256": "64741386ad88d7a60a9529383affb4d2415e11d907ea6dbab8a8a66e1c20b745",
+      "size": 2877472,
+      "status": "pinned",
       "licence": {
-        "source": "third_party/games/descent-shareware/UPSTREAM.json",
-        "terms": "Original shareware package only. Exact package terms and licence member hashes await lead download/read-back; no bundling grant asserted.",
-        "verification": "lead-pins",
+        "source": "desc14sw.zip!LICENCE.TXT",
+        "terms": "Personal noncommercial home use and no-cost copies for friends/acquaintances only. Commercial copying/distribution, bundling with any other product/service and promotional giveaways are expressly excluded; permissions are revocable.",
+        "verification": "Read original licence and vendor documents from the exact size/SHA-256-verified pinned archive; member hash is over unmodified bytes. No OS-image redistribution permission asserted.",
         "distribution": "Local acceptance test media only; never included in images or releases.",
-        "class": "test-media"
-      }
+        "class": "test-media",
+        "sha256": "963088fea6cafbcb913a44b7ecd5bedcd3fed097d1ccce52c6d21ed5210a7395"
+      },
+      "provenance": "third_party/games/descent-shareware/UPSTREAM.json"
     },
     {
       "id": "descent2",
       "archive": "d2demo10.zip",
       "url": "https://image.dosgamesarchive.com/games/d2demo10.zip",
-      "sha256": "lead-pins",
-      "size": null,
-      "status": "lead-pins",
+      "sha256": "a7c31eae6dfd22e1f6a4c0b9fb2dfb2e25197831bc43c3e9d65734c7fa446c4d",
+      "size": 4307914,
+      "status": "pinned",
       "licence": {
-        "source": "third_party/games/descent2-demo/UPSTREAM.json",
-        "terms": "Original demo package only. Exact package terms and licence member hashes await lead download/read-back; no bundling grant asserted.",
-        "verification": "lead-pins",
+        "source": "d2demo10.zip!README.TXT",
+        "terms": "Personal noncommercial home use and no-cost copies for friends/acquaintances only. Commercial copying/distribution, bundling with any other product/service and promotional giveaways are expressly excluded; permissions are revocable.",
+        "verification": "Read original licence and vendor documents from the exact size/SHA-256-verified pinned archive; member hash is over unmodified bytes. No OS-image redistribution permission asserted.",
         "distribution": "Local acceptance test media only; never included in images or releases.",
-        "class": "test-media"
-      }
+        "class": "test-media",
+        "sha256": "b3aea81691fb512f29007337362a00441b582bdbcebf94d3ddfb837289a0aa3d"
+      },
+      "provenance": "third_party/games/descent2-demo/UPSTREAM.json"
     },
     {
       "id": "shadowwarrior",
-      "archive": "1sw12.zip",
-      "url": "https://www.gamers.org/pub/mirrors/ftp.3drealms.com/share/1sw12.zip",
-      "sha256": "lead-pins",
-      "size": null,
-      "status": "lead-pins",
+      "archive": "3dsw12.zip",
+      "url": "https://www.gamers.org/pub/mirrors/ftp.3drealms.com/share/3dsw12.zip",
+      "sha256": "6e41b3769d0373fc160c2113469c6f8bc2932dc1a77b69c81c1bd9644a189a8f",
+      "size": 13299147,
+      "status": "pinned",
       "licence": {
-        "source": "third_party/games/shadowwarrior-shareware/UPSTREAM.json",
-        "terms": "Original shareware package only. Exact package terms and licence member hashes await lead download/read-back; no bundling grant asserted.",
-        "verification": "lead-pins",
+        "source": "3dsw12.zip!SWSW12.SHR!LICENSE.TXT",
+        "terms": "LICENSE.TXT [3][A-D]: no-charge sharing by individuals with friends, family, coworkers and nonprofit members; all files and notices unchanged. GTIS retail exclusivity ended September 1, 1997; later AOL/CompuServe forum distribution permitted. No general OS-image bundle grant.",
+        "verification": "Read original licence and vendor documents from the exact size/SHA-256-verified pinned archive; member hash is over unmodified bytes. No OS-image redistribution permission asserted.",
         "distribution": "Local acceptance test media only; never included in images or releases.",
-        "class": "test-media"
-      }
+        "class": "test-media",
+        "sha256": "41a8d37ff59966e4ba76090752b43bf924f75313c0cb55f229122b39f7a7bdea"
+      },
+      "provenance": "third_party/games/shadowwarrior-shareware/UPSTREAM.json"
     },
     {
       "id": "wacky",
       "archive": "1wacky.zip",
       "url": "https://www.gamers.org/pub/mirrors/ftp.3drealms.com/share/1wacky.zip",
-      "sha256": "lead-pins",
-      "size": null,
-      "status": "lead-pins",
+      "sha256": "3c3c35bb696194b420c5156ac9641819213f01812801f5c1683817c8bb70f4a3",
+      "size": 1655316,
+      "status": "pinned",
       "licence": {
-        "source": "third_party/games/wacky-shareware/UPSTREAM.json",
-        "terms": "Original shareware package only. Exact package terms and licence member hashes await lead download/read-back; no bundling grant asserted.",
-        "verification": "lead-pins",
+        "source": "1wacky.zip!WWSW11.SHR!VENDOR.DOC",
+        "terms": "Complete, unmodified Episode One shareware may be shared without charge; retain all files and notices ([3][A]). Advertising must credit Apogee. Hardware/software bundles, CD-ROMs and retail distribution require prior signed written permission ([3][C]); charged distribution has additional packaging/current-version conditions ([3][B]).",
+        "verification": "Read original licence and vendor documents from the exact size/SHA-256-verified pinned archive; member hash is over unmodified bytes. No OS-image redistribution permission asserted.",
         "distribution": "Local acceptance test media only; never included in images or releases.",
-        "class": "test-media"
-      }
+        "class": "test-media",
+        "sha256": "dd4c708ce870043f5de5941a525ec82ce01c54dee086791a9334fe058ce35340"
+      },
+      "provenance": "third_party/games/wacky-shareware/UPSTREAM.json"
     },
     {
       "id": "cosmo",
       "archive": "1cosmo.zip",
       "url": "https://www.gamers.org/pub/mirrors/ftp.3drealms.com/share/1cosmo.zip",
-      "sha256": "lead-pins",
-      "size": null,
-      "status": "lead-pins",
+      "sha256": "45e30c651e2676b818187d466a1135701b0b26145c7ad2f40775ed2d43acec4c",
+      "size": 597300,
+      "status": "pinned",
       "licence": {
-        "source": "third_party/games/cosmo-shareware/UPSTREAM.json",
-        "terms": "Original shareware package only. Exact package terms and licence member hashes await lead download/read-back; no bundling grant asserted.",
-        "verification": "lead-pins",
+        "source": "1cosmo.zip!COSSW12.SHR!VENDOR.DOC",
+        "terms": "Complete, unmodified Episode One shareware may be shared without charge; retain all files and notices ([3][A]). Advertising must credit Apogee. Hardware/software bundles, CD-ROMs and retail distribution require prior signed written permission ([3][C]); charged distribution has additional packaging/current-version conditions ([3][B]).",
+        "verification": "Read original licence and vendor documents from the exact size/SHA-256-verified pinned archive; member hash is over unmodified bytes. No OS-image redistribution permission asserted.",
         "distribution": "Local acceptance test media only; never included in images or releases.",
-        "class": "test-media"
-      }
+        "class": "test-media",
+        "sha256": "9e14a0c24dc9e9b87f6e7b663ffdd3ef90b70e8becf84dd7262724409337d3fc"
+      },
+      "provenance": "third_party/games/cosmo-shareware/UPSTREAM.json"
     },
     {
       "id": "duke2",
-      "archive": "1duke2.zip",
-      "url": "https://www.gamers.org/pub/mirrors/ftp.3drealms.com/share/1duke2.zip",
-      "sha256": "lead-pins",
-      "size": null,
-      "status": "lead-pins",
+      "archive": "4duke.zip",
+      "url": "https://www.gamers.org/pub/mirrors/ftp.3drealms.com/share/4duke.zip",
+      "sha256": "c94479ace93a8923615ddebea96bcd18242a3a31f54cdcbc84e02ca0ab685829",
+      "size": 1146465,
+      "status": "pinned",
       "licence": {
-        "source": "third_party/games/duke2-shareware/UPSTREAM.json",
-        "terms": "Original shareware package only. Exact package terms and licence member hashes await lead download/read-back; no bundling grant asserted.",
-        "verification": "lead-pins",
+        "source": "4duke.zip!DN2SW10.SHR!VENDOR.DOC",
+        "terms": "Complete, unmodified Episode One shareware may be shared without charge; retain all files and notices ([3][A]). Advertising must credit Apogee. Hardware/software bundles, CD-ROMs and retail distribution require prior signed written permission ([3][C]); charged distribution has additional packaging/current-version conditions ([3][B]).",
+        "verification": "Read original licence and vendor documents from the exact size/SHA-256-verified pinned archive; member hash is over unmodified bytes. No OS-image redistribution permission asserted.",
         "distribution": "Local acceptance test media only; never included in images or releases.",
-        "class": "test-media"
-      }
+        "class": "test-media",
+        "sha256": "327054d275bdc93e9df8e0af0386c5a10a4c83a696cc745c2097139f31831597"
+      },
+      "provenance": "third_party/games/duke2-shareware/UPSTREAM.json"
     },
     {
       "id": "raptor",
-      "archive": "1raptor.zip",
-      "url": "https://www.gamers.org/pub/mirrors/ftp.3drealms.com/share/1raptor.zip",
-      "sha256": "lead-pins",
-      "size": null,
-      "status": "lead-pins",
+      "archive": "1rap12.zip",
+      "url": "https://www.gamers.org/pub/mirrors/ftp.3drealms.com/share/1rap12.zip",
+      "sha256": "7d6b062dcdc76d9ea02d8d71af14e5043223581d792f6ead4eb1316fd0351552",
+      "size": 2013010,
+      "status": "pinned",
       "licence": {
-        "source": "third_party/games/raptor-shareware/UPSTREAM.json",
-        "terms": "Original shareware package only. Exact package terms and licence member hashes await lead download/read-back; no bundling grant asserted.",
-        "verification": "lead-pins",
+        "source": "1rap12.zip!RAPSW12.SHR!VENDOR.DOC",
+        "terms": "Complete, unmodified Episode One shareware may be shared without charge; retain all files and notices ([3][A]). Advertising must credit Apogee. Hardware/software bundles, CD-ROMs and retail distribution require prior signed written permission ([3][C]); charged distribution has additional packaging/current-version conditions ([3][B]).",
+        "verification": "Read original licence and vendor documents from the exact size/SHA-256-verified pinned archive; member hash is over unmodified bytes. No OS-image redistribution permission asserted.",
         "distribution": "Local acceptance test media only; never included in images or releases.",
-        "class": "test-media"
-      }
+        "class": "test-media",
+        "sha256": "3e4811d1ce11e2dc2ea219b364573d8cc49590e63ecedde2f1626c54b82e4d62"
+      },
+      "provenance": "third_party/games/raptor-shareware/UPSTREAM.json"
     },
     {
       "id": "hocus",
-      "archive": "1hocus.zip",
-      "url": "https://www.gamers.org/pub/mirrors/ftp.3drealms.com/share/1hocus.zip",
-      "sha256": "lead-pins",
-      "size": null,
-      "status": "lead-pins",
+      "archive": "1hp11.zip",
+      "url": "https://www.gamers.org/pub/mirrors/ftp.3drealms.com/share/1hp11.zip",
+      "sha256": "83352f33279c05f8e6137c285e2432d0500cb07623a9d3875a17829ec7a342a4",
+      "size": 937575,
+      "status": "pinned",
       "licence": {
-        "source": "third_party/games/hocus-shareware/UPSTREAM.json",
-        "terms": "Original shareware package only. Exact package terms and licence member hashes await lead download/read-back; no bundling grant asserted.",
-        "verification": "lead-pins",
+        "source": "1hp11.zip!HPSW11.SHR!VENDOR.DOC",
+        "terms": "Complete, unmodified Episode One shareware may be shared without charge; retain all files and notices ([3][A]). Advertising must credit Apogee. Hardware/software bundles, CD-ROMs and retail distribution require prior signed written permission ([3][C]); charged distribution has additional packaging/current-version conditions ([3][B]).",
+        "verification": "Read original licence and vendor documents from the exact size/SHA-256-verified pinned archive; member hash is over unmodified bytes. No OS-image redistribution permission asserted.",
         "distribution": "Local acceptance test media only; never included in images or releases.",
-        "class": "test-media"
-      }
+        "class": "test-media",
+        "sha256": "61c9ed45cff98f6c584fa6d8059df98bd137c4fad653012e1b7af58be864c45c"
+      },
+      "provenance": "third_party/games/hocus-shareware/UPSTREAM.json"
     },
     {
       "id": "biomenace",
-      "archive": "1bio10.zip",
-      "url": "https://www.gamers.org/pub/mirrors/ftp.3drealms.com/share/1bio10.zip",
-      "sha256": "lead-pins",
-      "size": null,
-      "status": "lead-pins",
+      "archive": "1bio11.zip",
+      "url": "https://www.gamers.org/pub/mirrors/ftp.3drealms.com/share/1bio11.zip",
+      "sha256": "3c5e4e5774b13f2d233b9b532cd34b5708b8fcec14b27824b75d16563298b719",
+      "size": 717127,
+      "status": "pinned",
       "licence": {
-        "source": "third_party/games/biomenace-shareware/UPSTREAM.json",
-        "terms": "Original shareware package only. Exact package terms and licence member hashes await lead download/read-back; no bundling grant asserted.",
-        "verification": "lead-pins",
+        "source": "1bio11.zip!BMSW11.SHR!VENDOR.DOC",
+        "terms": "Complete, unmodified Episode One shareware may be shared without charge; retain all files and notices ([3][A]). Advertising must credit Apogee. Hardware/software bundles, CD-ROMs and retail distribution require prior signed written permission ([3][C]); charged distribution has additional packaging/current-version conditions ([3][B]).",
+        "verification": "Read original licence and vendor documents from the exact size/SHA-256-verified pinned archive; member hash is over unmodified bytes. No OS-image redistribution permission asserted.",
         "distribution": "Local acceptance test media only; never included in images or releases.",
-        "class": "test-media"
-      }
+        "class": "test-media",
+        "sha256": "a57b8624caeeffe9c960547cd404fc4ea90fe4b74fd0fe8e957e2b3243338412"
+      },
+      "provenance": "third_party/games/biomenace-shareware/UPSTREAM.json"
     },
     {
       "id": "blakestone",
-      "archive": "1bs6.zip",
-      "url": "https://www.gamers.org/pub/mirrors/ftp.3drealms.com/share/1bs6.zip",
-      "sha256": "lead-pins",
-      "size": null,
-      "status": "lead-pins",
+      "archive": "1bs30.zip",
+      "url": "https://www.gamers.org/pub/mirrors/ftp.3drealms.com/share/1bs30.zip",
+      "sha256": "9a7e39037689cb84054bd3ddca290ab3644e327f951eb08e7ad79500e9c0dfb3",
+      "size": 1495394,
+      "status": "pinned",
       "licence": {
-        "source": "third_party/games/blakestone-shareware/UPSTREAM.json",
-        "terms": "Original shareware package only. Exact package terms and licence member hashes await lead download/read-back; no bundling grant asserted.",
-        "verification": "lead-pins",
+        "source": "1bs30.zip!BSSW30.SHR!VENDOR.DOC",
+        "terms": "Complete, unmodified Episode One shareware may be shared without charge; retain all files and notices ([3][A]). Advertising must credit Apogee. Hardware/software bundles, CD-ROMs and retail distribution require prior signed written permission ([3][C]); charged distribution has additional packaging/current-version conditions ([3][B]).",
+        "verification": "Read original licence and vendor documents from the exact size/SHA-256-verified pinned archive; member hash is over unmodified bytes. No OS-image redistribution permission asserted.",
         "distribution": "Local acceptance test media only; never included in images or releases.",
-        "class": "test-media"
-      }
+        "class": "test-media",
+        "sha256": "fdaf66a2b7f23be85805dd6146b2e35217900dd8b0dade3521a6b6ab09901d07"
+      },
+      "provenance": "third_party/games/blakestone-shareware/UPSTREAM.json"
     },
     {
       "id": "terminal",
-      "archive": "3dldemo.zip",
-      "url": "https://www.gamers.org/pub/mirrors/ftp.3drealms.com/share/3dldemo.zip",
-      "sha256": "lead-pins",
-      "size": null,
-      "status": "lead-pins",
+      "archive": "3dtv12.zip",
+      "url": "https://www.gamers.org/pub/mirrors/ftp.3drealms.com/share/3dtv12.zip",
+      "sha256": "ff55a2a54be15f73899cc591310a226ded1f652c1a73ceeaeeb72e9881346ca4",
+      "size": 3795467,
+      "status": "pinned",
       "licence": {
-        "source": "third_party/games/terminal-shareware/UPSTREAM.json",
-        "terms": "Original shareware package only. Exact package terms and licence member hashes await lead download/read-back; no bundling grant asserted.",
-        "verification": "lead-pins",
+        "source": "3dtv12.zip!TV12S.SHR!LICENSE.TXT",
+        "terms": "Complete unmodified Episode One may be shared free; retain all files/notices and credit Apogee. LICENSE.TXT [3][C] requires prior signed permission for commercial bundles, CD-ROMs or retail distribution. Key points additionally require written permission for commercial-location sale/distribution after May 1, 1996.",
+        "verification": "Read original licence and vendor documents from the exact size/SHA-256-verified pinned archive; member hash is over unmodified bytes. No OS-image redistribution permission asserted.",
         "distribution": "Local acceptance test media only; never included in images or releases.",
-        "class": "test-media"
-      }
+        "class": "test-media",
+        "sha256": "3c1b606f5fe8c74c4e7757f1494d821f8aec8f442d0c8e45d8a7646734b76fd5"
+      },
+      "provenance": "third_party/games/terminal-shareware/UPSTREAM.json"
     },
     {
       "id": "jazz",
       "archive": "jazz.zip",
       "url": "https://image.dosgamesarchive.com/games/jazz.zip",
-      "sha256": "lead-pins",
-      "size": null,
-      "status": "lead-pins",
+      "sha256": "ed025415c0bc5ebc3a41e7a070551bdfdfb0b65b5314241152d8bd31f87c22da",
+      "size": 1421049,
+      "status": "pinned",
       "licence": {
-        "source": "third_party/games/jazz-shareware/UPSTREAM.json",
-        "terms": "Original shareware package only. Exact package terms and licence member hashes await lead download/read-back; no bundling grant asserted.",
-        "verification": "lead-pins",
+        "source": "jazz.zip!LICENSE.DOC",
+        "terms": "LICENSE.DOC permits unchanged modem sharing; charged downloads/single-game floppies must cost less than $9. Commercial CD/multi-disk collections: at most 10 programs and 3 Epic titles, front-cover credits/shareware labels and a copy sent to Epic. Free unchanged bundling with new hardware is allowed. Other distribution needs contact; no general OS-image grant established.",
+        "verification": "Read original licence and vendor documents from the exact size/SHA-256-verified pinned archive; member hash is over unmodified bytes. No OS-image redistribution permission asserted.",
         "distribution": "Local acceptance test media only; never included in images or releases.",
-        "class": "test-media"
-      }
+        "class": "test-media",
+        "sha256": "0441795688ccd5904a7d73380988c0fef1784f08cdf6d0f7d99d59b75f48cfe2"
+      },
+      "provenance": "third_party/games/jazz-shareware/UPSTREAM.json"
     }
   ]
 }

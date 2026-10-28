@@ -1,16 +1,39 @@
 {
   "project": "Hocus Pocus (original DOS shareware)",
   "authors": "Moonlite Software / Apogee",
-  "archive": "1hocus.zip",
+  "archive": "1hp11.zip",
   "sources": [
-    "https://www.gamers.org/pub/mirrors/ftp.3drealms.com/share/1hocus.zip"
+    "https://www.gamers.org/pub/mirrors/ftp.3drealms.com/share/1hp11.zip"
   ],
-  "sha256": "lead-pins",
-  "size": null,
-  "status": "lead-pins",
-  "license": "Original shareware package only. Exact package terms and licence member hashes await lead download/read-back; no bundling grant asserted.",
-  "license_files": [],
-  "redistribution": "test-media only; package review pending",
+  "sha256": "83352f33279c05f8e6137c285e2432d0500cb07623a9d3875a17829ec7a342a4",
+  "size": 937575,
+  "status": "pinned",
+  "license": "Complete, unmodified Episode One shareware may be shared without charge; retain all files and notices ([3][A]). Advertising must credit Apogee. Hardware/software bundles, CD-ROMs and retail distribution require prior signed written permission ([3][C]); charged distribution has additional packaging/current-version conditions ([3][B]).",
+  "license_files": [
+    {
+      "name": "VENDOR.DOC",
+      "source": "1hp11.zip!HPSW11.SHR!VENDOR.DOC",
+      "sha256": "61c9ed45cff98f6c584fa6d8059df98bd137c4fad653012e1b7af58be864c45c"
+    }
+  ],
+  "redistribution": "test-media only; no OS-image bundling permission established",
   "game_data": "No retail, registered or abandonware payload. Never commit game bytes.",
-  "qualification": "Pin the download, inspect original installer and manual, record exact licence clauses and installed tree before running."
+  "qualification": "Original package terms reviewed; installed tree, sound setup and image-bound gameplay/input calibration remain pending.",
+  "licence": {
+    "source": "1hp11.zip!HPSW11.SHR!VENDOR.DOC",
+    "terms": "Complete, unmodified Episode One shareware may be shared without charge; retain all files and notices ([3][A]). Advertising must credit Apogee. Hardware/software bundles, CD-ROMs and retail distribution require prior signed written permission ([3][C]); charged distribution has additional packaging/current-version conditions ([3][B]).",
+    "verification": "Read original licence and vendor documents from the exact size/SHA-256-verified pinned archive; member hash is over unmodified bytes. No OS-image redistribution permission asserted.",
+    "distribution": "Local acceptance test media only; never included in images or releases.",
+    "class": "test-media",
+    "sha256": "61c9ed45cff98f6c584fa6d8059df98bd137c4fad653012e1b7af58be864c45c"
+  },
+  "edition": "1.1 shareware",
+  "installation": {
+    "type": "zip-sfx",
+    "member": "HPSW11.SHR",
+    "executable": "HOCUS.EXE",
+    "executable_verified": true,
+    "host_extractable": true,
+    "lead_action": "Payload is host-extractable; preserve every original file/document, run real sound setup and pin the measured tree. Extraction alone is not installation/gameplay evidence."
+  }
 }

@@ -187,3 +187,4 @@ Documenti di design, validazione, fonti esterne.
 | [Prova T23 5bb73dba…: sonda 3D bloccante, blocco di Quake III da quarantena APM, errore 95 allo spegnimento; decisioni su F7](2026-10-26-03-prova-t23-5bb73dba.md) | 26 ottobre 2026 | analisi, decisione |
 | [Immagine T23 6c3b7800…: correzioni della prova 5bb73dba e linea Savage completa](2026-10-27-01-immagine-t23-correzioni-prova-savage-completo.md) | 27 ottobre 2026 | modifica, integrazione |
 | [Decisioni del proprietario per il lavoro continuo verso la 1.0 Beta](2026-10-28-01-decisioni-proprietario-verso-beta.md) | 28 ottobre 2026 | decisione |
+| [Integrazione 7 su main e primo avvio degli account sul profilo lento](2026-10-28-02-integrazione-7-primo-avvio-account.md) | 28 ottobre 2026 | integrazione |

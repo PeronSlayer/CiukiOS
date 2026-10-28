@@ -5,12 +5,35 @@
   "sources": [
     "https://image.dosgamesarchive.com/games/desc14sw.zip"
   ],
-  "sha256": "lead-pins",
-  "size": null,
-  "status": "lead-pins",
-  "license": "Original shareware package only. Exact package terms and licence member hashes await lead download/read-back; no bundling grant asserted.",
-  "license_files": [],
-  "redistribution": "test-media only; package review pending",
+  "sha256": "64741386ad88d7a60a9529383affb4d2415e11d907ea6dbab8a8a66e1c20b745",
+  "size": 2877472,
+  "status": "pinned",
+  "license": "Personal noncommercial home use and no-cost copies for friends/acquaintances only. Commercial copying/distribution, bundling with any other product/service and promotional giveaways are expressly excluded; permissions are revocable.",
+  "license_files": [
+    {
+      "name": "LICENCE.TXT",
+      "source": "desc14sw.zip!LICENCE.TXT",
+      "sha256": "963088fea6cafbcb913a44b7ecd5bedcd3fed097d1ccce52c6d21ed5210a7395"
+    }
+  ],
+  "redistribution": "test-media only; no OS-image bundling permission established",
   "game_data": "No retail, registered or abandonware payload. Never commit game bytes.",
-  "qualification": "Pin the download, inspect original installer and manual, record exact licence clauses and installed tree before running."
+  "qualification": "Original package terms reviewed; installed tree, sound setup and image-bound gameplay/input calibration remain pending.",
+  "licence": {
+    "source": "desc14sw.zip!LICENCE.TXT",
+    "terms": "Personal noncommercial home use and no-cost copies for friends/acquaintances only. Commercial copying/distribution, bundling with any other product/service and promotional giveaways are expressly excluded; permissions are revocable.",
+    "verification": "Read original licence and vendor documents from the exact size/SHA-256-verified pinned archive; member hash is over unmodified bytes. No OS-image redistribution permission asserted.",
+    "distribution": "Local acceptance test media only; never included in images or releases.",
+    "class": "test-media",
+    "sha256": "963088fea6cafbcb913a44b7ecd5bedcd3fed097d1ccce52c6d21ed5210a7395"
+  },
+  "edition": "1.4 special preview/shareware",
+  "installation": {
+    "type": "segmented-sow-installer",
+    "member": null,
+    "executable": "DESCENT.EXE",
+    "executable_verified": false,
+    "host_extractable": false,
+    "lead_action": "Run original INSTALL.EXE in DOS; inspect installed executable and documentation, configure sound, then pin measured installed tree."
+  }
 }

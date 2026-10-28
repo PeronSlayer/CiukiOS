@@ -42,13 +42,24 @@ def catalog_root(folder):
         dest.write_bytes((ROOT / path).read_bytes())
     pins = json.loads((ROOT / games.PINS).read_text())['titles']
     for pin in pins:
-        source = pin['licence']['source']
+        source = pin.get('provenance', pin['licence']['source'])
         if not source.startswith('third_party/'):
             candidate = 'third_party/games/' + pin['id'] + '-shareware/UPSTREAM.json'
             if (ROOT / candidate).is_file(): source = candidate
         if source.startswith('third_party/'):
             dest = folder / source; dest.parent.mkdir(parents=True, exist_ok=True)
             dest.write_bytes((ROOT / source).read_bytes())
+    # The fixtures exercise a pending candidate: heretic before pin/term review.
+    catalog = json.loads((folder / games.CATALOG).read_text())
+    for title in catalog['titles']:
+        if title['id'] == 'heretic': title['terms_reviewed'] = False
+    (folder / games.CATALOG).write_text(json.dumps(catalog))
+    data = json.loads((folder / games.PINS).read_text())
+    for pin in data['titles']:
+        if pin['id'] == 'heretic':pin.update(status='lead-pins', sha256='lead-pins', size=None)
+    (folder / games.PINS).write_text(json.dumps(data, indent=2) + '\n')
+    path = folder / 'third_party/games/heretic-shareware/UPSTREAM.json'; upstream = json.loads(path.read_text())
+    upstream.update(status='lead-pins', sha256='lead-pins', size=None); path.write_text(json.dumps(upstream))
     return folder
 
 
@@ -66,7 +77,7 @@ def ready_title(root, ident='heretic', image_sha='a' * 64):
     data = json.loads((root / games.PINS).read_text())
     data['titles'] = [pin if p['id'] == ident else p for p in data['titles']]
     (root / games.PINS).write_text(json.dumps(data))
-    path = root / pin['licence']['source']; upstream = json.loads(path.read_text())
+    path = root / pin.get('provenance', pin['licence']['source']); upstream = json.loads(path.read_text())
     upstream.update(status='pinned', sha256=pin['sha256'], size=pin['size']); path.write_text(json.dumps(upstream))
     directory = root / title['installed']['directory']; directory.mkdir()
     executable = b'MZ synthetic fixture'; (directory / title['executable']).write_bytes(executable)
@@ -87,10 +98,12 @@ class CatalogTests(unittest.TestCase):
         tracked = dos_titles.load(ROOT / 'tests/dos-titles/tracked.json', True)['titles']
         self.assertEqual({t['id'] for t in tracked}, {t['id'] for t in titles})
         self.assertEqual(len(titles), 20)
-        self.assertEqual(sum(p['status'] == 'lead-pins' for p in pins['titles']), 14)
+        self.assertEqual({p['status'] for p in pins['titles']} - {'pinned', 'lead-pins'}, set())
         for pin in pins['titles'][6:]:
             self.assertEqual(pin['licence']['class'], 'test-media')
-            self.assertEqual(pin['sha256'], 'lead-pins')
+            # The lead pins each candidate with dos_games.py fetch --lead-pin.
+            if pin['status'] == 'lead-pins':self.assertEqual(pin['sha256'], 'lead-pins')
+            else:self.assertRegex(pin['sha256'], '^[0-9a-f]{64}$'); self.assertGreater(pin['size'], 0)
             self.assertNotIn('package', pin)  # canonical bundling path cannot ingest candidates
         self.assertTrue(all(1990 <= t['year'] <= 1998 for t in tracked))
         self.assertGreaterEqual(sum(t['lan'] is not None for t in titles), 6)
@@ -102,7 +115,7 @@ class CatalogTests(unittest.TestCase):
         for case in actual:
             self.assertEqual(runner.case_kind(case), 'acceptance')
         listed = subprocess.run(['bash', 'scripts/test/acceptance.sh', '--list'], cwd=ROOT, capture_output=True, text=True, check=True)
-        self.assertEqual({line.split('\t')[0] for line in listed.stdout.splitlines()}, {c['id'] for c in suite['cases']})
+        self.assertEqual({line.split()[0] for line in listed.stdout.splitlines() if not line.endswith(' cases valid')}, {c['id'] for c in suite['cases']})
 
     def test_downgraded_predicates_and_malformed_pairs_are_refused(self):
         title = games.load()[0][0]
@@ -125,9 +138,22 @@ class CatalogTests(unittest.TestCase):
             save_title(root, title)
             with self.assertRaises(ValueError): games.load(root)
             root = catalog_root(tmp)
-            path = root / pin['licence']['source']; upstream = json.loads(path.read_text()); upstream['sha256'] = 'f' * 64
+            path = root / pin.get('provenance', pin['licence']['source']); upstream = json.loads(path.read_text()); upstream['sha256'] = 'f' * 64
             path.write_text(json.dumps(upstream))
             with self.assertRaises(ValueError): games.load(root)
+
+    def test_member_citations_preserve_demo_provenance_checks(self):
+        for ident in ('heretic', 'hexen', 'descent2'):
+            with self.subTest(ident=ident), tempfile.TemporaryDirectory(dir=SCRATCH) as tmp:
+                root = catalog_root(tmp)
+                _, pin = games.title_for(ident, root)
+                self.assertTrue(pin['licence']['source'].startswith(pin['archive'] + '!'))
+                path = root / pin['provenance']
+                upstream = json.loads(path.read_text())
+                upstream['licence']['sha256'] = '0' * 64
+                path.write_text(json.dumps(upstream))
+                with self.assertRaisesRegex(ValueError, 'upstream licence mismatch'):
+                    games.load(root)
 
     def test_existing_archive_name_is_checked_against_installed_provenance(self):
         with tempfile.TemporaryDirectory(dir=SCRATCH) as tmp:
@@ -171,6 +197,8 @@ class CatalogTests(unittest.TestCase):
                 with self.assertRaises(EvidenceNotRun): games.fetch(title, pin, root)
                 opened.assert_not_called()
                 result = games.fetch(title, pin, root, lead_pin=True)
+                request = opened.call_args.args[0]
+                self.assertEqual((request.full_url, request.get_header('User-agent')), (pin['url'], 'CiukiOS-dos-games/1'))
             self.assertEqual(result['sha256'], hashlib.sha256(b'archive').hexdigest())
             title, pin = games.title_for('heretic', root)
             with patch.object(games.urllib.request, 'urlopen', return_value=io.BytesIO(b'bad')):
