@@ -1,6 +1,6 @@
 # fx-hlis5 round 2: review findings on the burst optical path and the profile TEMP folder
 
-- **Written:** 2026-10-29 00:52 by the lead. Implementer: Codex `gpt-6.1-sol`, effort `high`.
+- **Written:** 2026-10-29 00:47 by the lead. Implementer: Codex `gpt-6.1-sol`, effort `high`.
 - **Worktree:** `/home/peronslayer/Desktop/CiukiOS-wt-fx-hlis5`, branch `wt/fx-hlis5` at `57e083bff`.
 - **Input:** the review `build/lead-scratch/fx-hlis5-review-0007.md` in the main checkout, which found no P1 issues.
 
