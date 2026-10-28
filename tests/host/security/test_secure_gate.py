@@ -72,6 +72,10 @@ class SecureGateTests(unittest.TestCase):
                                       'src/kernel/include/ciuki/input.h'},
             'grants_console_activate(': {'src/kernel/proc/grants.c', 'src/kernel/proc/secure_console.c',
                                           'src/kernel/include/ciuki/desktop.h'},
+            # sec-user-06: the self-test's attention entry lives in the input
+            # driver, refuses outside a T boot, and has one caller.
+            'input_selftest_attention(': {'src/kernel/drivers/i8042.c', 'src/kernel/core/selftest_checks.c',
+                                           'src/kernel/include/ciuki/input.h'},
         }
         for symbol, allowed in callers.items():
             found = set()
@@ -83,6 +87,7 @@ class SecureGateTests(unittest.TestCase):
         for path in (ROOT / 'sdk').rglob('*.[ch]'):
             text = path.read_text(errors='replace')
             self.assertNotIn('input_secure_domain', text, path)
+            self.assertNotIn('input_selftest_attention', text, path)   # sec-user-06
             self.assertNotIn('security_console_attention', text, path)
         i8042 = (ROOT / 'src/kernel/drivers/i8042.c').read_text()
         self.assertRegex(i8042, r'secure_attention\(c, code, value\)\) return; /\* sec-k07 \*/\n    enqueue\(c, INPUT_KEY')

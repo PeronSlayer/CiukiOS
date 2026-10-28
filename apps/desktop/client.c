@@ -1236,6 +1236,16 @@ void desk_saver_config(struct desktop *d)
     if (!d->screen_control(&q)) d->saver_poll=0;
     d->saver_idle=d->now_ns; d->monitor_failed=0;
 }
+/* sec-user-06: the saver's start and dismissal, also in quiet boots. The
+ * security suites check that a dismissed password-protected saver locks
+ * through LOGON (contract 4.3) before the desktop is shown again. */
+static void saver_record(const struct desktop *d, const char *source, int lock)
+{
+    char line[120];
+    int n=source ? snprintf(line,sizeof(line),"[desktop] saver start kind=%u source=%s",(unsigned)d->saver_kind,source) :
+                   snprintf(line,sizeof(line),"[desktop] saver wake protect=1 lock=%d",lock);
+    if (n>0 && (size_t)n<sizeof(line)) desk_diag_record(line,n);
+}
 int desk_saver_start(struct desktop *d, unsigned kind)
 {
     if (kind>2) return -EINVAL;
@@ -1282,6 +1292,7 @@ static int saver_wake(struct desktop *d)
                 d->monitor_off=0; saver_damage(d);
             }
             int e=desk_session_saver_lock(d);
+            saver_record(d,NULL,e);   /* sec-user-06: 0 locked (or no saver password) */
             if (e) {
                 /* A DPMS-only wake has no saver to keep: conceal with the blank one. */
                 if (!d->saver_active) { d->saver_active=1; d->saver_kind=0; d->saver_frame=d->now_ns; saver_damage(d); }
@@ -1335,7 +1346,9 @@ void desk_saver_tick(struct desktop *d)
             if (q.sequence!=d->saver_sequence) {
                 d->saver_sequence=q.sequence;
                 if (q.flags&CIUKI_SCREEN_PERSIST) d->sh.want_save=1;
-                if (q.command==0xf140 && !desk_saver_start(d,q.argument<0 ? q.saver : (unsigned)q.argument)) d->saver_preview=0;
+                if (q.command==0xf140 && !desk_saver_start(d,q.argument<0 ? q.saver : (unsigned)q.argument)) {
+                    d->saver_preview=0; saver_record(d,"command",0);   /* sec-user-06: SC_SCREENSAVE */
+                }
                 if (q.command==0xf170 && !saver_suppressed(d)) {
                     if (q.argument==-1) (void)saver_wake(d);
                     else if (d->monitor_power) {
@@ -1353,7 +1366,7 @@ void desk_saver_tick(struct desktop *d)
     uint64_t idle=d->now_ns>=d->saver_idle ? d->now_ns-d->saver_idle : 0;
     if (!d->saver_active && d->sh.cfg.saver_enabled && d->sh.cfg.saver_seconds>0 &&
         idle>=(uint64_t)d->sh.cfg.saver_seconds*1000000000ull)
-        if (!desk_saver_start(d,(unsigned)d->sh.cfg.saver_kind)) d->saver_preview=0;
+        if (!desk_saver_start(d,(unsigned)d->sh.cfg.saver_kind)) { d->saver_preview=0; saver_record(d,"idle",0); }
     if (!d->monitor_off && !d->monitor_failed && d->sh.cfg.monitor_seconds>0 &&
         idle>=(uint64_t)d->sh.cfg.monitor_seconds*1000000000ull) {
         int e=saver_monitor_off(d,2);

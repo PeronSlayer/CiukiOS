@@ -315,6 +315,24 @@ static bool secure_attention(struct controller *c, uint16_t code, int32_t value)
     return true;
 }
 /* --- sec-k07 (end) --- */
+/* --- sec-user-06 (begin): the self-test's secure attention ---
+ * security.lock_latency (core/selftest_checks.c) measures the trusted gate
+ * on an unattended T boot. It enters the same transition as the physical
+ * filter above, from here, so that this module stays the only raiser of
+ * ATTENTION (census: tests/host/security/test_secure_gate.py). Refused
+ * outside a self-test boot and before the LOGON role exists; it touches no
+ * key state, and no syscall or SDK wrapper reaches it. */
+extern bool selftest_active(void) __attribute__((weak));
+int input_selftest_attention(void)
+{
+    if (!selftest_active || !selftest_active()) return -EPERM;
+    if (!security_attention_armed || !security_attention_armed() || !security_attention_physical) return -ENOENT;
+    klog("[input] self-test secure attention");
+    input_secure_domain(true, CIUKI_SECURITY_SECURE_ATTENTION);
+    security_attention_physical();
+    return 0;
+}
+/* --- sec-user-06 (end) --- */
 static void enqueue(struct controller *c, uint16_t type, uint16_t code, int32_t value, uint64_t tick)
 {
     /* sec-k07: a trusted console never feeds a DOS full-screen guest. */

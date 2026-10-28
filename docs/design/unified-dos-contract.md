@@ -7,6 +7,12 @@ an implementation contract, not an implemented guest or runtime qualification.
 The [CiukiDOS inventory](unified-dos-inventory-ciukidos.md) and
 [FreeDOS inventory](unified-dos-inventory-freedos.md) are part of it.
 
+> **Superseded in part by user security** (sec-user-06 reconciliation, 2026-10-28). A DOS VM inherits its session's credential;
+> C: is the user's private writable FAT16, D: a read-only system view, E: removable media, and
+> INT 25h/26h and INT 21h 7305h stay failures with unchanged buffers ([native libc and DOS](user-security-contract.md#84-native-libc-and-dos),
+> [removable media, DOS and Win32](user-security-kernel.md#removable-media-dos-and-win32)). Host evidence H06; the runtime case
+> su-r1-dos waits for a DOS-side record probe (`tests/suites/sec-users.json`).
+
 The owner's [2026-10-21 decision](../../dev_diary/2026-10-21-03-decisione-unificazione-ciukidos-freedos.md)
 supersedes the old prohibition on adopting FreeDOS. The product remains
 **CiukiDOS**, with a source-built fork of the FreeDOS 1.3 kernel 2043 as its

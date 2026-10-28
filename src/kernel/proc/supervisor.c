@@ -320,7 +320,13 @@ void supervisor_bootstrap(void)
     (void)supervisor_spawn_security_role(CIUKI_SECURITY_ROLE_REGISTRY,&trusted);
     (void)supervisor_spawn_security_role(CIUKI_SECURITY_ROLE_LOGON_UI,&trusted);
     int logon_result=supervisor_spawn_security_role(CIUKI_SECURITY_ROLE_LOGON,&trusted);
-    if (logon_result>0) return;
+    if (logon_result>0) {
+        /* sec-user-06: LOGON starts each session's desktop (security.c
+         * session_launch records it); this is the normal-boot milestone
+         * that replaces "spawning /Programs/desktop" on LOGON images. */
+        klog("[supervisor] bootstrap: trusted logon pid=%d",logon_result);
+        return;
+    }
     if (logon_result!=-ENOENT) {
         klog("[supervisor] trusted logon unavailable: %d",logon_result);
         return;

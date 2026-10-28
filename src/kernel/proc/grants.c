@@ -6,6 +6,7 @@
 extern uint32_t file_description_count(void) __attribute__((weak));
 #define FILE_OBJECTS ((file_description_count ? file_description_count() : 0) + (net_socket_count ? net_socket_count() : 0))
 extern uint32_t net_socket_count(void) __attribute__((weak));
+#pragma weak klog /* sec-user-06 timing records; host harnesses may link no log sink */
 #include <ciuki/cpu.h>
 #include <ciuki/desktop.h>
 #include <ciuki/registry.h>
@@ -37,6 +38,35 @@ static uint32_t trusted_owner, trusted_descriptions, trusted_presenting;
 static uint32_t user_session, active_session;
 static bool console_trusted, neutral_pending;
 static uint64_t neutral_frames;
+/* sec-user-06: trusted-gate latency (desktop.h grants_console_timing). */
+static struct grants_console_timing timing;
+static uint64_t conceal_tick, activate_tick;
+static bool timing_neutral, timing_trusted, timing_restore;
+static uint32_t timing_ms(uint64_t since)
+{ uint64_t d = g_ticks - since; return d > UINT32_MAX ? UINT32_MAX : (uint32_t)d; }
+void grants_console_timing(struct grants_console_timing *out)
+{ uint32_t f = irq_save(); *out = timing; irq_restore(f); }
+/* After a present of the grant's domain: the first trusted frame closes a
+ * concealment, the first session frame a restoration. One record each. */
+static void timing_frame(bool trusted)
+{
+    uint32_t f = irq_save();
+    bool conceal = trusted && timing_trusted && !timing_neutral, restore = !trusted && timing_restore;
+    uint32_t neutral = timing.last_neutral_ms, ms = 0, count = 0;
+    if (conceal) {
+        ms = timing_ms(conceal_tick); timing_trusted = false;
+        timing.last_trusted_ms = ms; if (ms > timing.max_trusted_ms) timing.max_trusted_ms = ms;
+        count = ++timing.concealments;
+    } else if (restore) {
+        ms = timing_ms(activate_tick); timing_restore = false;
+        timing.last_restore_ms = ms; if (ms > timing.max_restore_ms) timing.max_restore_ms = ms;
+        count = ++timing.restorations;
+    }
+    irq_restore(f);
+    if (!klog) return;
+    if (conceal) klog("[security] console concealed neutral_ms=%u trusted_ms=%u count=%u", neutral, ms, count);
+    else if (restore) klog("[security] console restored ms=%u count=%u", ms, count);
+}
 static bool input_trusted_now(void) { return input_secure_trusted && input_secure_trusted(); }
 static bool user_active(void)
 { return grant_owner && !console_trusted && user_session == active_session; }
@@ -79,6 +109,7 @@ int grants_console_conceal(uint32_t session)
     console_trusted = true;
     if (input_secure_domain) input_secure_domain(true, 0);
     if (exposed) { neutral_pending = true; console_changed(); }
+    if (exposed) { conceal_tick = g_ticks; timing_neutral = timing_trusted = true; timing_restore = false; } /* sec-user-06 */
     int busy = user_draining() || neutral_pending ? -EBUSY : 0;
     irq_restore(f);
     if (busy) {
@@ -96,6 +127,7 @@ int grants_console_activate(uint32_t session)
     active_session = session;
     if (input_secure_domain) input_secure_domain(false, 0);
     console_changed();
+    activate_tick = g_ticks; timing_restore = true; timing_neutral = timing_trusted = false; /* sec-user-06 */
     irq_restore(f);
     return 0;
 }
@@ -139,6 +171,11 @@ int grants_console_neutral(void)
     f = irq_save();
     presenting--;
     if (!err && console_trusted) { neutral_pending = false; neutral_frames++; console_changed(); }
+    if (!err && console_trusted && timing_neutral) { /* sec-user-06 */
+        uint32_t ms = timing_ms(conceal_tick);
+        timing.last_neutral_ms = ms; if (ms > timing.max_neutral_ms) timing.max_neutral_ms = ms;
+        timing_neutral = false;
+    }
     irq_restore(f);
     return err;
 }
@@ -485,6 +522,7 @@ int grant_present(struct process *p, int32_t display, int32_t fd, const struct c
         return err;
     }
     presenting++; op.presenting = true;
+    bool trusted_grant = op.grant->grant_trusted; /* sec-user-06: timing_frame after cleanup */
     if (op.grant->grant_trusted) trusted_presenting++; /* sec-k07 */
     for (unsigned y = 0; y < clipped.height && !err; y++) {
         for (unsigned x = 0; x < clipped.width; x += PAGE_SIZE / 4) {
@@ -519,6 +557,7 @@ int grant_present(struct process *p, int32_t display, int32_t fd, const struct c
         if (full_frame && entropy_desktop_presented) entropy_desktop_presented(); /* f6-21 */
         if (full_frame && dosvm_image_desktop_presented) dosvm_image_desktop_presented(); /* fx-4b */
         if (full_frame && bootstat_presented) bootstat_presented();
+        timing_frame(trusted_grant); /* sec-user-06 */
     }
     return err;
 }

@@ -1120,8 +1120,12 @@ NORMAL_BOOT_MILESTONES = (
     ('loader_banner', re.compile(rb'L:CPU signature=')),
     ('loader_source', re.compile(rb'L:SELECT_SOURCE=menu$')),
     ('kernel_banner', re.compile(rb'Ciuki VMM F0 build ([!-~]+) - CiukiOS$')),
-    ('desktop_spawn', re.compile(rb'\[supervisor\] bootstrap: spawning /Programs/desktop(?: |$)')),
-    ('desktop_pid', re.compile(rb'\[supervisor\] desktop pid=([0-9]+) pgid=([0-9]+)(?: |$)')),
+    # sec-user-06: on images with the trusted LOGON service PID 1 starts LOGON
+    # (supervisor.c "trusted logon pid=") and LOGON's SESSION_LAUNCH publishes
+    # the desktop (security.c "[security] session S desktop pid="); the
+    # autologon of the ready image's CiukiUser reaches it without input.
+    ('desktop_spawn', re.compile(rb'\[supervisor\] bootstrap: (?:spawning /Programs/desktop|trusted logon pid=[0-9]+)(?: |$)')),
+    ('desktop_pid', re.compile(rb'(?:\[supervisor\]|\[security\] session [0-9]+) desktop pid=([0-9]+) pgid=([0-9]+)(?: |$)')),
 )
 NORMAL_BOOT_NEGATIVE = (
     ('panic', re.compile(rb'Ciuki VMM (?:panic|double fault)')),

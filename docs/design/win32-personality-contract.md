@@ -5,6 +5,11 @@ Status: draft for the lead's review, the Codex cross-review and the owner's
 decisions listed under "Open questions for the owner". No code, build, QEMU
 or hardware result is claimed by this document.
 
+> **Superseded in part by user security** (sec-user-06 reconciliation, 2026-10-28). Tokens, SIDs, user names, CSIDL folders,
+> HKCU/HKLM, one window server per session and the SYSTEM registry broker follow
+> [Win32, native and DOS interfaces](user-security-contract.md#8-win32-native-and-dos-interfaces) and K-Q5
+> ([decisions](user-security-kernel.md#decisions-and-precedence)). Host evidence H07/H11; runtime case su-04-roles.
+
 ## Scope and authority
 
 **[F5]** marks a requirement that becomes mandatory in step F5 and stays

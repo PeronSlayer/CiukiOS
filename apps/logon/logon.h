@@ -113,7 +113,13 @@ struct lgn {
      * provisional catalogue, confirmed by ENROLL_SOURCE) and its probe. */
     int override, enrolling, probe_pending;
     uint64_t next_probe;
+    /* sec-user-06: a self-test boot (fx-selftest, boot flag bit 23): the
+     * first security menu returns by itself (self-test security.lock_latency). */
+    int selftest, selftest_returned;
+    unsigned selftest_tries;
+    uint64_t selftest_return_at;
 };
+#define LGN_BOOT_SELF_TEST 0x00800000u   /* CBI_F_SELF_TEST in this start's CIUKI_BOOT_* flags */
 
 int lgn_init(struct lgn *, const struct lgn_sys *);
 /* One pass: accept, receive, advance timers, then wait at most idle_ms. */

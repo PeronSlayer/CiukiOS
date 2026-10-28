@@ -74,8 +74,8 @@ CASE_KEYS = {'id', 'kind', 'probe', 'profile', 'timeout', 'expected', 'item', 'i
 STEP_KEYS = {'name', 'check', 'wait', 'fail', 'since', 'timeout', 'wait_event', 'settle', 'actions',
              'screen_settle', 'screen', 'required', 'on_fail', 'known_failure', 'requires', 'unless', 'fallback',
              'arm', 'note', 'wizard'}
-TEMPLATE_KEYS = {'template', 'prefix', 'check', 'note', 'settle', 'timeout'}
-ACTION_KEYS = {'keys', 'text', 'pause', 'media', 'screendump', 'sleep', 'hold'}
+TEMPLATE_KEYS = {'template', 'prefix', 'check', 'note', 'settle', 'timeout', 'user', 'password'}
+ACTION_KEYS = {'keys', 'text', 'pause', 'media', 'screendump', 'sleep', 'hold', 'power_cut'}
 ASSERTION_KEYS = {'name', 'check', 'pattern', 'from', 'to', 'min', 'max', 'required', 'known_failure', 'note'}
 FIGURE_KEYS = {'name', 'check', 'pattern', 'from', 'to', 'reducer', 'page'}
 WIZARD_KEYS = {'keys', 'then', 'idle', 'max', 'focus', 'press_when', 'close_when', 'close_keys', 'max_closes',
@@ -111,6 +111,13 @@ DESKTOP = r'\[user \d+\] \[desktop\]'
 WINDOW_RECORD = re.compile(r'^\[user \d+\] \[desktop\] window pid=(?P<pid>\d+) window=(?P<window>\d+) owner=(?P<owner>\d+) '
                            r'modal=(?P<modal>[01]) state=(?P<state>[a-z]+) title=(?P<title>\S+)$')
 FOCUS_RECORD = re.compile(r'^\[user \d+\] \[desktop\] focus pid=(?P<pid>\d+) window=(?P<window>\d+) ')
+# sec-user-06: the trusted LOGON service and its UI (apps/logon/coordinator.c
+# lgn_note, apps/logon/ui.c view_record; debug_write prefixes "[user N] ").
+LOGON = r'\[user \d+\] \[logon\]'
+LOGON_UI = r'\[user \d+\] \[logon-ui\]'
+# Account names (the LOGON_UI typed-name grammar, lgn_name_syntax) and secrets
+# (8..63 printable bytes, or empty for the ready image's blank CiukiUser).
+ACCOUNT_NAME = re.compile(r'[A-Za-z0-9_-]{1,31}')
 
 # ---- keys ----------------------------------------------------------------
 # QAPI QKeyCode names (qapi/ui.json). Friendly aliases first.
@@ -165,7 +172,53 @@ def key_event(qcode, down):
 
 # ---- templates ---------------------------------------------------------------
 
-def boot_template(prefix, check, safe=False, settle=8, timeout=900):
+def display_step(prefix, check, safe, settle):
+    """The desktop's display record (apps/desktop/desktop.c display_start_record)."""
+    p = prefix
+    return {'name': p + '-display', 'check': check, 'timeout': 300, 'settle': settle,
+            'wait': r'^%s display start mode=(?P<%s_mode>\d+) (?P<%s_width>\d+)x(?P<%s_height>\d+)x(?P<%s_bpp>\d+) '
+                    r'saved=(?P<%s_saved>\d+) safe=%d$' % (DESKTOP, p, p, p, p, p, 1 if safe else 0)}
+
+
+def logon_steps(prefix, check, user, password, safe=False, settle=8, timeout=900):
+    """sec-user-06: a typed-name logon at the trusted Welcome screen
+    (apps/logon/ui.c): the painted list view (accounts listed), Up twice
+    (the item list wraps from the first tile through Turn Off Computer to
+    "Type a user name"), Enter, the typed view, the name, Enter (to the
+    password field), the password, Enter. Then LOGON's records: the
+    authenticated uid, the session, the kernel's desktop record with its
+    credential (security.c launch_record) and the running session, and the
+    desktop's display record. A refusal or a failed session start ends the
+    step. Captures: <prefix>_uid, _session, _desktop, _gid, _groups and the
+    display captures. The password never reaches result.json (typed text is
+    counted only) or a record."""
+    p = prefix
+    typed = [{'text': user}, {'keys': 'ret', 'pause': 0.5}]
+    if password:
+        typed.append({'text': password})
+    typed.append({'keys': 'ret'})
+    return [
+        {'name': p + '-welcome', 'check': check, 'timeout': timeout, 'settle': 1,
+         'wait': r'^%s view mode=welcome view=list items=\d+ accounts=[1-9]\d* status=\w+$' % LOGON_UI,
+         'actions': [{'keys': ['up', 'up', 'ret'], 'pause': 0.5}],
+         'note': 'Welcome: Up twice reaches "Type a user name", Enter'},
+        {'name': p + '-typed', 'check': check, 'timeout': 60, 'settle': 0.5,
+         'wait': r'^%s view mode=welcome view=typed ' % LOGON_UI, 'actions': typed,
+         'note': 'typed name %s, Enter, the password, Enter' % user},
+        {'name': p + '-auth', 'check': check, 'timeout': 120,
+         'wait': r'^%s authenticated uid=(?P<%s_uid>\d+); starting session$' % (LOGON, p),
+         'fail': [r'^%s authentication refused ' % LOGON, r'^%s session start failed: ' % LOGON]},
+        {'name': p + '-desktop', 'check': check, 'timeout': 300,
+         'wait': [r'^%s session (?P<%s_session>\d+) created uid=<<%s_uid>>$' % (LOGON, p, p),
+                  r'^\[security\] session <<%s_session>> desktop pid=(?P<%s_desktop>\d+) pgid=\d+ uid=<<%s_uid>> '
+                  r'gid=(?P<%s_gid>\d+) groups=(?P<%s_groups>[0-9,]+)$' % (p, p, p, p, p),
+                  r'^%s session <<%s_session>> running uid=<<%s_uid>> start_ms=\d+$' % (LOGON, p, p)],
+         'fail': [r'^%s session start failed: ' % LOGON]},
+        display_step(p, check, safe, settle),
+    ]
+
+
+def boot_template(prefix, check, safe=False, settle=8, timeout=900, logon=None):
     """A boot as the user starts it from the loader menu (src/boot/ciukldr/menu.inc).
 
     Normal: `n` at SELECT_READY selects Normal at once (the menu's 3 s wait
@@ -174,26 +227,42 @@ def boot_template(prefix, check, safe=False, settle=8, timeout=900):
     Startup menu item 3 (startup.inc: CBI_F_SAFE_MODE|CBI_F_SAFE_STORAGE,
     record L:STARTUP=3). Then the kernel banner, the desktop process and the
     desktop's display record (apps/desktop/desktop.c display_start_record).
-    Captures: <prefix>_build, _desktop, _mode, _width, _height, _bpp, _saved."""
+    sec-user-06: the desktop process is PID 1's ("[supervisor] desktop pid=")
+    or, with the trusted LOGON service, the one LOGON's SESSION_LAUNCH
+    published ("[security] session S desktop pid="), reached without input by
+    the ready image's automatic logon. Safe mode never logs on automatically
+    (apps/logon/coordinator.c), so boot-safe logs on as the blank CiukiUser;
+    logon=(user, password) logs on at Welcome instead of waiting for the
+    automatic logon (boot-logon).
+    Captures: <prefix>_build, _desktop, _mode, _width, _height, _bpp, _saved
+    (and with a logon _uid, _session, _gid, _groups)."""
     p = prefix
     kernel = ([r'^L:STARTUP=3$'] if safe else []) + [
         r'^L:SELECT_SOURCE=menu$', r'^Ciuki VMM F0 build (?P<%s_build>[!-~]+) - CiukiOS$' % p]
-    return [
+    steps = [
         {'name': p + '-loader', 'check': check, 'wait': r'^SELECT_READY$', 'timeout': timeout,
          'actions': [{'keys': 'f5' if safe else 'n'}],
          'note': 'loader menu: %s' % ('F5, Safe mode' if safe else 'N, Normal')},
         {'name': p + '-kernel', 'check': check, 'wait': kernel, 'timeout': 600,
          'fail': [r'^L:SAFE=1$', r'^L:STARTUP=[1245678]$'] if safe else [r'^L:SAFE=1$', r'^L:STARTUP=']},
+    ]
+    if safe and logon is None:
+        logon = ('CiukiUser', '')
+    if logon is not None:
+        return steps + logon_steps(p, check, logon[0], logon[1], safe, settle, timeout)
+    return steps + [
         {'name': p + '-desktop', 'check': check, 'timeout': timeout,
-         'wait': r'^\[supervisor\] desktop pid=(?P<%s_desktop>\d+) pgid=\d+' % p},
-        {'name': p + '-display', 'check': check, 'timeout': 300, 'settle': settle,
-         'wait': r'^%s display start mode=(?P<%s_mode>\d+) (?P<%s_width>\d+)x(?P<%s_height>\d+)x(?P<%s_bpp>\d+) '
-                 r'saved=(?P<%s_saved>\d+) safe=%d$' % (DESKTOP, p, p, p, p, p, 1 if safe else 0)},
+         'wait': r'^(?:\[supervisor\]|\[security\] session (?P<%s_session>\d+)) desktop pid=(?P<%s_desktop>\d+) pgid=\d+' % (p, p)},
+        display_step(p, check, safe, settle),
     ]
 
 
-TEMPLATES = {'boot': lambda p, c, s, t: boot_template(p, c, False, s, t),
-             'boot-safe': lambda p, c, s, t: boot_template(p, c, True, s, t)}
+TEMPLATES = {'boot': lambda p, c, s, t, a: boot_template(p, c, False, s, t),
+             'boot-safe': lambda p, c, s, t, a: boot_template(p, c, True, s, t),
+             'boot-logon': lambda p, c, s, t, a: boot_template(p, c, False, s, t, logon=a),
+             'boot-safe-logon': lambda p, c, s, t, a: boot_template(p, c, True, s, t, logon=a),
+             'logon': lambda p, c, s, t, a: logon_steps(p, c, a[0], a[1], False, s, t)}
+LOGON_TEMPLATES = ('boot-logon', 'boot-safe-logon', 'logon')
 
 
 def expand_steps(steps):
@@ -209,7 +278,22 @@ def expand_steps(steps):
             settle, timeout = step.get('settle', 8), step.get('timeout', 900)
             refuse(type(settle) in (int, float) and 0 <= settle <= 120 and type(timeout) is int and 60 <= timeout <= 3600,
                    'step %d: template settle 0..120, timeout 60..3600' % index)
-            out.extend(TEMPLATES[step['template']](prefix, step.get('check', 'main'), settle, timeout))
+            account = None
+            if step['template'] in LOGON_TEMPLATES:
+                user, password = step.get('user'), step.get('password', '')
+                refuse(isinstance(user, str) and ACCOUNT_NAME.fullmatch(user), 'step %d: template user [A-Za-z0-9_-]{1,31}' % index)
+                refuse(isinstance(password, str) and (not password or 8 <= len(password) <= 63),
+                       'step %d: template password empty or 8..63 characters' % index)
+                for text in (user, password):
+                    if text:
+                        try:
+                            text_chords(text)
+                        except ValueError as error:
+                            raise res.Refusal('acceptance case: step %d: %s' % (index, error)) from error
+                account = (user, password)
+            else:
+                refuse('user' not in step and 'password' not in step, 'step %d: user/password only with %s' % (index, ', '.join(LOGON_TEMPLATES)))
+            out.extend(TEMPLATES[step['template']](prefix, step.get('check', 'main'), settle, timeout, account))
         else:
             out.append(step)
     return out
@@ -245,8 +329,12 @@ def media_var(name):
 
 def validate_action(action, where):
     refuse(isinstance(action, dict) and action and not set(action) - ACTION_KEYS, where + ': action keys ' + ', '.join(sorted(ACTION_KEYS)))
-    kinds = [k for k in ('keys', 'text', 'media', 'screendump', 'sleep') if k in action]
-    refuse(len(kinds) == 1, where + ': one of keys, text, media, screendump or sleep per action')
+    kinds = [k for k in ('keys', 'text', 'media', 'screendump', 'sleep', 'power_cut') if k in action]
+    refuse(len(kinds) == 1, where + ': one of keys, text, media, screendump, sleep or power_cut per action')
+    # sec-user-06 (SU-13): a host reset through QMP system_reset, the runner's
+    # power cut: the guest loses what it had not written, the overlay keeps
+    # what reached it (https://www.qemu.org/docs/master/interop/qemu-qmp-ref.html).
+    refuse(action.get('power_cut', True) is True, where + ': power_cut is true')
     if 'keys' in action:
         keys = action['keys'] if isinstance(action['keys'], list) else [action['keys']]
         refuse(keys and len(keys) <= 64, where + ': 1..64 key chords')
@@ -385,6 +473,8 @@ def validate_case(case, root=ROOT):
         refuse(not (step.get('wait') and step.get('wait_event')), where + ': wait or wait_event')
         refuse(step.get('arm') in (None, 'reset', 'shutdown'), where + ': arm reset|shutdown')
         reset_armed |= step.get('arm') == 'reset'
+        # sec-user-06: a power cut (QMP system_reset) arms its own reset.
+        reset_armed |= any('power_cut' in a for a in [*step.get('actions', []), *step.get('fallback', {}).get('actions', [])])
         shutdown_armed |= step.get('arm') == 'shutdown'
         refuse(step.get('wait_event') != 'RESET' or reset_armed, where + ': wait_event RESET needs an earlier arm reset')
         refuse(step.get('wait_event') != 'SHUTDOWN' or shutdown_armed, where + ': wait_event SHUTDOWN needs an earlier arm shutdown')
@@ -432,6 +522,8 @@ def validate_case(case, root=ROOT):
             for match in PLACEHOLDER.finditer(pattern):
                 refuse(match[1] in captured | own, where + ': <<%s>> is not captured by an earlier wait' % match[1])
         captured |= own
+    cuts = sum(1 for s in steps for a in [*s.get('actions', []), *s.get('fallback', {}).get('actions', [])] if 'power_cut' in a)
+    refuse(cuts <= case.get('resets', 0), 'each power_cut needs one of the case\'s resets')
     for media_name in (a['media'].get('insert') for s in steps for a in [*s.get('actions', []), *s.get('fallback', {}).get('actions', [])] if 'media' in a):
         refuse(media_name is None or media_name in media, 'media insert names a declared image: ' + str(media_name))
     for key, allowed in (('assertions', ASSERTION_KEYS), ('figures', FIGURE_KEYS)):
@@ -585,7 +677,7 @@ class Session:
                       for s in self.steps]
         self.index = 0; self.phase = 'start'; self.cursor = 0; self.vars = {}; self.ctx = {}
         self.media = {}; self.events_seen = 0; self.resets = 0; self.reset_armed = False; self.reset_base = None
-        self.shutdown_armed = False; self.shutdown = False
+        self.shutdown_armed = False; self.shutdown = False; self.power_cut = False; self.cut_stamp = None
         self.done = not self.steps; self.failed = None; self.observations = []; self.launched = None
         self.screens = []
 
@@ -644,9 +736,21 @@ class Session:
             self.events_seen += 1
             name, data = event.get('event'), event.get('data', {})
             reason = str(data.get('reason'))
+            stamp = event.get('timestamp', {})
+            stamp = stamp.get('seconds', 0) + stamp.get('microseconds', 0) / 1e6
+            if name == 'RESET' and reason == 'guest-reset' and self.cut_stamp is not None and 0 <= stamp - self.cut_stamp <= 3:
+                # SeaBIOS's own hard reboot right after a host system_reset
+                # (run.py unexpected_resets): part of the power cut.
+                self.cut_stamp = None
+                self.observations.append({'event': 'RESET', 'reason': reason, 'line': len(self.parser.lines), 'after_power_cut': True})
+                continue
             if name == 'RESET':
-                if not reason.startswith('guest'):
+                host_cut = self.power_cut and reason.startswith('host')
+                if not reason.startswith('guest') and not host_cut:
                     raise StepFailure('unexpected reset (%s)' % reason)
+                self.power_cut = False
+                if host_cut:
+                    self.cut_stamp = stamp
                 if not self.reset_armed or self.resets >= self.case.get('resets', 0):
                     raise StepFailure('unexpected guest reset (%s)' % reason)
                 self.resets += 1; self.reset_armed = False
@@ -859,6 +963,8 @@ class Session:
                 out.append({'screendump': action['screendump'], 'pause': pause})
             elif 'sleep' in action:
                 out.append({'sleep': action['sleep']})
+            elif 'power_cut' in action:
+                out.append({'power_cut': True, 'pause': pause})
         return out
 
     def _press(self, keys, qmp):
@@ -896,6 +1002,12 @@ class Session:
         if 'sleep' in item:
             log.append({'t': self._rel(now), 'sleep': item['sleep']})
             return item['sleep']
+        if 'power_cut' in item:
+            # The cut arms its own reset (counted against the case's resets).
+            self.power_cut = True; self.reset_armed = True; self.reset_base = self.resets
+            qmp.command('system_reset', {})
+            log.append({'t': self._rel(now), 'qmp': 'system_reset'})
+            return item['pause']
         raise AssertionError(item)
 
     def _screendump(self, qmp, name):

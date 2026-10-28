@@ -26,6 +26,8 @@
 #include <ciuki/supervisor.h>
 #include <ciuki/com.h>
 #include <ciuki/selftest.h>
+#include <ciuki/security.h>
+#include <ciuki/desktop.h>
 
 /* Optional subsystems: an image or configuration without them reads as an
  * absent device, never as a link error. */
@@ -46,6 +48,13 @@
 #pragma weak ata_inventory_get
 #pragma weak com_snapshot
 void net_settings_get(unsigned, struct ciuki_net_config *) __attribute__((weak));
+/* sec-user-06: the security figures (a kernel without LOGON or the trusted
+ * console reads as absent). */
+#pragma weak security_roles_active
+extern int input_selftest_attention(void) __attribute__((weak));   /* drivers/i8042.c, ciuki/input.h */
+#pragma weak grants_console_timing
+#pragma weak selftest_request_registry_backup
+#pragma weak selftest_figure
 int net_stack_dhcp_error(unsigned) __attribute__((weak));
 
 static struct serial_stats serial_start;
@@ -826,6 +835,117 @@ CHECK(check_ata)
     else pass(r);
 }
 
+/* ---- security (sec-user-06) --------------------------------------------- */
+/* The account service's verifier derivation (apps/accounts/crypto.c
+ * acct_derive), the same work on the same SHA-256 (lib/sha256.c): PBKDF2
+ * (RFC 8018 5.2) with HMAC-SHA-256 recomputed per iteration, 10,000
+ * iterations (ACCT_ITERATIONS), one 32-byte block, a 16-byte salt. The host
+ * suite proves the output equal to acct_derive and to PBKDF2-HMAC-SHA-256.
+ * Contract 3.2: at most 1 s per interactive verification on the Pentium III. */
+#define KDF_ITERATIONS 10000u
+#define KDF_RUNS 3u
+#define KDF_TARGET_MS 1000u
+CHECK(check_kdf)
+{
+    UNUSED;
+    static const uint8_t salt[16] = { 0x43, 0x69, 0x75, 0x6b, 0x69, 0x4f, 0x53, 0x2d, 0x73, 0x65, 0x6c, 0x66, 0x74, 0x65, 0x73, 0x74 };
+    uint32_t ms[KDF_RUNS]; uint8_t out[32]; unsigned runs = 0;
+    /* Up to three runs, each only while a run as long as the last fits the bound. */
+    while (runs < KDF_RUNS && (!runs || now() + (uint64_t)ms[runs - 1] * 5 / 4 + 200 < until)) {
+        uint64_t t0 = now();
+        selftest_kdf_derive("selftest-password", salt, KDF_ITERATIONS, out);
+        ms[runs++] = (uint32_t)(now() - t0);
+    }
+    for (unsigned i = 1; i < runs; i++)            /* at most three values: insertion sort */
+        for (unsigned j = i; j && ms[j - 1] > ms[j]; j--) { uint32_t s = ms[j]; ms[j] = ms[j - 1]; ms[j - 1] = s; }
+    selftest_figures(r, "algorithm=pbkdf2_hmac_sha256 iterations=%u runs=%u ms_min=%u ms_median=%u ms_max=%u target_ms=%u "
+                        "digest=%02x%02x%02x%02x",
+                     KDF_ITERATIONS, runs, ms[0], ms[runs / 2], ms[runs - 1], KDF_TARGET_MS,
+                     out[0], out[1], out[2], out[3]);
+    if (ms[runs / 2] <= KDF_TARGET_MS) pass(r); else fail(r, "over_target");
+}
+/* S2-6: the desktop's synchronous Registry Checker backup through the SYSTEM
+ * registry broker (an administrator's BACKUP, the work of the daily backup)
+ * against the 5 s deadline of the desktop's request (sdk/libreg/transport.c).
+ * The one file outside SELFTEST.LOG this boot writes: a backup in
+ * C:\SYSTEM\SYSBCKUP, rotated like every daily backup (docs/design/self-test.md). */
+#define BACKUP_DEADLINE_MS 5000u
+static char backup_tokens[SELFTEST_FIGURES];
+static bool backup_answered(void)
+{ return selftest_figure && selftest_figure("registry_backup", backup_tokens, sizeof(backup_tokens)); }
+static long token_value(const char *tokens, const char *key, long missing)
+{
+    size_t n = strlen(key);
+    for (const char *p = tokens; p && *p;) {
+        if (!strncmp(p, key, n) && p[n] == '=') {
+            const char *v = p + n + 1; long sign = 1, value = 0; int digits = 0;
+            if (*v == '-') { sign = -1; v++; }
+            for (; *v >= '0' && *v <= '9'; v++, digits++) value = value * 10 + (*v - '0');
+            return digits ? sign * value : missing;
+        }
+        while (*p && *p != ' ') p++;
+        if (*p) p++;
+    }
+    return missing;
+}
+CHECK(check_registry_backup)
+{
+    UNUSED;
+    if (!desktop_up()) { skip(r, "no_desktop"); return; }
+    if (!selftest_request_registry_backup || !selftest_figure) { skip(r, "not_built"); return; }
+    backup_tokens[0] = 0;
+    selftest_request_registry_backup();
+    uint64_t t0 = now();
+    bool answered = wait_for(backup_answered, until, 200);
+    long ms = token_value(backup_tokens, "backup_ms", -1), result = token_value(backup_tokens, "result", 0);
+    selftest_figures(r, "answered=%u wait_ms=%llu backup_ms=%ld result=%ld bytes=%ld deadline_ms=%u",
+                     answered, (unsigned long long)(now() - t0), ms, result,
+                     token_value(backup_tokens, "bytes", -1), BACKUP_DEADLINE_MS);
+    if (!answered) skip(r, "no_answer");
+    else if (result == -EPERM || result == -EACCES) skip(r, "not_administrator");
+    else if (result == -ETIMEDOUT || (ms >= 0 && ms >= (long)BACKUP_DEADLINE_MS)) fail(r, "over_deadline");
+    else if (result) fail(r, "backup_failed");
+    else pass(r);
+}
+/* Contract 4.3: the trusted gate's latency on this machine. The check enters
+ * the kernel's own secure attention (what a physical Ctrl+Alt+Del does);
+ * LOGON shows its security menu and, during a T boot only, returns from it
+ * by itself (apps/logon/coordinator.c). Figures: conceal -> neutral black
+ * frame -> first trusted frame, and activation -> first session frame
+ * (grants_console_timing). Stand by and resume lock through the same gate
+ * (reason resume); a real suspend is not part of an unattended run. */
+static struct grants_console_timing gate_before;
+static bool gate_round_trip(void)
+{
+    struct grants_console_timing t; grants_console_timing(&t);
+    return t.concealments > gate_before.concealments && t.restorations > gate_before.restorations;
+}
+CHECK(check_lock_latency)
+{
+    UNUSED;
+    if (!desktop_up()) { skip(r, "no_desktop"); return; }
+    if (!security_roles_active || !input_selftest_attention || !grants_console_timing || !security_roles_active()) {
+        skip(r, "no_trusted_logon"); return;
+    }
+    grants_console_timing(&gate_before);
+    uint64_t t0 = now();
+    /* The input driver enters the transition of a physical Ctrl+Alt+Del: the
+     * trusted input domain with its ATTENTION event (LOGON_UI tells LOGON),
+     * then the kernel's attention entry. */
+    int e = input_selftest_attention();
+    if (e) { selftest_figures(r, "path=attention error=%d", e); skip(r, "no_trusted_logon"); return; }
+    bool done = wait_for(gate_round_trip, until, 200);
+    struct grants_console_timing t; grants_console_timing(&t);
+    bool concealed = t.concealments > gate_before.concealments;
+    selftest_figures(r, "path=attention concealed=%u restored=%u wait_ms=%llu neutral_ms=%u trusted_ms=%u restore_ms=%u "
+                        "max_neutral_ms=%u max_trusted_ms=%u max_restore_ms=%u standby=not_run",
+                     concealed, t.restorations > gate_before.restorations, (unsigned long long)(now() - t0),
+                     concealed ? t.last_neutral_ms : 0, concealed ? t.last_trusted_ms : 0, done ? t.last_restore_ms : 0,
+                     t.max_neutral_ms, t.max_trusted_ms, t.max_restore_ms);
+    if (done) pass(r);
+    else fail(r, concealed ? "not_restored" : "not_concealed");
+}
+
 /* Phase 1: before the desktop (display mode sets need the display without a
  * grant). Phase 2: with the desktop; ordered so that the 3D qualification
  * finishes before any mode change, and the APM fault record (biosvm keeps
@@ -836,6 +956,7 @@ const struct selftest_check selftest_phase1[] = {
     { "display.info", 2000, check_display_info },
     { "display.mode_640x480x8", 12000, check_mode_8 },
     { "display.mode_640x480x32", 12000, check_mode_32 },
+    { "security.kdf", 8000, check_kdf },
 };
 const unsigned selftest_phase1_count = ARRAY_SIZE(selftest_phase1);
 const struct selftest_check selftest_phase2[] = {
@@ -853,6 +974,8 @@ const struct selftest_check selftest_phase2[] = {
     { "dos.fullscreen_13h", 25000, selftest_dos_mode13 },
     { "dos.fullscreen_101h", 25000, selftest_dos_vbe101 },
     { "dos.return", 30000, selftest_dos_return },
+    { "security.registry_backup", 12000, check_registry_backup },
+    { "security.lock_latency", 10000, check_lock_latency },
     { "optical.drive", 25000, check_optical_drive },
     { "optical.disc", 40000, check_optical_disc },
     { "audio.device", 2000, check_audio_device },

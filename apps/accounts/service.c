@@ -422,6 +422,21 @@ static int execute(struct acct_service *s, struct acct_job *job, struct acct_res
     e=mutate(s,job);
     return acct_results_finish(s,q,e);
 }
+/* sec-user-06: the management audit record (adapter.h audit). The new
+ * account of a committed CREATE is the database's last record. */
+static void audit_management(const struct acct_service *s, int status)
+{
+    const struct acct_request *q = &s->active.request;
+    unsigned op = q->operation;
+    if (!s->store.kernel.audit || (op != ACCT_CREATE && op != ACCT_DELETE && op != ACCT_RENAME && op != ACCT_ENABLE &&
+                                   op != ACCT_ROLE && op != ACCT_PASSWORD && op != ACCT_PICTURE && op != ACCT_UPDATE)) return;
+    uint32_t target = q->uid, groups = q->groups;
+    if (op == ACCT_CREATE && !status && s->db.count) target = s->db.records[s->db.count - 1].uid;
+    for (uint32_t i = 0; op != ACCT_CREATE && op != ACCT_ROLE && i < s->db.count; i++)
+        if (s->db.records[i].uid == target) groups = s->db.records[i].groups;
+    const char *type = (groups & 1u) ? "admin" : groups == ACCT_GUEST ? "guest" : groups ? "standard" : "-";
+    s->store.kernel.audit(s->store.kernel.ctx, op, s->active.subject.uid, target, type, status);
+}
 int acct_work(struct acct_service *s, struct acct_response *out)
 {
     if (!out) return -EINVAL;
@@ -461,6 +476,7 @@ int acct_work(struct acct_service *s, struct acct_response *out)
     }
     struct acct_subject subject = s->active.subject;
     uint32_t wire_operation=s->active.request.wire_operation;
+    audit_management(s, out->error);   /* sec-user-06 */
     acct_wipe(&s->active, sizeof(s->active));
     s->active = s->pending;
     acct_wipe(&s->pending, sizeof(s->pending));

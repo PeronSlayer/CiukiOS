@@ -4142,6 +4142,17 @@
     "status": "retained"
   },
   {
+    "icon": "emblem-readonly",
+    "object": "program:sectest",
+    "previous": "emblem-readonly",
+    "previous_derived_sizes": [
+      48
+    ],
+    "previous_missing_runtime_sizes": [],
+    "source": "apps/libdeskui/icon_map.c",
+    "status": "retained"
+  },
+  {
     "icon": "haiku-serial",
     "object": "program:serial",
     "previous": "network-wired",

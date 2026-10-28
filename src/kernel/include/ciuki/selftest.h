@@ -100,6 +100,19 @@ void selftest_detail(const char *id, const char *fmt, ...) __attribute__((format
  * "Self-test complete: ..." or "Self-test stalled ..." is shown as a dialog. */
 void selftest_request_dosbox(void);
 void selftest_device_running(void); /* back to "running" (no pending request) */
+/* sec-user-06: a figure only a session program can measure. "registry-backup"
+ * asks the desktop for one synchronous Registry Checker backup through the
+ * SYSTEM registry broker (S2-6: against the desktop's 5 s request timeout);
+ * the desktop answers "[selftest] registry_backup key=value..." on its debug
+ * log, which sys_debug_write hands to selftest_submit only during a T boot
+ * and only from the desktop process. selftest_figure copies the tokens of
+ * the latest answer named name. */
+void selftest_request_registry_backup(void);
+void selftest_submit(const char *line);
+bool selftest_figure(const char *name, char *tokens, size_t size);
+/* core/selftest_kdf.c: PBKDF2-HMAC-SHA-256 of apps/accounts/crypto.c
+ * acct_derive (password at most 63 bytes, 16-byte salt, one 32-byte block). */
+void selftest_kdf_derive(const char *password, const uint8_t salt[16], uint32_t iterations, uint8_t out[32]);
 bool selftest_device_state(char *reason, size_t size, uint32_t *generation);
 /* DOS full-screen checks (vm/dosvm_selftest.c), phase 2. */
 void selftest_dos_window(void *, const struct selftest_check *, uint64_t, struct selftest_result *);

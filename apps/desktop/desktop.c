@@ -29,6 +29,9 @@
 #include "../libdeskui/completion.h"
 #include <poll.h>
 #include <ciuki/raw.h>
+#ifdef __i386__
+#include "../sysrecovery/recovery.h"   /* sec-user-06: rc_backup for the self-test */
+#endif
 #include <ciuki/runtime.h>
 #include <ciuki/channel.h>
 #include "clipboard.h"
@@ -1971,7 +1974,25 @@ static void startup_launch(struct desktop *d,const char *name)
  * inventory row 0x7F000 asks for one DOS box ("launch-dosbox", once per
  * generation) and finally carries "Self-test complete: N passed, M failed,
  * K skipped" (or "Self-test stalled in <check>"), shown as a dialog. */
-static struct { int boot; uint32_t launched, shown; uint64_t next_ns; } selftest_view;
+static struct { int boot; uint32_t launched, shown, backup; uint64_t next_ns; } selftest_view;
+#ifdef __i386__
+/* sec-user-06 (S2-6): "registry-backup" asks for one synchronous Registry
+ * Checker backup through the SYSTEM registry broker, the request whose 5 s
+ * deadline the desktop's start-up backup shares. The answer is a debug-log
+ * line the kernel hands to the running self-test check (selftest.h). An
+ * account that is not an administrator gets EPERM from the broker. */
+static void selftest_registry_backup(void)
+{
+    struct rc_backup made; memset(&made,0,sizeof(made));
+    uint64_t t0=monotonic();
+    int e=rc_backup("","Self-test",(int64_t)time(NULL),false,&made);
+    uint64_t ms=(monotonic()-t0)/1000000ull;
+    char line[160];
+    int n=snprintf(line,sizeof(line),"[selftest] registry_backup backup_ms=%llu result=%d bytes=%u files=%u",
+                   (unsigned long long)ms,e,e ? 0u : (unsigned)made.bytes,e ? 0u : (unsigned)made.files);
+    if (n>0 && n<(int)sizeof(line)) (void)ciuki_raw_debug_write((uint32_t)(uintptr_t)line,(uint32_t)n,0,0,0,0);
+}
+#endif
 static void selftest_poll(struct desktop *d)
 {
 #ifdef __i386__
@@ -1985,6 +2006,8 @@ static void selftest_poll(struct desktop *d)
         if (v->id!=0x7F000u || strcmp(v->driver,"selftest")) continue;
         if (!strcmp(v->reason,"launch-dosbox")) {
             if (selftest_view.launched!=v->generation) { selftest_view.launched=v->generation; startup_launch(d,"dosbox"); }
+        } else if (!strcmp(v->reason,"registry-backup")) {   /* sec-user-06 */
+            if (selftest_view.backup!=v->generation) { selftest_view.backup=v->generation; selftest_registry_backup(); }
         } else if (!strncmp(v->reason,"Self-test ",10) && selftest_view.shown!=v->generation) {
             selftest_view.shown=v->generation;
             char text[200];

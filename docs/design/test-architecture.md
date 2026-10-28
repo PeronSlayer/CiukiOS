@@ -337,6 +337,82 @@ INCOMPLETE, one line per trial item, key figures and evidence paths).
   the `_INSnnnn._MP` engine and both exits, then shuts down so the overlay
   holds the engine's file (`disk.menu_links: false`).
 
+## Security runtime cases (amendment, sec-user-06, 2026-10-28)
+
+Directive `docs/directives/sec-user-06.md`; binding cases in
+[user-security-contract.md 10.1](user-security-contract.md#101-exact-lead-qemu-checklist-future-implementation-gate)
+(SU-01..14 and the round-1/round-2 additions). Host evidence H14:
+`tests/host/security/test_runner_contract.py`. No QEMU result is claimed here.
+
+- **LOGON images.** With the trusted LOGON service PID 1 no longer spawns
+  `/Programs/desktop`: it logs `[supervisor] bootstrap: trusted logon pid=<n>`
+  and LOGON's SESSION_LAUNCH publishes each session's programs, one kernel record
+  each (`proc/security.c` `launch_record`):
+  `[security] session <s> desktop|w32srv pid=<n> pgid=<n> uid=<u> gid=<g> groups=<g,...>`.
+  The normal-boot milestones `desktop_spawn` and `desktop_pid` accept both forms
+  (a second session's desktop in one normal boot is a repeated milestone), and so
+  does the acceptance `boot` template. Without these the f0-smoke normal-boot
+  cases and every acc-t23 boot would stop at the desktop milestone on a security
+  image. Safe Mode never logs on automatically (`apps/logon/coordinator.c`), so
+  `boot-safe` logs on at Welcome as the blank CiukiUser.
+- **Templates** (`scripts/test/acceptance.py`): `boot` (automatic logon),
+  `boot-safe`, `boot-logon` and `boot-safe-logon` (a typed-name logon with
+  `user`/`password`), and `logon` (Welcome inside a boot, after a Log Off). A
+  logon waits for LOGON_UI's painted list (`[logon-ui] view mode=welcome
+  view=list ... accounts>=1`), presses Up twice (the item list wraps from the
+  first tile through Turn Off Computer to "Type a user name"), Enter, types the
+  name, Enter, the password, Enter, then waits for `[logon] authenticated uid=`,
+  the session, the kernel desktop record with its credential, `running` and the
+  desktop's display record. Typed text reaches `result.json` as a count only;
+  every case that types a password asserts that none appears on the serial port.
+- **Records the cases assert on** (all also in quiet boots): LOGON
+  `[logon] screen <mode>`, `authentication refused action=<2|3> status=<errno>`,
+  `session <s> locked by the screen saver|stand by|desktop|security menu`,
+  `session <s> unlocked`, `restart|shutdown requested at the logon screen`;
+  LOGON_UI `[logon-ui] view mode= view= items= accounts= status=<class>`
+  (classes only, never a name or typed text); ACCOUNT
+  `[accounts] manage op= caller= target= type= result=` (one per management
+  request, success or failure, as Windows XP's account-management audit:
+  [Audit account management](https://learn.microsoft.com/en-us/previous-versions/windows/it-pro/windows-server-2003/cc737542(v=ws.10)));
+  kernel `[security] console enter session= reason=lock|saver|resume|attention
+  authentication=`, `console leave`, `console concealed neutral_ms= trusted_ms=`,
+  `console restored ms=` (`proc/grants.c`); desktop `[desktop] saver start kind=
+  source=idle|command` and `saver wake protect=1 lock=`.
+- **sectest.** `/Programs/sectest` (`apps/systools/sectest_model.c`, Start >
+  Programs > Developer, like `hello` and `libc_smoke`) runs from Run as the
+  account under test and writes one `[console] sectest ...` record per check:
+  identity (`role`, groups, never SYSTEM), environment (USERPROFILE/TMPDIR/HOME),
+  own and other profiles, `/Programs`, a creator-owned root folder (`GAME`), a
+  folder another account created, the installer store and its presentation
+  folder, the machine registry through the broker, call-99 SETTING, the raw
+  system disk, `/System/Security`, `/System/SysBckup`. Each check uses the
+  production entry point; the expectation table is the policy's
+  (`security_policy.c`, `broker.c`, `syscalls_sysvc.c`, `disklease.c`) and H14
+  compares them. `sectest saver` asks SC_SCREENSAVE as any program of the session
+  may ([WM_SYSCOMMAND](https://learn.microsoft.com/en-us/windows/win32/menurc/wm-syscommand)).
+- **Power cut.** The action `{"power_cut": true}` sends QMP `system_reset` (QEMU
+  ShutdownCause `host-qmp-system-reset`,
+  [qapi/run-state.json](https://gitlab.com/qemu-project/qemu/-/blob/master/qapi/run-state.json)); it arms its own
+  reset, counts against the case's `resets` and accepts the one `guest-reset`
+  SeaBIOS performs within 3 s after it (as `run.py` `unexpected_resets` already
+  records). The guest loses what it had not written; the overlay keeps what
+  reached it.
+- **Suite `sec-users`** (`"acceptance": true`, profile qemu-t23):
+  `scripts/test/acceptance.sh --suite sec-users` (`--list` validates and lists any
+  acceptance suite without QEMU). Cases a runtime hook does not yet allow are
+  `pending` (not run, never counted as a pass) and name the host evidence that
+  covers them: su-02-setup (no CD installation path in the runner), su-10-resume
+  (no qualified virtual standby provider), su-r2-status, su-r2-profile,
+  su-r1-dos, su-r1-restart, su-r1-console.
+- **Why not a fw_cfg test request.** A fw_cfg request sets `CBI_F_TEST_REQUEST`,
+  and `probes_main` then replaces the ordinary boot: no supervisor, LOGON or
+  desktop unless a probe is admitted like `f5:q3-lease-eio`, a verbose console,
+  early entropy readiness, no autoscan, fatal lock-order reports and no Setup mode
+  (`probes/probes.c`, `core/entropy.c`, `fs/mount.c`, `core/sync.c`). The security
+  cases therefore boot from the loader menu exactly as a user does; the runner
+  selects them at run time (suite and `--case`), never a build variant (rule 2's
+  intent). This is a lead decision recorded in the sec-user-06 report.
+
 ## Migration
 
 The pre-cleanup test scripts were archived in

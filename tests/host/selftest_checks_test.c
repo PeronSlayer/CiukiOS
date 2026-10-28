@@ -36,6 +36,8 @@
 #include <ciuki/dosvm.h>
 #include <ciuki/process.h>
 #include <ciuki/selftest.h>
+#include <ciuki/security.h>
+#include <ciuki/desktop.h>
 #include "dosvm_internal.h"
 
 /* <stdlib.h> clashes with the kernel ABI's wait-status names. */
@@ -114,6 +116,35 @@ static void machine_tick(void)
     }
 }
 void task_sleep_ms(uint32_t ms) { g_ticks += ms ? ms : 1; machine_tick(); }
+
+/* ---- sec-user-06: the security figures ---------------------------------
+ * The desktop answers the registry-backup request 1.5 s later (an
+ * administrator's backup of 1180 ms); the secure attention conceals after
+ * 400 ms (neutral 35 ms, trusted frame 410 ms) and LOGON's automatic menu
+ * return restores the session 3.6 s after it (restore 220 ms). The session
+ * activation at logon is restoration 1. */
+static bool backup_requested, attention_sent;
+static uint64_t backup_at, attention_at;
+static struct grants_console_timing gate;
+bool security_roles_active(void) { return t23; }
+int input_selftest_attention(void) { CHECK(t23 && desktop_running); attention_sent = true; attention_at = g_ticks; return 0; }
+void grants_console_timing(struct grants_console_timing *out)
+{
+    if (attention_sent && g_ticks - attention_at >= 400 && !gate.concealments) {
+        gate.concealments = 1; gate.last_neutral_ms = gate.max_neutral_ms = 35; gate.last_trusted_ms = gate.max_trusted_ms = 410;
+    }
+    if (attention_sent && g_ticks - attention_at >= 3600 && gate.restorations == 1) {
+        gate.restorations = 2; gate.last_restore_ms = 220; if (gate.max_restore_ms < 220) gate.max_restore_ms = 220;
+    }
+    *out = gate;
+}
+void selftest_request_registry_backup(void) { CHECK(t23 && desktop_running); backup_requested = true; backup_at = g_ticks; }
+bool selftest_figure(const char *name, char *tokens, size_t size)
+{
+    if (!backup_requested || g_ticks - backup_at < 1500 || strcmp(name, "registry_backup")) return false;
+    snprintf(tokens, size, "backup_ms=1180 result=0 bytes=262144 files=9");
+    return true;
+}
 struct dosvm *dosvm_client_first(uint32_t *owner) { if (!vm_live_flag) return 0; if (owner) *owner = 42; return &fake_vm; }
 void dosvm_client_poll(void) {}
 struct dosvm_key dosvm_key(const struct dosvm *v) { return v->info.key; }
@@ -365,6 +396,8 @@ static void machine(bool profile)
     memset(hosts, 0, sizeof(hosts));
     vm_created = vm_live_flag = dosbox_requested = fs_active = overlay_exists = false;
     fullscreen_entries = fsprog_runs = opens = 0;
+    backup_requested = attention_sent = false;   /* sec-user-06 */
+    memset(&gate, 0, sizeof(gate)); gate.restorations = 1; gate.last_restore_ms = gate.max_restore_ms = 180;
     fake_storage.ready = true; fake_storage.vfs.volumes[2] = fake_c;
     if (!profile) return;
     g_boot.uart_state = 1; g_boot.uart_base = 0x3F8; g_boot.uart_divisor = 1;
@@ -425,7 +458,7 @@ static void run(bool profile, bool unscheduled_3d, const char *folder)
                 fprintf(stderr, "%s overran: %u > %u\n", c->id, r->ms, c->limit_ms);
             CHECK(r->ms <= c->limit_ms);
             const char *expected = "SKIP";
-            if (!strncmp(c->id, "memory.", 7)) expected = "PASS";
+            if (!strncmp(c->id, "memory.", 7) || !strcmp(c->id, "security.kdf")) expected = "PASS";  /* the CPU alone */
             else if (profile && no_3d && !strcmp(c->id, "display.3d_qualification")) expected = "FAIL";
             else if (profile && no_3d && !strcmp(c->id, "display.gl_draw")) expected = "SKIP";
             else if (profile) expected = !strcmp(c->id, "optical.disc") ? "SKIP" : "PASS";
@@ -461,8 +494,13 @@ static void run(bool profile, bool unscheduled_3d, const char *folder)
         CHECK(strstr(log_text, " consumed=1 midi_ms="));
         CHECK(strstr(log_text, " model=TOSHIBA_DVD-ROM_SD-C2502\n"));
         CHECK(fb.width == 1024 && fb.height == 768 && fb.mode_id == 0x117);
+        /* sec-user-06 */
+        CHECK(strstr(log_text, "PASS security.kdf ") && strstr(log_text, " algorithm=pbkdf2_hmac_sha256 iterations=10000 runs=3 "));
+        CHECK(strstr(log_text, "PASS security.registry_backup ") && strstr(log_text, " answered=1 wait_ms=1500 backup_ms=1180 result=0 bytes=262144 deadline_ms=5000"));
+        CHECK(strstr(log_text, "PASS security.lock_latency ") &&
+              strstr(log_text, " path=attention concealed=1 restored=1 wait_ms=3600 neutral_ms=35 trusted_ms=410 restore_ms=220 "));
     } else {
-        CHECK(s.passed == 2 && s.failed == 1 && s.skipped == selftest_phase1_count + selftest_phase2_count - 3);
+        CHECK(s.passed == 3 && s.failed == 1 && s.skipped == selftest_phase1_count + selftest_phase2_count - 4);
         CHECK(strstr(log_text, "FAIL desktop.start ") && strstr(log_text, " reason=no_desktop"));
         CHECK(opens == 0 && !dosbox_requested && !vm_created);
     }

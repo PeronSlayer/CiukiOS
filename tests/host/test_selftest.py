@@ -51,7 +51,8 @@ class SelftestTests(unittest.TestCase):
                                       'src/kernel/core/selftest_model.c', 'src/kernel/lib/fmt.c'])
         cls.checks_out = build_and_run(cls.dir, 'checks', [
             'tests/host/selftest_checks_test.c', 'src/kernel/core/selftest_checks.c',
-            'src/kernel/vm/dosvm_selftest.c', 'src/kernel/core/selftest_model.c', 'src/kernel/lib/fmt.c'],
+            'src/kernel/vm/dosvm_selftest.c', 'src/kernel/core/selftest_model.c', 'src/kernel/lib/fmt.c',
+            'src/kernel/core/selftest_kdf.c', 'src/kernel/lib/sha256.c'],   # sec-user-06: security.kdf
             includes=('src/kernel/vm',))
 
     @classmethod
@@ -69,9 +70,10 @@ class SelftestTests(unittest.TestCase):
         self.assertIn('selftest model: 17 records, 0 failures', self.model_out)
 
     def test_check_table_skips_cleanly_and_passes_the_t23_profile(self):
-        self.assertIn('bare: 2 passed, 1 failed, 28 skipped', self.checks_out)
-        self.assertIn('t23: 30 passed, 0 failed, 1 skipped', self.checks_out)
-        self.assertIn('t23 without 3D: 28 passed, 1 failed, 2 skipped', self.checks_out)
+        # sec-user-06: security.kdf passes on any CPU; registry_backup and lock_latency need the desktop.
+        self.assertIn('bare: 3 passed, 1 failed, 30 skipped', self.checks_out)
+        self.assertIn('t23: 33 passed, 0 failed, 1 skipped', self.checks_out)
+        self.assertIn('t23 without 3D: 31 passed, 1 failed, 2 skipped', self.checks_out)
         self.assertIn('selftest checks: 0 failures', self.checks_out)
 
     # ---- parser ----------------------------------------------------------
@@ -81,20 +83,20 @@ class SelftestTests(unittest.TestCase):
         for r in (log, serial):
             self.assertTrue(r['complete'])
             self.assertEqual(r['problems'], [])
-            self.assertEqual(r['counts'], {'passed': 30, 'failed': 0, 'skipped': 1, 'checks': 31})
+            self.assertEqual(r['counts'], {'passed': 33, 'failed': 0, 'skipped': 1, 'checks': 34})
             self.assertEqual((r['run'], r['build'], r['os']), ('0badf00d', '12345678', '1.0.1_alpha'))
         self.assertEqual(report.compare(log, serial), [])
         self.assertEqual(log['details'], serial['details'])
         self.assertEqual([c['id'] for c in log['checks']], [row[1] for row in check_table()])
         status, text = self.cli(self.dir / 'T23.LOG', self.dir / 't23-serial.txt')
         self.assertEqual(status, 0)
-        self.assertIn('Result: 30 passed, 0 failed, 1 skipped of 31 checks in 30.0 s (complete)', text)
+        self.assertIn('Result: 33 passed, 0 failed, 1 skipped of 34 checks in 30.0 s (complete)', text)
         self.assertIn('SKIP optical.disc (no_disc)', text)
 
     def test_bare_machine_report(self):
         log = report.load(self.dir / 'BARE.LOG')
         self.assertTrue(log['complete'])
-        self.assertEqual(log['counts'], {'passed': 2, 'failed': 1, 'skipped': 28, 'checks': 31})
+        self.assertEqual(log['counts'], {'passed': 3, 'failed': 1, 'skipped': 30, 'checks': 34})
         self.assertTrue(all('reason' in c['figures'] for c in log['checks'] if c['status'] != 'pass'))
         self.assertEqual(report.compare(log, report.load(self.dir / 'bare-serial.txt')), [])
         status, text = self.cli(self.dir / 'BARE.LOG')
@@ -155,7 +157,7 @@ class SelftestTests(unittest.TestCase):
                 with self.assertRaises(report.ReportError):
                     report.parse_log(text)
         flagged = {
-            'summary': good.replace('SUMMARY passed=30', 'SUMMARY passed=29', 1),
+            'summary': good.replace('SUMMARY passed=33', 'SUMMARY passed=32', 1),
             'skip reason': good.replace(' reason=no_disc', '', 1),
             'twice': good.replace('PASS memory.start', 'PASS serial.uart', 1),
         }
