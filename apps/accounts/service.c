@@ -373,7 +373,10 @@ static int profile(struct acct_service *s, struct acct_job *job, struct acct_res
     if(!admin(&job->subject) && !trusted && (q->uid?q->uid!=job->subject.uid:
         (i<0 || s->db.records[i].uid!=job->subject.uid))) return -EACCES;
     if(i<0) return -ESRCH;
-    if(q->generation!=s->db.generation) return -EAGAIN;
+    /* Generation 0 is a pure read of the current mapping (the protocol admits
+     * it for LOOKUP and PROFILE; w32srv and libc use it); a stated generation
+     * must still be current. */
+    if(q->generation && q->generation!=s->db.generation) return -EAGAIN;
     char root[64]={0}; struct acct_owner_binding b={0}; uint64_t generation=0;
     int e=s->store.owner.generation(s->store.owner.ctx,&generation);
     if(!e) e=s->store.owner.binding(s->store.owner.ctx,s->store.volume,s->db.records[i].uid,root,&b);

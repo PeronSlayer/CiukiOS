@@ -285,6 +285,17 @@ static int grant_check(struct process *p, int32_t fd, enum desktop_kind kind, ui
     if (d->owner != p->pid || !(d->maximum & right)) return -EACCES;
     return grant_domain(d, kind); /* sec-k07 */
 }
+/* Geometry and capability queries of a concealed session's own display:
+ * concealment masks presentation and input (security.h), not the queries
+ * the session desktop needs to compose its first frame before LOGON
+ * activates it (logon_session.c). The trusted pair keeps its own rule. */
+static int grant_query_check(struct process *p, int32_t fd)
+{
+    int err = grant_check(p, fd, DESKTOP_DISPLAY, PROT_WRITE);
+    if (err != -EBUSY || display_suspended) return err;
+    const struct desktop_description *d = desktop_fd(p, fd);
+    return d && !d->grant_trusted ? 0 : err;
+}
 int grant_batch_authorized(struct process *p, struct desktop_description *d)
 {
     if (!d || d->kind!=DESKTOP_DISPLAY) return -EBADF;
@@ -305,7 +316,7 @@ static bool grant_still_active(const struct desktop_description *d) /* sec-k07 *
 int grant_accel_info(struct process *p, int32_t fd, const struct ciuki_accel_request *q,
                      struct ciuki_accel_info *out)
 {
-    int err = grant_check(p,fd,DESKTOP_DISPLAY,PROT_WRITE);
+    int err = grant_query_check(p,fd);
     if (err) return err;
     if (q->size != sizeof(*q) || q->operation != CIUKI_ACCEL_QUERY) return -EINVAL;
     return fbdev_accel_info(q->generation,out);
@@ -406,7 +417,7 @@ static int display_live(void)
 
 int grant_display_info(struct process *p, int32_t fd, struct ciuki_framebuffer_info *out)
 {
-    int err = grant_check(p, fd, DESKTOP_DISPLAY, PROT_WRITE);
+    int err = grant_query_check(p, fd);
     if (err) return err;
     if ((err = display_live())) return err;
     const struct fb_device *d = fbdev_get();
