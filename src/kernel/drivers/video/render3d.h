@@ -194,6 +194,7 @@ struct render3d_backend {
     const struct ciuki_r3d_caps *capabilities;
     void (*query_caps)(void *, struct ciuki_r3d_caps *);
     uint32_t resident_bytes; /* Backend-owned staging charged to the ceiling. */
+    bool whole_context_fallback; /* Latch AUTO refusal for this context. */
     /* First/last hardware context: revocable owner heap, outside execution. */
     int (*prepare)(uint32_t); /* Optional short mode check before lease publication. */
     int (*reserve)(void *);

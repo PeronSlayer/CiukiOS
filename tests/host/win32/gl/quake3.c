@@ -599,10 +599,22 @@ void gl_quake3_savage(int default_format) {
     gl_kernel_mode(w,h);
 #ifdef GL_KERNEL_FAMILY_RADEON
     assert(!default_format); gl_kernel_setup(2);
+#elif defined(GL_KERNEL_FAMILY_MATROX)
+    gl_kernel_setup(2);
+#elif defined(GL_KERNEL_FAMILY_MACH64)
+    gl_kernel_setup(2);
+#elif defined(GL_KERNEL_FAMILY_VMWARE)
+    gl_kernel_setup(2);
 #else
     extern void gl_kernel_fullscreen_setup(unsigned,unsigned); gl_kernel_fullscreen_setup(w,h);
 #endif
+#ifdef GL_KERNEL_FAMILY_VMWARE
+    extern unsigned gl_kernel_h1_scenarios(void);
+    unsigned scenarios=gl_kernel_h1_scenarios();
+    for (unsigned scenario=0;scenario<scenarios;scenario++) {
+#else
     for (unsigned scenario=0;scenario<2;scenario++) {
+#endif
       unsigned *pixels=calloc(w*h,4); assert(pixels);
       struct w32_dib dib=test_dib(pixels,w,h,32,0,1);
       HDC dc=w32_gdi_surface_dc(&dib,(POINT){0},0,0); assert(dc);
@@ -616,10 +628,18 @@ void gl_quake3_savage(int default_format) {
         assert(strict==chosen);
       }
       PIXELFORMATDESCRIPTOR actual; assert(DescribePixelFormat(dc,chosen,40,&actual));
+#ifndef GL_KERNEL_FAMILY_MACH64
       assert(!(actual.dwFlags&PFD_GENERIC_FORMAT));
+#endif
       printf(
 #ifdef GL_KERNEL_FAMILY_RADEON
           "GL_RADEON_FORMAT width="
+#elif defined(GL_KERNEL_FAMILY_MATROX)
+          "GL_MATROX_FORMAT width="
+#elif defined(GL_KERNEL_FAMILY_MACH64)
+          "GL_MACH64_FORMAT width="
+#elif defined(GL_KERNEL_FAMILY_VMWARE)
+          "GL_VMWARESVGA_FORMAT width="
 #else
           "GL_SAVAGE_FORMAT width="
 #endif
@@ -640,8 +660,12 @@ void gl_quake3_savage(int default_format) {
         memset(work,0,sizeof(work));
 #endif
         extern void gl_savage_scope(unsigned);
+#ifdef GL_KERNEL_FAMILY_VMWARE
+        gl_savage_scope(scenario); gl_savage_begin(); frame(scenario==2 ? -1 : (int)scenario); glFinish();
+#else
         gl_savage_scope(scenario); gl_savage_begin(); frame(scenario); glFinish();
-#ifndef GL_KERNEL_FAMILY_RADEON
+#endif
+#if !defined(GL_KERNEL_FAMILY_RADEON) && !defined(GL_KERNEL_FAMILY_MATROX) && !defined(GL_KERNEL_FAMILY_MACH64) && !defined(GL_KERNEL_FAMILY_VMWARE)
         extern void gl_kernel_present_lease(const uint32_t *,unsigned,unsigned); gl_kernel_present_lease(pixels,w,h);
 #endif
 #ifdef SW_PROFILE
@@ -655,7 +679,7 @@ void gl_quake3_savage(int default_format) {
     }
     gl_kernel_teardown();
   }
-#ifndef GL_KERNEL_FAMILY_RADEON
+#if !defined(GL_KERNEL_FAMILY_RADEON) && !defined(GL_KERNEL_FAMILY_MATROX) && !defined(GL_KERNEL_FAMILY_MACH64) && !defined(GL_KERNEL_FAMILY_VMWARE)
   extern void gl_quake3_lease_flow(int); gl_quake3_lease_flow(default_format);
 #endif
   gl_kernel_mode(640,480); gl_hardware_native(0); savage_frames=0;
@@ -665,6 +689,7 @@ void gl_quake3_savage(int default_format) {
  * the full-screen lease, whose 640x480 mode switch revokes that generation.
  * The context must regain hardware without a failure mark, and later frames
  * must stay GPU-resident: no READ, no UPLOAD, direct native scanout. */
+#if !defined(GL_KERNEL_FAMILY_RADEON) && !defined(GL_KERNEL_FAMILY_MATROX) && !defined(GL_KERNEL_FAMILY_MACH64) && !defined(GL_KERNEL_FAMILY_VMWARE)
 void gl_quake3_lease_flow(int default_format) {
   extern void gl_kernel_desktop_setup(unsigned,unsigned),gl_kernel_teardown(void),gl_kernel_mode(unsigned,unsigned);
   extern void gl_kernel_counters(unsigned *); extern unsigned gl_kernel_draws(void);
@@ -738,3 +763,5 @@ void gl_quake3_lease_flow(int default_format) {
   printf("GL_T23_LEASE_FLOW depth=%u context_before_lease=1 regained_hardware=1 gpu_resident_frames=3 front_on_demand=1 PASS\n",
     p.cDepthBits);
 }
+
+#endif /* Savage-only T23 lease evidence */

@@ -244,8 +244,8 @@ def main() -> int:
                     [SRC / "drivers/video" / name for name in ("registry.c", "attempt.c", "swdib.c", "native.c", "batch.c",
                         "native_hw.c", "render3d.c", "render3d_scalar.c", "render3d_native.c", "render3d_transport.c", "intel2d/engine.c", "intel2d/driver.c", "unichrome/engine.c",
                         "unichrome/driver.c", "sis/engine.c", "sis/cursor.c", "sis/register.c",
-                        "vmwaresvga/engine.c", "vmwaresvga/driver.c", "vmwaresvga/io.c", "mach64/engine.c",
-                        "mach64/driver.c", "rage128/driver.c", "rage128/engine.c", "cirrus/engine.c",
+                        "vmwaresvga/engine.c", "vmwaresvga/driver.c", "vmwaresvga/io.c", "vmwaresvga/vmwaresvga3d.c", "vmwaresvga/vmwaresvga3d_owner.c", "mach64/engine.c",
+                        "mach64/driver.c", "mach64/mach64_3d.c", "mach64/mach64_3d_owner.c", "rage128/driver.c", "rage128/engine.c", "cirrus/engine.c",
                         "cirrus/driver.c", "tdfx/driver.c", "tdfx/engine.c", "s3legacy/engine.c",
                         "s3legacy/driver.c", "s3legacy/platform.c", "s3trio64/engine.c", "s3virge/engine.c",
                         "i810/driver.c", "i810/memory.c", "i740/driver.c")] +
@@ -253,7 +253,7 @@ def main() -> int:
                     [SRC / "drivers/video/radeon2d" / name for name in ("engine.c", "cursor.c", "driver.c", "radeon3d.c", "radeon3d_owner.c")] +
                     [SRC / "drivers/video/nv2d" / name for name in ("adapter.c", "engine.c", "hardware.c", "dma_hw.c")] +
                     [SRC / "drivers/video/riva128" / name for name in ("driver.c", "engine.c")] +
-                    [SRC / "drivers/video/matrox" / name for name in ("engine.c", "driver.c")] +
+                    [SRC / "drivers/video/matrox" / name for name in ("engine.c", "driver.c", "matrox3d.c", "matrox3d_owner.c")] +
                     [SRC / "drivers/video/trident" / name for name in ("engine.c", "driver.c")] +
                     [SRC / "drivers/video/neomagic" / name for name in ("driver.c", "engine.c", "cursor.c")] +
                     [SRC / "drivers/video/chipshiqv" / name for name in ("hiqv_engine.c", "chipshiqv.c")] +

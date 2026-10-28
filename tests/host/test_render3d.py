@@ -237,16 +237,31 @@ class RenderTests(unittest.TestCase):
             'src/kernel/drivers/video/s3savage/savage3d.c'],args=[case])
 
     def test_registry(self):
-        expected={'tdfx','rage128','radeon2d','mach64','matrox','i740','i810','intel2d',
-                  's3savage','s3virge','sis','unichrome','riva128','nv2d','trident','vmwaresvga'}
+        status = {
+            'tdfx': 'R3D_NOT_IMPLEMENTED',
+            'rage128': 'R3D_NOT_IMPLEMENTED',
+            'radeon2d': 'R3D_UNQUALIFIED',
+            'mach64': 'R3D_UNQUALIFIED',
+            'matrox': 'R3D_UNQUALIFIED',
+            'i740': 'R3D_NOT_IMPLEMENTED',
+            'i810': 'R3D_NOT_IMPLEMENTED',
+            'intel2d': 'R3D_NOT_IMPLEMENTED',
+            's3savage': 'R3D_UNQUALIFIED',
+            's3virge': 'R3D_NOT_IMPLEMENTED',
+            'sis': 'R3D_NOT_IMPLEMENTED',
+            'unichrome': 'R3D_NOT_IMPLEMENTED',
+            'riva128': 'R3D_NOT_IMPLEMENTED',
+            'nv2d': 'R3D_SOFTWARE_ONLY',
+            'trident': 'R3D_NOT_IMPLEMENTED',
+            'vmwaresvga': 'R3D_UNQUALIFIED',
+        }
+        expected=set(status)
         found=set()
         for folder in expected:
             descriptors=[p for p in (VIDEO/folder).glob('*.c') if 'render_family =' in p.read_text()]
             self.assertEqual(len(descriptors),1,folder)
             source=descriptors[0].read_text()
-            status = {'s3savage': 'R3D_UNQUALIFIED', 'nv2d': 'R3D_SOFTWARE_ONLY',
-                      'radeon2d': 'R3D_UNQUALIFIED'}
-            self.assertIn(status.get(folder, 'R3D_NOT_IMPLEMENTED'), source)
+            self.assertIn(status[folder], source)
             self.assertRegex(source,r'render3d=&render_family|S3_RENDER_FAMILY \(&render_family\)')
             found.add(folder)
         self.assertEqual(found,expected)
