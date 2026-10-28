@@ -43,3 +43,11 @@
 - K8-4: `security.kdf` reports min/median/max and prints WARN above a 1,000 ms median; it never fails the self-test, because the figure depends on the CPU.
 - K8-5: images ship without `power.cfg`; the defaults (button: Shut down, lid: nothing) apply.
 - K8-6: every future directive that adds a syscall, call-99 action, channel operation, device command or policy kind adds its census row in `tests/host/security/policy_census.py`. The census test enforces it.
+
+## Lead decisions on the sec-user-06 questions (2026-10-28 15:40)
+- U6-1 approved: the security acceptance cases are ordinary menu boots chosen by the runner, because a fw_cfg test item replaces the normal boot and LOGON never starts.
+- U6-2 approved: each self-test boot writes one real registry backup to measure it against the desktop's 5 s request limit.
+- U6-3 approved: the input driver's self-test attention entry, refused outside a self-test boot and unreachable from any syscall or SDK path, with its own census row.
+- U6-4: `/Programs/sectest` stays in the image but is hidden from the Start menu and from Add/Remove Programs.
+- U6-5: the pending cases stay pending until their runtime paths exist; `qemu-t23` is the only profile; acc-quake3's title follows the protected installer store path.
+- U6-6 (overlap with sec-k08): one `security.kdf` self-test row, sec-k08's library with an 8 s bound; the self-test budget stays within 600 s.
