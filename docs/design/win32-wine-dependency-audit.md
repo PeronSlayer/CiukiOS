@@ -276,6 +276,15 @@ Wine `b073859675060c9211fcbccfd90e4e87520dc2c2`, archive SHA-256 `c5e0b3f5f7efaf
 | msvcrt.dll | `0x748d0000` | 606,208 | 614,400 | 148 | 5 | 3 | `8161d40c05af35d2` | reused, qualified (staged builtin) |
 | coml2.dll | `0x74970000` | 86,016 | 86,016 | 21 | 2 | 0 | `a503cc5b92f4bd1e` | reused, qualified (staged builtin) |
 | shcore.dll | `0x74990000` | 77,824 | 77,824 | 19 | 3 | 0 | `c0a9ea8c303f6f6e` | reused, qualified (staged builtin) |
+| dplayx.dll | `0x749b0000` | 200,704 | 200,704 | 49 | 2 | 6 | `c27b7d9a8a0ee8d2` | build candidate, pending H1 |
+| dplay.dll | `0x749f0000` | 24,576 | 24,576 | 6 | 1 | 3 | `0ed89cc3472bcf0c` | build candidate, pending H1 |
+| dpwsockx.dll | `0x74a00000` | 53,248 | 53,248 | 13 | 2 | 6 | `7fea3de795289a99` | build candidate, pending H1 |
+
+`dplay.dll`: f6-26: H0 binds; H1 execution is blocked by sandbox SIGSYS; DirectPlay end-to-end and Windows 98 interoperability gates remain.
+
+`dplayx.dll`: f6-26: H0 binds; H1 execution is blocked by sandbox SIGSYS; DirectPlay end-to-end and Windows 98 interoperability gates remain.
+
+`dpwsockx.dll`: f6-26: H0 binds; H1 execution is blocked by sandbox SIGSYS; DirectPlay end-to-end and Windows 98 interoperability gates remain.
 
 | Patch (applied in order) | SHA-256 (prefix) |
 | --- | --- |
@@ -289,6 +298,9 @@ Wine `b073859675060c9211fcbccfd90e4e87520dc2c2`, archive SHA-256 `c5e0b3f5f7efaf
 | `0008-kernelbase-compile-in.patch` | `3cc7558345be2bdc` |
 | `0009-shell32-wine-private-calls.patch` | `7ad67fb7f42f39af` |
 | `0010-msvcrt-sbcs-code-page.patch` | `f8a8a9fd32068f11` |
+| `0011-directplay-lan.patch` | `bfd3ed25ec82479e` |
+| `0012-directplay-lobby.patch` | `7a48280f6b928187` |
+| `0013-directplay-enumeration.patch` | `fa3d13ff507e75f0` |
 
 `0006-shell32-icon-trim.json` (resource filter): 430 icon images (1,776,519 bytes) in, 235 (357,298 bytes) out.
 
@@ -304,6 +316,9 @@ Missing eager imports, delayed imports and unresolved export forwarders of the c
 | comctl32.dll | 0 | 0 | 0 | 5 |
 | comdlg32.dll | 0 | 0 | 0 | 11 |
 | coml2.dll | 0 | 0 | 0 | 0 |
+| dplay.dll | 0 | 0 | 0 | 0 |
+| dplayx.dll | 0 | 0 | 0 | 0 |
+| dpwsockx.dll | 0 | 0 | 0 | 1 |
 | imm32.dll | 38 | 0 | 0 | 0 |
 | msvcrt.dll | 0 | 0 | 0 | 2 |
 | ole32.dll | 0 | 0 | 0 | 1 |
@@ -326,9 +341,9 @@ Missing eager imports, delayed imports and unresolved export forwarders of the c
 | f5-14b | `wine-compile-in` | 212 |
 | f5-14b | `wine-patch-remove` | 3 |
 | f5-14b | `wine-retarget` | 197 |
-| f5-20b | `core-implement` | 218 |
-| f5-20c | `core-implement` | 7 |
-| f5-20c | `core-w21-stub` | 7 |
+| f5-20b | `core-implement` | 222 |
+| f5-20c | `core-implement` | 8 |
+| f5-20c | `core-w21-stub` | 8 |
 | f5-20c | `not-reused` | 38 |
 | f5-20c | `w21-unresolved-forwarder` | 3 |
 
@@ -418,7 +433,7 @@ Unique names per audit, rule and owning DLL:
 - f5-20c `absent-forwarder-dll` → wininet.dll (1): InternetCrackUrlW
 - f5-20c `core-api-f5-20c` → kernel32.dll (4): DebugBreak, IsBadCodePtr, IsBadReadPtr, IsBadWritePtr
 - f5-20c `core-census-w21` → imm32.dll (2): ImmGetContext, ImmReleaseContext
-- f5-20c `core-census-w21` → kernel32.dll (2): GetNumberOfConsoleInputEvents, ReadConsoleInputA
+- f5-20c `core-census-w21` → kernel32.dll (3): GetNumberOfConsoleInputEvents, ReadConsoleInputA, SetThreadDescription
 - f5-20c `core-census-w21` → winspool.drv (1): DocumentPropertiesA
 - f5-20c `not-reused` → imm32.dll (38): DelayLoadFailureHook, EnterCriticalSection, FreeLibrary, GetFileVersionInfoSizeW, GetFileVersionInfoW, GetModuleHandleA, GetModuleHandleW, GetProcAddress, GetTickCount, GlobalAlloc, GlobalFree, HeapAlloc, HeapReAlloc, InitOnceExecuteOnce, IsDBCSLeadByte, LCMapStringW, LeaveCriticalSection, LoadLibraryW, MultiByteToWideChar, NtUserAssociateInputContext, NtUserBuildHimcList, NtUserCallHwnd, NtUserCallTwoParam, NtUserCreateInputContext, NtUserDestroyInputContext, NtUserDisableThreadIme, NtUserMessageCall, NtUserNotifyIMEStatus, NtUserQueryInputContext, NtUserQueryWindow, NtUserUpdateInputContext, RaiseException, ResolveDelayLoadedAPI, RtlSetLastWin32Error, ToUnicodeEx, User32InitializeImmEntryTable, VerQueryValueW, WideCharToMultiByte
 
@@ -428,55 +443,34 @@ H0: native production-loader model, DllMain observed. H1: i386 Linux adapter, pr
 
 | DLL | H0 binding | H0 DllMain attach/detach (observed) | H1 outcome | H1 DllMain attach TRUE | H1 detach | Kernel records ENOSYS | w32srv requests |
 | --- | --- | ---: | --- | ---: | ---: | ---: | ---: |
-| advpack.dll | bound | 12/12 | loaded | 11/11 | 11 | 10 | 0 |
-| cabinet.dll | bound | 3/3 | loaded | 2/2 | 2 | 8 | 0 |
-| combase.dll | bound | 8/8 | loaded | 7/7 | 7 | 8 | 0 |
-| comctl32.dll | bound | 7/7 | loaded | 6/6 | 6 | 8 | 44 |
-| comdlg32.dll | bound | 9/9 | loaded | 8/8 | 8 | 8 | 44 |
-| coml2.dll | bound | 3/3 | loaded | 2/2 | 2 | 8 | 0 |
-| msvcrt.dll | bound | 2/2 | loaded | 1/1 | 1 | 8 | 0 |
-| ole32.dll | bound | 8/8 | loaded | 7/7 | 7 | 8 | 0 |
-| oleaut32.dll | bound | 9/9 | loaded | 8/8 | 8 | 8 | 0 |
-| riched20.dll | bound | 10/10 | loaded | 9/9 | 9 | 8 | 8 |
-| riched32.dll | bound | 11/11 | loaded | 10/10 | 10 | 8 | 10 |
-| rpcrt4.dll | bound | 3/3 | loaded | 2/2 | 2 | 8 | 0 |
-| setupapi.dll | bound | 7/7 | loaded | 6/6 | 6 | 10 | 0 |
-| shcore.dll | bound | 3/3 | loaded | 2/2 | 2 | 8 | 0 |
-| shell32.dll | bound | 7/7 | loaded | 6/6 | 6 | 8 | 0 |
-| shlwapi.dll | bound | 6/6 | loaded | 5/5 | 5 | 8 | 0 |
-
-### Upstream conformance units on the H1 adapter (generated)
-
-Wine 10.0 `dlls/*/tests` programs (test-runtime imports missing from the core are stubbed inside the program, listed below); the adapter has no CiukiOS kernel, so kernel record operations it does not model fail with ENOSYS.
-
-| Unit | Outcome | Executed | Failures | Skipped | Failed checks reported | ENOSYS kernel operations |
-| --- | --- | ---: | ---: | ---: | ---: | --- |
-| comctl32:imagelist | crashed c0000005 | - | - | - | 119 | 0x00000002×1, 0x00000006×2, 0x00000100×1, 0x0000010a×1 |
-| comdlg32:filedlg | crashed c0000005 | - | - | - | 0 | 0x00000002×1, 0x00000006×2, 0x00000100×1, 0x00000109×18, 0x0000010a×1 |
-| comdlg32:finddlg | completed | 43 | 18 | 0 | 18 | 0x00000002×1, 0x00000006×2, 0x00000100×3, 0x0000010a×1 |
-| comdlg32:printdlg | completed | 15 | 0 | 4 | 0 | 0x00000002×2, 0x00000006×2, 0x00000100×3, 0x00000109×1, 0x0000010a×1 |
-| ole32:compobj | crashed c0000005 | - | - | - | 25 | 0x00000002×1, 0x00000006×15, 0x0000000a×2, 0x00000100×4, 0x00000101×2, 0x00000109×9, 0x0000010a×1 |
-| ole32:ole2 | crashed c0000005 | - | - | - | 1 | 0x00000002×2, 0x00000006×2, 0x00000100×1, 0x00000109×1, 0x0000010a×1 |
-| riched20:txtsrv | completed | 213 | 13 | 0 | 13 | 0x00000002×1, 0x00000006×5, 0x00000100×3, 0x00000109×27, 0x0000010a×1 |
-| shell32:brsfolder | completed | 1 | 1 | 4 | 1 | 0x00000002×1, 0x00000006×3, 0x00000100×3, 0x00000109×4, 0x0000010a×1 |
-| shell32:shelllink | crashed c0000005 | - | - | - | 22 | 0x00000002×1, 0x00000006×2, 0x00000100×3, 0x00000109×15, 0x0000010a×1 |
-| shell32:shellole | crashed c0000005 | - | - | - | 20 | 0x00000002×1, 0x00000006×3, 0x0000000a×2, 0x00000100×7, 0x00000101×4, 0x0000010a×1 |
-| shell32:shellpath | completed | 0 | 0 | 0 | 0 | 0x00000002×1, 0x00000006×2, 0x00000100×3, 0x00000109×1, 0x0000010a×1 |
-| shell32:shlexec | exited | - | - | - | 2 | 0x00000002×1, 0x00000006×4, 0x00000100×4, 0x00000109×6, 0x0000010a×1 |
-| shell32:shlfileop | crashed c0000005 | - | - | - | 325 | 0x00000002×1, 0x00000006×4, 0x00000100×201, 0x00000109×1864, 0x0000010a×1 |
-| shell32:shlfolder | crashed c0000005 | - | - | - | 0 | 0x00000002×1, 0x00000006×3, 0x00000100×1, 0x0000010a×1 |
-| shell32:systray | timeout | - | - | - | 7 | - |
-
-Test-runtime stubs per program: comctl32: gdi32.dll!CloseEnhMetaFile, gdi32.dll!CreateEnhMetaFileW, imm32.dll!ImmSetCompositionStringA, kernel32.dll!CreateActCtxA, kernel32.dll!FindActCtxSectionStringA, kernel32.dll!GetProcessId, user32.dll!CreateIcon, user32.dll!DlgDirSelectExA, user32.dll!GetComboBoxInfo, user32.dll!GetListBoxInfo, user32.dll!GetMenuBarInfo, user32.dll!GetOpenClipboardWindow, user32.dll!RealGetWindowClassA, user32.dll!SendInput, user32.dll!SetProcessDefaultLayout, user32.dll!SetWinEventHook, user32.dll!SetWindowsHookA, user32.dll!UnhookWinEvent, user32.dll!UnhookWindowsHook, uxtheme.dll!SetWindowTheme; comdlg32: kernel32.dll!GetProcessId; ole32: gdi32.dll!CloseEnhMetaFile, gdi32.dll!CreateEnhMetaFileA, gdi32.dll!CreateEnhMetaFileW, kernel32.dll!GetProcessId, user32.dll!CreateIcon; riched20: kernel32.dll!GetProcessId, user32.dll!GetOpenClipboardWindow; shell32: kernel32.dll!GetProcessId, kernel32.dll!OpenFileMappingA, user32.dll!DdeCmpStringHandles, user32.dll!keybd_event
+| advpack.dll | bound | 12/12 | loaded | 11/11 | 11 | 13 | 0 |
+| cabinet.dll | bound | 3/3 | loaded | 2/2 | 2 | 11 | 0 |
+| combase.dll | bound | 8/8 | loaded | 7/7 | 7 | 11 | 0 |
+| comctl32.dll | bound | 7/7 | loaded | 6/6 | 6 | 51 | 44 |
+| comdlg32.dll | bound | 9/9 | loaded | 8/8 | 8 | 51 | 44 |
+| coml2.dll | bound | 3/3 | loaded | 2/2 | 2 | 11 | 0 |
+| dplay.dll | bound | 2/2 | not executed (sandbox SIGSYS) | - | - | - | - |
+| dplayx.dll | bound | 10/10 | not executed (sandbox SIGSYS) | - | - | - | - |
+| dpwsockx.dll | bound | 4/4 | not executed (sandbox SIGSYS) | - | - | - | - |
+| msvcrt.dll | bound | 2/2 | loaded | 1/1 | 1 | 11 | 0 |
+| ole32.dll | bound | 8/8 | loaded | 7/7 | 7 | 11 | 0 |
+| oleaut32.dll | bound | 9/9 | loaded | 8/8 | 8 | 11 | 0 |
+| riched20.dll | bound | 10/10 | loaded | 9/9 | 9 | 11 | 8 |
+| riched32.dll | bound | 11/11 | loaded | 10/10 | 10 | 11 | 10 |
+| rpcrt4.dll | bound | 3/3 | loaded | 2/2 | 2 | 11 | 0 |
+| setupapi.dll | bound | 7/7 | loaded | 6/6 | 6 | 13 | 0 |
+| shcore.dll | bound | 3/3 | loaded | 2/2 | 2 | 11 | 0 |
+| shell32.dll | bound | 7/7 | loaded | 6/6 | 6 | 11 | 0 |
+| shlwapi.dll | bound | 6/6 | loaded | 5/5 | 5 | 11 | 0 |
 
 ### MSVCRT measurement (generated)
 
-Surface: the 87 MSVCRT functions the reused DLLs import.
+Surface: the 88 MSVCRT functions the reused DLLs import.
 
 | Candidate | Bytes | Pages (model) | Surface covered | Notes |
 | --- | ---: | ---: | ---: | --- |
-| Wine 10.0 `msvcrt.dll` PE | 606,208 file, 614,400 SizeOfImage | 153 (148 seed + 5 COW) | 87/87 | 1290 exported names, MSVCRT ABI |
-| CiukiOS newlib port (SDK `libc.a` `cd8d9c82981bc3dd`) | 93,542 text + 420 data | 24 | 74/87 | missing: __iob_func, _assert, _create_locale, _findclose, _free_locale, _snwprintf_l, _wcslwr, _wfindfirst, _wfindnext, _wfopen, _wgetenv, _wopen, wcscpy_s; no MSVCRT ABI |
+| Wine 10.0 `msvcrt.dll` PE | 606,208 file, 614,400 SizeOfImage | 153 (148 seed + 5 COW) | 88/88 | 1290 exported names, MSVCRT ABI |
+| CiukiOS newlib port (SDK `libc.a` `e5dfc95851ece618`) | 104,438 text + 460 data | 27 | 75/88 | missing: __iob_func, _assert, _create_locale, _findclose, _free_locale, _snwprintf_l, _wcslwr, _wfindfirst, _wfindnext, _wfopen, _wgetenv, _wopen, wcscpy_s; no MSVCRT ABI |
 
 Wine side: actual PE and section-store model. Newlib side: static CiukiOS SDK ELF with every covered surface function referenced, --gc-sections, minus an empty program; MSVCRT ABI glue (FILE/_iob layout, _errno, locale, SEH/C++ EH, startup) not included.
 
@@ -484,12 +478,12 @@ Wine side: actual PE and section-store model. Newlib side: static CiukiOS SDK EL
 
 | Figure | f5-20C build | f5-14B build |
 | --- | ---: | ---: |
-| Reused DLLs | 16 | 16 |
-| File bytes | 9,359,360 | 15,343,616 |
-| SizeOfImage | 9,502,720 | 15,486,976 |
-| Shared seed pages | 2285 (9,359,360 bytes) | 3746 |
-| Private COW commitment pages | 77 | 77 |
-| Startup committed pages (model) | 2362 | 3823 |
+| Reused DLLs | 19 | 16 |
+| File bytes | 9,637,888 | 15,343,616 |
+| SizeOfImage | 9,781,248 | 15,486,976 |
+| Shared seed pages | 2353 (9,637,888 bytes) | 3746 |
+| Private COW commitment pages | 82 | 77 |
+| Startup committed pages (model) | 2435 | 3823 |
 | Contract installer budget (P2+P4) | 14,680,064 | 14,680,064 |
 | SizeOfImage within budget | yes | no |
 | SHELL32 SizeOfImage | 3,293,184 | 9,363,456 |

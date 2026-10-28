@@ -228,6 +228,16 @@ static int only_twenty(void *unused,uint32_t pid){(void)unused;return pid==20;}
 static void default_deletions(void)
 {
     struct disk d={0};struct wr_server s;start(&s,&d);
+    const char *providers = "Software\\Microsoft\\DirectPlay\\Service Providers";
+    CHECK(!rpc(&s,10,W32R_OPEN,W32R_HKLM,providers,"",0,NULL,0,0));
+    uint32_t provider_root = r.key;
+    CHECK(!rpc(&s,10,W32R_OPEN,provider_root,"Internet TCP/IP Connection For DirectPlay","",0,NULL,0,0));
+    uint32_t tcp = r.key;
+    CHECK(!get(&s,tcp,"Guid") && result[40]=='{' && result[42]=='3');
+    CHECK(!get(&s,tcp,"dwReserved1") && r.type==4 && result[40]==0xf4 && result[41]==1);
+    CHECK(!rpc(&s,10,W32R_OPEN,provider_root,"IPX Connection For DirectPlay","",0,NULL,0,0));
+    CHECK(!get(&s,r.key,"dwReserved1") && r.type==4 && result[40]==50);
+    CHECK(!rpc(&s,10,W32R_DELETE_KEY,provider_root,"Internet TCP/IP Connection For DirectPlay","",0,NULL,0,0));
     uint32_t key=create(&s,"Software\\Microsoft\\Windows\\CurrentVersion");
     CHECK(!rpc(&s,10,W32R_DELETE_VALUE,key,"","RegisteredOwner",0,NULL,0,0));
     CHECK(!rpc(&s,10,W32R_DELETE_KEY,key,"Run","",0,NULL,0,0));CHECK(!wr_flush(&s));wr_destroy(&s);start(&s,&d);
@@ -235,6 +245,9 @@ static void default_deletions(void)
     CHECK(get(&s,key,"RegisteredOwner")==2);
     CHECK(rpc(&s,10,W32R_OPEN,key,"Run","",0,NULL,0,0)==2);
     CHECK(wr_defaults(&s,800,600,32));CHECK(!s.hive[0].dirty&&!s.hive[1].dirty);
+    CHECK(rpc(&s,10,W32R_OPEN,W32R_HKLM,
+              "Software\\Microsoft\\DirectPlay\\Service Providers\\Internet TCP/IP Connection For DirectPlay",
+              "",0,NULL,0,0)==2);
     CHECK(get(&s,key,"RegisteredOwner")==2);
     CHECK(!rpc(&s,10,W32R_OPEN,W32R_HKCC,"Display\\Settings","",0,NULL,0,0));
     CHECK(!get(&s,r.key,"BitsPerPixel")&&result[40]==32);

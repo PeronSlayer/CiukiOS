@@ -21,8 +21,37 @@ static int string(struct wr_server *s,struct wr_key *k,const char *name,const ch
     for(size_t i=0;i<n;i++){utf16[i*2]=(uint8_t)value[i];utf16[i*2+1]=0;}
     return !wr_put(s,k,name,1,utf16,(uint32_t)n*2);
 }
+static int directplay(struct wr_server *s)
+{
+    static const struct {
+        const char *name;
+        const char *guid;
+        unsigned reserved;
+    } providers[] = {
+        {"Internet TCP/IP Connection For DirectPlay", "{36E95EE0-8577-11CF-960C-0080C7534E82}", 500},
+        {"IPX Connection For DirectPlay", "{685BC400-9D2C-11CF-A9CD-00AA006886E3}", 50}
+    };
+    /* Match loader/wine.inf.in of the pinned Wine. Persisted hives belong to
+     * the user: no provider is re-created after an explicit deletion. */
+    if (s->hive[0].sequence) return 1;
+    for (unsigned i = 0; i < sizeof(providers) / sizeof(*providers); ++i) {
+        char path[256];
+        snprintf(path, sizeof(path), "Software\\Microsoft\\DirectPlay\\Service Providers\\%s", providers[i].name);
+        struct wr_key *key = ensure(s, 0, path);
+        if (!string(s, key, "DescriptionA", providers[i].name, 0) ||
+            !string(s, key, "DescriptionW", providers[i].name, 0) ||
+            !string(s, key, "Guid", providers[i].guid, 0) ||
+            !string(s, key, "Path", "dpwsockx.dll", 0)) return 0;
+        uint8_t reserved[4] = {(uint8_t)providers[i].reserved, (uint8_t)(providers[i].reserved >> 8), 0, 0};
+        const uint8_t zero[4] = {0};
+        if (wr_put(s, key, "dwReserved1", 4, reserved, sizeof(reserved)) ||
+            wr_put(s, key, "dwReserved2", 4, zero, sizeof(zero))) return 0;
+    }
+    return ensure(s, 0, "Software\\Microsoft\\DirectPlay\\Applications") != NULL;
+}
 int wr_defaults(struct wr_server *s,unsigned width,unsigned height,unsigned bpp)
 {
+    if (!directplay(s)) return 0;
     const char *cv="Software\\Microsoft\\Windows\\CurrentVersion";
     static const char *const settings[][2]={
         {"ProgramFilesDir","C:\\Program Files"},{"CommonFilesDir","C:\\Program Files\\Common Files"},
@@ -66,6 +95,8 @@ int wr_defaults(struct wr_server *s,unsigned width,unsigned height,unsigned bpp)
         {"CLSID\\{D7B70EE0-4340-11CF-B063-0020AFC2CD35}\\InprocServer32","ddraw.dll"},
         {"CLSID\\{47D4D946-62E8-11CF-93BC-444553540000}\\InprocServer32","dsound.dll"},
         {"CLSID\\{25E609E0-B259-11CF-BFC7-444553540000}\\InprocServer32","dinput.dll"},
+        {"CLSID\\{D1EB6D20-8923-11D0-9D97-00A0C90A43CB}\\InprocServer32","dplayx.dll"},
+        {"CLSID\\{2FE8F810-B2A5-11D0-A787-0000F803ABFC}\\InprocServer32","dplayx.dll"},
         {"CLSID\\{00021401-0000-0000-C000-000000000046}\\InprocServer32","shell32.dll"}};
     for(unsigned i=0;i<sizeof(classes)/sizeof(*classes);i++){
         char path[512];snprintf(path,sizeof(path),"Software\\Classes\\%s",classes[i][0]);if(!string(s,ensure(s,0,path),"",classes[i][1],0))return 0;

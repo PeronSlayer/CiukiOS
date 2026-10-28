@@ -267,7 +267,8 @@ class StagingTests(unittest.TestCase):
         for name in qualified:
             self.assertTrue(wu.qualified_by_evidence(RECORD, name), name)
         # f5-20D: every reused PE with H0/H1 evidence is qualified; IMM32 never.
-        self.assertEqual(set(wu.QUALIFIED), {m + '.dll' for m in wu.MODULES} - set(wu.NOT_REUSED))
+        self.assertEqual(set(wu.QUALIFIED), {m + '.dll' for m in wu.MODULES}
+                         - set(wu.NOT_REUSED) - set(wu.PENDING_QUALIFICATION))
         self.assertEqual(qualified, sorted(wu.QUALIFIED))
         self.assertIn('msvcrt.dll', qualified)
         store = {'schema': 1, 'dlls': [], 'msvcrt_policy': 'base'}
@@ -302,6 +303,15 @@ class StagingTests(unittest.TestCase):
             self.assertEqual(len(rows), 1)
             self.assertEqual(rows[0]['base'], RECORD['dlls']['comctl32.dll']['base'])
             self.assertEqual(rows[0]['replaces_census_placeholder_sha256'], placeholder['sha256'])
+
+    def test_directplay_candidates_are_not_staged_without_h1(self):
+        self.assertEqual(set(wu.PENDING_QUALIFICATION), {'dplay.dll', 'dplayx.dll', 'dpwsockx.dll'})
+        self.assertEqual(RECORD['pending_qualification'], wu.PENDING_QUALIFICATION)
+        for name in wu.PENDING_QUALIFICATION:
+            self.assertIn(name, RECORD['dlls'])
+            self.assertFalse(RECORD['dlls'][name]['qualified'])
+            self.assertNotIn(name, wu.QUALIFIED)
+            self.assertFalse(wu.qualified_by_evidence(RECORD, name))
 
 
 class LocalBuildTests(unittest.TestCase):

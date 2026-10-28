@@ -2371,354 +2371,6 @@
       "strip": "llvm-objcopy --strip-all"
     }
   },
-  "conformance": {
-    "adapter_ntdll_sha256": "2c94f3081d20bce35d336f7519c2217d73fa8ac98f7ae41a074ff90e4a2b3358",
-    "core_pe_sha256": {
-      "advapi32.dll": "ecbb4d0ab9fc42fe282ea3b96d58ca88518fe5ce6fe22d4b61fa0c4e67529223",
-      "avifil32.dll": "342a8f8dba08006e2c792216ab67d354f9191c843666376484e2fce3e4fc14ea",
-      "comctl32.dll": "60023ab3a5dcd5044c90bdc7973f6b9113a15b71378740b722da88f5b4ccadbd",
-      "comdlg32.dll": "859b99b4b82f4aa5bfe8cd8586c1d7743fc4c92131777990aef2561cbce79c8c",
-      "crtdll.dll": "1c56dd2bb2f3de7bc972924b8beaa6dad647c77bc09f5a6a915006344aeb36b4",
-      "ddraw.dll": "df37bf792b85fc372b97100c26c854676b779e0c208479a6df3f8f23c0a8ae76",
-      "dinput.dll": "7d4abb834a26e14745e271ec846bdcbdeaaa357e21ae9b453c7dfdcd321e50b9",
-      "dinput8.dll": "4ee1d480c5f69c7305717330c4fba8644ac22e61dae3aa808a4c9e9e95159937",
-      "dplayx.dll": "5ba9965df79b392af4606b94956ae6fdbab4e7e4284898b4e5a813d61e1ea98b",
-      "dsetup.dll": "a2aeb6fa2bbc5679d0d0b7b585d521f656d031f67893d0d606b486fe0fae467e",
-      "dsetup32.dll": "cee77d9907515823baafbb7d4c81f14b57b6820e548c4b4f65e79f1b09d8b03e",
-      "dsound.dll": "fd013f79ad164d40abe35333edaecff472eed78f5681adfb38fa4edaef530d7a",
-      "gdi32.dll": "364ee5618893dbc217e9a935b3532c965e250f0813a6552da7bfa707a28e7101",
-      "gdiplus.dll": "10f239fc4d1d16ecad8b1ab760ad1af2a018d13b9b3180cf9189609319d6f120",
-      "iccvid.dll": "bef0ee15878ef178c05ad7c4bc914207b5e6d6773a084036e2d3ad2bf2708fa3",
-      "imaadp32.acm": "e8189dd9d78224df29cb3794f7e3cdd1460eb6d8469a31f95c6d79ab72287fa4",
-      "imm32.dll": "bfc0303ec9f37891e39d7bc340e3e5551035b1dc1758310b2482f1f2dd8200c6",
-      "iphlpapi.dll": "afe692472d1ccea7ad14587fc18cbe65a6b9f6c35f100cb5b076f3ba1fda0728",
-      "kernel32.dll": "adeb033e1fe3f1cf2d90c0caf93526ad22103ede3f24718cdff1cdc170363146",
-      "lz32.dll": "1e7e8dd8a9e4a57646395f0fbc20977bd2e4888e7137f6fe97d6b8beeb1b2dcb",
-      "mlang.dll": "9eb3a613f5b562e8915b6c8f6852570a8d12b1e740191445d0d4941bb36df4b2",
-      "mpr.dll": "94095be46f0c329b1717c969c4489c2279ab8fcefbf20deca952445a41bbd747",
-      "msacm32.dll": "47f324b95d7d957000141e7ce136d73aa57ddbad21b3d5c760af77e70dccabaa",
-      "msadp32.acm": "53b9021e86e88020454b4cf27aeb8010bc6966b42e1d613f88ce63d26bebba72",
-      "msrle32.dll": "713c995cc3d3a494d1b73f561171b296be6578c0555afec1c7b9c0a7b65911a0",
-      "msvfw32.dll": "810e062c49d541c716c28d182d780129e42dd38813bec534e972e9ee1fa3ff74",
-      "msvidc32.dll": "7409a4bc066d47a011d8ff4d9817323668dd8770b60588a677d1906363085b37",
-      "ntdll.dll": "19d26d7630a0926b1ae0514f05364c3908735719155d4159340208eba9d6a76b",
-      "ole32.dll": "2f5c5765b15597d49ae48e1551be0f2a3bf1e1cddbc9f16d99bf7f6acb71e966",
-      "secur32.dll": "8314255f6798a679bcab1b21ed348a143e062730947c6a350cf520fa99bcf17b",
-      "shdocvw.dll": "a31d730cc1072ee6801c1e861defd534d8e6028a4d046f3fb383f73cde6b734c",
-      "shell32.dll": "0c94de808a244dffa80fe6aa639ed03f1dcfc18fb3c4be508f76047e52877415",
-      "urlmon.dll": "910f081e3642329eff5e432f10f9b13a84c6c53a670e738d9d942ff047cfa507",
-      "user32.dll": "d7ee771471d40fb511e55cd9f22235ee0fd0c8b680b8b9aa7624463dca74b4f2",
-      "uxtheme.dll": "6644d2ce5eb99074bcf418668af04a440dd6b9a08af5fa157002abd524201e81",
-      "version.dll": "a2315b21da32282c29c8e92ae5d2d83eaca56e058f0c18ca23e3c04ada603c3d",
-      "windowscodecs.dll": "4331b76dacd20cf6228669015985e4ea14d9d3279fb43681b794094dfba182d7",
-      "winmm.dll": "81ca6af35ee0446f1366145589fa0871c0a65b732ae911d943e9fb76f9cf8f46",
-      "winspool.drv": "da4e1af89639718e0ceed444c470c0ffb647fde0cb4a27666197b02863f931a0",
-      "wintrust.dll": "54fc506e1d1b1d8693e4e267c782468e2ec954c9bb5272f45b26ea50a7bc7589",
-      "wsock32.dll": "fcd9c8f1bbb1d9bbcca74bd693bab883fc48ea7f36df49c8590e169deaa777ed"
-    },
-    "pe_sha256": {
-      "advpack.dll": "bcd9c814631ba3278a1ea9a9e2ab6ab24118194df6381ec0474ce3c2ec2e8cea",
-      "cabinet.dll": "64b049e00ddfeb1881f674d40e03420e7cb445d2cd1caac675162e5f3dff726a",
-      "combase.dll": "3dc27ea3f48ede460f95ba0ecf03e979748e3a60896a104f237c17e0c0b12cff",
-      "comctl32.dll": "2a53a0928333182841b15f7395b8db48a01b9016a2194e420f7c29780b6b212b",
-      "comdlg32.dll": "88dc12a9b05acf4006b2bd87c0ac02b04558fe62e7985066563a499e2063f160",
-      "coml2.dll": "a503cc5b92f4bd1e3fb10fd88ef8e0ebf2cab7ad9ec4a03ff01a8eae8edd4045",
-      "msvcrt.dll": "8161d40c05af35d2ca99ced2c4d4cead51b3a11d12104fb2ada2e22d67c89967",
-      "ole32.dll": "af5a3bd5db02edd9747d383e515f0cd66fa309dd9b7d4e606d9746b79ef612ea",
-      "oleaut32.dll": "83d80452bdb4c017ab938cb9d737ebe136b4e82d99b11bcb7615162c22cadee8",
-      "riched20.dll": "c29478a4fa6a9dbde02f20421742de80f5f724f1a056a2e57c7f9568e75798f4",
-      "riched32.dll": "f90eb4347ef58b55ad10986295bdc41b5cfaec7158459d172c1aabbcb0339293",
-      "rpcrt4.dll": "49ef1848edb7a8b6ea3f5a3087c76581495f02e80e15fbb8b87a6be657d7ecb2",
-      "setupapi.dll": "7ca99e8f76aef0f9ae33da81c35115afee7421262e3186d3e7b7eeb18b9a887d",
-      "shcore.dll": "c0a9ea8c303f6f6ef299527426d1175c2b4cbf0371eb9e24570b99a2e8ff69a6",
-      "shell32.dll": "0b371c8d0ca931e546e6ac390a5498089aaa5617caa4dbac4e0e64c39552f4fe",
-      "shlwapi.dll": "f0519aad6c7fca0a66b28f7da043bb58a0ff09afee0f4b3c6c94752779a00c12"
-    },
-    "programs": {
-      "comctl32": {
-        "program": "comctl32_test.exe",
-        "runtime_stubs": [
-          "gdi32.dll!CloseEnhMetaFile",
-          "gdi32.dll!CreateEnhMetaFileW",
-          "imm32.dll!ImmSetCompositionStringA",
-          "kernel32.dll!CreateActCtxA",
-          "kernel32.dll!FindActCtxSectionStringA",
-          "kernel32.dll!GetProcessId",
-          "user32.dll!CreateIcon",
-          "user32.dll!DlgDirSelectExA",
-          "user32.dll!GetComboBoxInfo",
-          "user32.dll!GetListBoxInfo",
-          "user32.dll!GetMenuBarInfo",
-          "user32.dll!GetOpenClipboardWindow",
-          "user32.dll!RealGetWindowClassA",
-          "user32.dll!SendInput",
-          "user32.dll!SetProcessDefaultLayout",
-          "user32.dll!SetWinEventHook",
-          "user32.dll!SetWindowsHookA",
-          "user32.dll!UnhookWinEvent",
-          "user32.dll!UnhookWindowsHook",
-          "uxtheme.dll!SetWindowTheme"
-        ],
-        "sha256": "fb9b9ef0904eaa59dc8b6f68116794d0b5264c595a935141758284e2cc5a40b5",
-        "units": [
-          "imagelist"
-        ]
-      },
-      "comdlg32": {
-        "program": "comdlg32_test.exe",
-        "runtime_stubs": [
-          "kernel32.dll!GetProcessId"
-        ],
-        "sha256": "353bc45045a9b6f8b591f61c47e91285ff6ca8de3bc239de83f5602625709207",
-        "units": [
-          "finddlg",
-          "printdlg",
-          "filedlg"
-        ]
-      },
-      "ole32": {
-        "program": "ole32_test.exe",
-        "runtime_stubs": [
-          "gdi32.dll!CloseEnhMetaFile",
-          "gdi32.dll!CreateEnhMetaFileA",
-          "gdi32.dll!CreateEnhMetaFileW",
-          "kernel32.dll!GetProcessId",
-          "user32.dll!CreateIcon"
-        ],
-        "sha256": "e976b8887a96a275c62ef8a2fa1db11dd95dc1da0f9cc112ba108c669c991226",
-        "units": [
-          "compobj",
-          "ole2"
-        ]
-      },
-      "riched20": {
-        "program": "riched20_test.exe",
-        "runtime_stubs": [
-          "kernel32.dll!GetProcessId",
-          "user32.dll!GetOpenClipboardWindow"
-        ],
-        "sha256": "17421815e67f7d2a338238a4a62012813aa0bb69b136d7dd273ccee04a542d5c",
-        "units": [
-          "txtsrv"
-        ]
-      },
-      "shell32": {
-        "program": "shell32_test.exe",
-        "runtime_stubs": [
-          "kernel32.dll!GetProcessId",
-          "kernel32.dll!OpenFileMappingA",
-          "user32.dll!DdeCmpStringHandles",
-          "user32.dll!keybd_event"
-        ],
-        "sha256": "27491603566589ed2f88dcb5fb7bfc7ada6cf8b5e083591e1d81993e7cb109a9",
-        "units": [
-          "shellole",
-          "shlfolder",
-          "shellpath",
-          "shlfileop",
-          "shelllink",
-          "shlexec",
-          "brsfolder",
-          "systray"
-        ]
-      }
-    },
-    "units": {
-      "comctl32:imagelist": {
-        "exception": "c0000005",
-        "failed_checks_reported": 119,
-        "kernel_enosys": {
-          "0x00000002": "1",
-          "0x00000006": "2",
-          "0x00000100": "1",
-          "0x0000010a": "1"
-        },
-        "outcome": "crashed"
-      },
-      "comdlg32:filedlg": {
-        "exception": "c0000005",
-        "failed_checks_reported": 0,
-        "kernel_enosys": {
-          "0x00000002": "1",
-          "0x00000006": "2",
-          "0x00000100": "1",
-          "0x00000109": "18",
-          "0x0000010a": "1"
-        },
-        "outcome": "crashed"
-      },
-      "comdlg32:finddlg": {
-        "executed": 43,
-        "failed_checks_reported": 18,
-        "failures": 18,
-        "flaky": 0,
-        "kernel_enosys": {
-          "0x00000002": "1",
-          "0x00000006": "2",
-          "0x00000100": "3",
-          "0x0000010a": "1"
-        },
-        "outcome": "completed",
-        "skipped": 0,
-        "todo": 0
-      },
-      "comdlg32:printdlg": {
-        "executed": 15,
-        "failed_checks_reported": 0,
-        "failures": 0,
-        "flaky": 0,
-        "kernel_enosys": {
-          "0x00000002": "2",
-          "0x00000006": "2",
-          "0x00000100": "3",
-          "0x00000109": "1",
-          "0x0000010a": "1"
-        },
-        "outcome": "completed",
-        "skipped": 4,
-        "todo": 0
-      },
-      "ole32:compobj": {
-        "exception": "c0000005",
-        "failed_checks_reported": 25,
-        "kernel_enosys": {
-          "0x00000002": "1",
-          "0x00000006": "15",
-          "0x0000000a": "2",
-          "0x00000100": "4",
-          "0x00000101": "2",
-          "0x00000109": "9",
-          "0x0000010a": "1"
-        },
-        "outcome": "crashed"
-      },
-      "ole32:ole2": {
-        "exception": "c0000005",
-        "failed_checks_reported": 1,
-        "kernel_enosys": {
-          "0x00000002": "2",
-          "0x00000006": "2",
-          "0x00000100": "1",
-          "0x00000109": "1",
-          "0x0000010a": "1"
-        },
-        "outcome": "crashed"
-      },
-      "riched20:txtsrv": {
-        "executed": 213,
-        "failed_checks_reported": 13,
-        "failures": 13,
-        "flaky": 0,
-        "kernel_enosys": {
-          "0x00000002": "1",
-          "0x00000006": "5",
-          "0x00000100": "3",
-          "0x00000109": "27",
-          "0x0000010a": "1"
-        },
-        "outcome": "completed",
-        "skipped": 0,
-        "todo": 0
-      },
-      "shell32:brsfolder": {
-        "executed": 1,
-        "failed_checks_reported": 1,
-        "failures": 1,
-        "flaky": 0,
-        "kernel_enosys": {
-          "0x00000002": "1",
-          "0x00000006": "3",
-          "0x00000100": "3",
-          "0x00000109": "4",
-          "0x0000010a": "1"
-        },
-        "outcome": "completed",
-        "skipped": 4,
-        "todo": 0
-      },
-      "shell32:shelllink": {
-        "exception": "c0000005",
-        "failed_checks_reported": 22,
-        "kernel_enosys": {
-          "0x00000002": "1",
-          "0x00000006": "2",
-          "0x00000100": "3",
-          "0x00000109": "15",
-          "0x0000010a": "1"
-        },
-        "outcome": "crashed"
-      },
-      "shell32:shellole": {
-        "exception": "c0000005",
-        "failed_checks_reported": 20,
-        "kernel_enosys": {
-          "0x00000002": "1",
-          "0x00000006": "3",
-          "0x0000000a": "2",
-          "0x00000100": "7",
-          "0x00000101": "4",
-          "0x0000010a": "1"
-        },
-        "outcome": "crashed"
-      },
-      "shell32:shellpath": {
-        "executed": 0,
-        "failed_checks_reported": 0,
-        "failures": 0,
-        "flaky": 0,
-        "kernel_enosys": {
-          "0x00000002": "1",
-          "0x00000006": "2",
-          "0x00000100": "3",
-          "0x00000109": "1",
-          "0x0000010a": "1"
-        },
-        "outcome": "completed",
-        "skipped": 0,
-        "todo": 0
-      },
-      "shell32:shlexec": {
-        "exit_code": "3",
-        "failed_checks_reported": 2,
-        "kernel_enosys": {
-          "0x00000002": "1",
-          "0x00000006": "4",
-          "0x00000100": "4",
-          "0x00000109": "6",
-          "0x0000010a": "1"
-        },
-        "outcome": "exited"
-      },
-      "shell32:shlfileop": {
-        "exception": "c0000005",
-        "failed_checks_reported": 325,
-        "kernel_enosys": {
-          "0x00000002": "1",
-          "0x00000006": "4",
-          "0x00000100": "201",
-          "0x00000109": "1864",
-          "0x0000010a": "1"
-        },
-        "outcome": "crashed"
-      },
-      "shell32:shlfolder": {
-        "exception": "c0000005",
-        "failed_checks_reported": 0,
-        "kernel_enosys": {
-          "0x00000002": "1",
-          "0x00000006": "3",
-          "0x00000100": "1",
-          "0x0000010a": "1"
-        },
-        "outcome": "crashed"
-      },
-      "shell32:systray": {
-        "failed_checks_reported": 7,
-        "kernel_enosys": {},
-        "outcome": "timeout"
-      }
-    }
-  },
   "core_pe_sha256": {
     "advapi32.dll": "3f77f061c1bb639ff9ab96b7e0e3481c3e513d557410fab3ce9b8b312aa6ae55",
     "avifil32.dll": "c77006a43c4294de7f3417d1dc1ed437061f79e64b6f472c797f65b349dc4ffb",
@@ -23522,6 +23174,20 @@
       "action": "core-implement",
       "audit": "f5-20b",
       "f5_20b": "implemented outside the decision table",
+      "importer": "dplayx.dll",
+      "kind": "import",
+      "linked": "user32.dll",
+      "name": "GetMessageW",
+      "owner": "user32.dll",
+      "provider": "user32.dll",
+      "retarget": null,
+      "rule": "core-api-f5-20b",
+      "symbol": "GetMessageW"
+    },
+    {
+      "action": "core-implement",
+      "audit": "f5-20b",
+      "f5_20b": "implemented outside the decision table",
       "importer": "ole32.dll",
       "kind": "import",
       "linked": "user32.dll",
@@ -23677,6 +23343,20 @@
       "audit": "f5-20b",
       "f5_20b": "implemented outside the decision table",
       "importer": "comdlg32.dll",
+      "kind": "import",
+      "linked": "user32.dll",
+      "name": "GetWindowLongW",
+      "owner": "user32.dll",
+      "provider": "user32.dll",
+      "retarget": null,
+      "rule": "core-api-f5-20b",
+      "symbol": "GetWindowLongW"
+    },
+    {
+      "action": "core-implement",
+      "audit": "f5-20b",
+      "f5_20b": "implemented outside the decision table",
+      "importer": "dpwsockx.dll",
       "kind": "import",
       "linked": "user32.dll",
       "name": "GetWindowLongW",
@@ -24978,6 +24658,20 @@
       "action": "core-implement",
       "audit": "f5-20b",
       "f5_20b": "implemented outside the decision table",
+      "importer": "dpwsockx.dll",
+      "kind": "import",
+      "linked": "user32.dll",
+      "name": "SetWindowLongW",
+      "owner": "user32.dll",
+      "provider": "user32.dll",
+      "retarget": null,
+      "rule": "core-api-f5-20b",
+      "symbol": "SetWindowLongW"
+    },
+    {
+      "action": "core-implement",
+      "audit": "f5-20b",
+      "f5_20b": "implemented outside the decision table",
       "importer": "ole32.dll",
       "kind": "import",
       "linked": "user32.dll",
@@ -25407,6 +25101,20 @@
       "retarget": null,
       "rule": "core-api-f5-20b",
       "symbol": "WinHelpA"
+    },
+    {
+      "action": "core-implement",
+      "audit": "f5-20b",
+      "f5_20b": "implemented outside the decision table",
+      "importer": "dplayx.dll",
+      "kind": "import",
+      "linked": "user32.dll",
+      "name": "wsprintfA",
+      "owner": "user32.dll",
+      "provider": "user32.dll",
+      "retarget": null,
+      "rule": "core-api-f5-20b",
+      "symbol": "wsprintfA"
     },
     {
       "action": "core-implement",
@@ -26015,6 +25723,20 @@
       "action": "core-w21-stub",
       "audit": "f5-20c",
       "f5_20c": "W21 typed failure",
+      "importer": "dpwsockx.dll",
+      "kind": "import",
+      "linked": "kernel32.dll",
+      "name": "SetThreadDescription",
+      "owner": "kernel32.dll",
+      "provider": "kernel32.dll",
+      "retarget": null,
+      "rule": "core-census-w21",
+      "symbol": "SetThreadDescription"
+    },
+    {
+      "action": "core-w21-stub",
+      "audit": "f5-20c",
+      "f5_20c": "W21 typed failure",
       "importer": "msvcrt.dll",
       "kind": "import",
       "linked": "kernel32.dll",
@@ -26066,6 +25788,20 @@
       "retarget": null,
       "rule": "core-census-w21",
       "symbol": "ImmReleaseContext"
+    },
+    {
+      "action": "core-implement",
+      "audit": "f5-20c",
+      "f5_20c": "implemented by f5-20C (lead decision 2026-10-20)",
+      "importer": "dplayx.dll",
+      "kind": "import",
+      "linked": "kernel32.dll",
+      "name": "DebugBreak",
+      "owner": "kernel32.dll",
+      "provider": "kernel32.dll",
+      "retarget": null,
+      "rule": "core-api-f5-20c",
+      "symbol": "DebugBreak"
     },
     {
       "action": "core-implement",
@@ -26257,6 +25993,51 @@
       "sha256": "a503cc5b92f4bd1e3fb10fd88ef8e0ebf2cab7ad9ec4a03ff01a8eae8edd4045",
       "size_of_image": 86016
     },
+    "dplay.dll": {
+      "base": 1956577280,
+      "file_bytes": 24576,
+      "license": "LGPL-2.1-or-later",
+      "memory": {
+        "private_cow_commitment_pages": 1,
+        "reserved_image_pages": 6,
+        "shared_seed_pages": 6,
+        "startup_committed_pages_model": 7
+      },
+      "qualified": false,
+      "resource_entries": 3,
+      "sha256": "0ed89cc3472bcf0cb6b51ceefae57fb69c5d0079d099d11bc50ff3279dfec6f1",
+      "size_of_image": 24576
+    },
+    "dplayx.dll": {
+      "base": 1956315136,
+      "file_bytes": 200704,
+      "license": "LGPL-2.1-or-later",
+      "memory": {
+        "private_cow_commitment_pages": 2,
+        "reserved_image_pages": 49,
+        "shared_seed_pages": 49,
+        "startup_committed_pages_model": 51
+      },
+      "qualified": false,
+      "resource_entries": 6,
+      "sha256": "c27b7d9a8a0ee8d202de02e38b0e4d54057259efdfa653ae1fb2413073857804",
+      "size_of_image": 200704
+    },
+    "dpwsockx.dll": {
+      "base": 1956642816,
+      "file_bytes": 53248,
+      "license": "LGPL-2.1-or-later",
+      "memory": {
+        "private_cow_commitment_pages": 2,
+        "reserved_image_pages": 13,
+        "shared_seed_pages": 13,
+        "startup_committed_pages_model": 15
+      },
+      "qualified": false,
+      "resource_entries": 6,
+      "sha256": "7fea3de795289a9901e7d7601886d65029c85880cea273c682c55ea66dcaac68",
+      "size_of_image": 53248
+    },
     "imm32.dll": {
       "base": 1955266560,
       "file_bytes": 102400,
@@ -26424,10 +26205,10 @@
     }
   },
   "fit": {
-    "file_bytes": 9359360,
+    "file_bytes": 9637888,
     "installer_budget_bytes": 14680064,
     "model": "Cold section-store header/raw seed page union; writable COW commitment promises counted separately, not resident pages. Excludes DllMain heaps, page tables, metadata and other modules; not guest RSS or a whole-system 128 MiB fit result.",
-    "private_cow_commitment_pages": 77,
+    "private_cow_commitment_pages": 82,
     "reused_dlls": [
       "advpack.dll",
       "cabinet.dll",
@@ -26435,6 +26216,9 @@
       "comctl32.dll",
       "comdlg32.dll",
       "coml2.dll",
+      "dplay.dll",
+      "dplayx.dll",
+      "dpwsockx.dll",
       "msvcrt.dll",
       "ole32.dll",
       "oleaut32.dll",
@@ -26447,11 +26231,11 @@
       "shlwapi.dll"
     ],
     "seed_bytes_within_budget": true,
-    "shared_seed_pages": 2285,
+    "shared_seed_pages": 2353,
     "shell32_size_of_image": 3293184,
-    "size_of_image": 9502720,
+    "size_of_image": 9781248,
     "size_of_image_within_budget": true,
-    "startup_committed_pages_model": 2362
+    "startup_committed_pages_model": 2435
   },
   "identical_runs": 2,
   "imports": {
@@ -26699,6 +26483,87 @@
           "missing": [],
           "present": 15,
           "required": 15
+        }
+      }
+    },
+    "dplay.dll": {
+      "eager_missing": 0,
+      "forwarders": 2,
+      "forwarders_unresolved": [],
+      "imports": {
+        "kernel32.dll": {
+          "missing": [],
+          "present": 1,
+          "required": 1
+        }
+      }
+    },
+    "dplayx.dll": {
+      "eager_missing": 0,
+      "forwarders": 0,
+      "forwarders_unresolved": [],
+      "imports": {
+        "advapi32.dll": {
+          "missing": [],
+          "present": 12,
+          "required": 12
+        },
+        "kernel32.dll": {
+          "missing": [],
+          "present": 44,
+          "required": 44
+        },
+        "msvcrt.dll": {
+          "missing": [],
+          "present": 20,
+          "required": 20
+        },
+        "ole32.dll": {
+          "missing": [],
+          "present": 2,
+          "required": 2
+        },
+        "user32.dll": {
+          "missing": [],
+          "present": 2,
+          "required": 2
+        },
+        "winmm.dll": {
+          "missing": [],
+          "present": 1,
+          "required": 1
+        }
+      }
+    },
+    "dpwsockx.dll": {
+      "eager_missing": 0,
+      "forwarders": 0,
+      "forwarders_unresolved": [],
+      "imports": {
+        "kernel32.dll": {
+          "missing": [],
+          "present": 19,
+          "required": 19
+        },
+        "msvcrt.dll": {
+          "missing": [],
+          "present": 17,
+          "required": 17
+        },
+        "ntdll.dll": {
+          "missing": [],
+          "present": 1,
+          "required": 1
+        },
+        "user32.dll": {
+          "missing": [],
+          "present": 6,
+          "required": 6
+        },
+        "ws2_32.dll": {
+          "missing": [],
+          "present": 21,
+          "required": 21
         }
       }
     },
@@ -27340,48 +27205,51 @@
     "adapter": "H0: native production-loader model, DllMain observed. H1: i386 Linux adapter, production loader and core PEs, every DllMain executed; PE ntdll with the H1 transport (identity, w32srv atoms, console), seccomp-confined.",
     "h0": {
       "core_pe_sha256": {
-        "advapi32.dll": "ecbb4d0ab9fc42fe282ea3b96d58ca88518fe5ce6fe22d4b61fa0c4e67529223",
-        "avifil32.dll": "68a928f770ca0a0ff27d34c0831bda7b65da40d57bee955b20ce523e493b0c74",
-        "comctl32.dll": "60023ab3a5dcd5044c90bdc7973f6b9113a15b71378740b722da88f5b4ccadbd",
+        "advapi32.dll": "3f77f061c1bb639ff9ab96b7e0e3481c3e513d557410fab3ce9b8b312aa6ae55",
+        "avifil32.dll": "c77006a43c4294de7f3417d1dc1ed437061f79e64b6f472c797f65b349dc4ffb",
+        "ciukishell.dll": "5ce78ec5ad02e6e3b5faf8712eaa7e2e4a11d5563b91381b651c0b17d4812bb0",
+        "comctl32.dll": "8d7eb0beb67752e31f5ff2bc5d51cebd0e1da19d496a029dcefec0909143d1e3",
         "comdlg32.dll": "859b99b4b82f4aa5bfe8cd8586c1d7743fc4c92131777990aef2561cbce79c8c",
         "crtdll.dll": "1c56dd2bb2f3de7bc972924b8beaa6dad647c77bc09f5a6a915006344aeb36b4",
-        "ddraw.dll": "6bbfeebd08e1a24e9eae42e03e22b7a855005fb5d99dee72be9d6db68619980c",
-        "dinput.dll": "552620525c582c1b40a2477be350e3cb92a76f2d8243d29ddd181d0662ccec43",
-        "dinput8.dll": "1389d06459dd4445bed126f793eb38b17f14a00719559f9c18a65c85855ec791",
+        "ddraw.dll": "b4e8bf8d14349b096260b9f20beb87d0d0808f16d98b261d1d6dbec69303aa2b",
+        "dinput.dll": "001412e12e9566363236fa9848d35f62ffbe5ddb6f6c3434936cb71e8221a520",
+        "dinput8.dll": "8599cc4834c32db00aa7ecb5aae4061fdd47a7194f35868f0d3e3249e320df0f",
         "dplayx.dll": "5ba9965df79b392af4606b94956ae6fdbab4e7e4284898b4e5a813d61e1ea98b",
-        "dsetup.dll": "d1c48247c011618b98c152c0949053fad7b7a26260f1bad631fdd26194d98701",
-        "dsetup32.dll": "aa49303dcbc34618364e21bb52ac05349892dbdf8c71dbd0a168d9fc61101c9c",
-        "dsound.dll": "811c62a2a7baab464196430a5c40d6f5a0bd5053406c7b7a50c543de47013064",
-        "gdi32.dll": "f9eb26d9e82a235f470efdb60f4e76820968e9c52a488baea0d89da764c6cf22",
-        "gdiplus.dll": "c6ed204fc3d8f68cf74677bdf52c9c515c404264ea0a0173e19e5dcc5504b2e4",
-        "iccvid.dll": "5a81d929d57369e5f2cf30669e1e03d7f8853c3d79148697248a464239d79f6e",
-        "imaadp32.acm": "6d929c3e2fba7dd42d0c10f786f499aee047e4a9ceaa9550f28a471296098d48",
+        "dsetup.dll": "9274f53f6d5ca4922f3e262629afa2f14406520fcacd08f20aa9c39824e58c20",
+        "dsetup32.dll": "91f69e3ec7a682500427c439dc8192f5581b28b95deddf1376431b094eb23b58",
+        "dsound.dll": "855fa6414ce50d66d31b09f88484627690d289e11fbaa90cc917afa19addffd8",
+        "gdi32.dll": "272e1bf6d08308d1e1babf2398b04b379a9e35b129425fba47a7cc29d6827c37",
+        "gdiplus.dll": "3ed094b7673e3bc0814591e29113d7a92971e8c5958410fea9038154d7b5527f",
+        "iccvid.dll": "d8b3f834cb9bfe60ff3ce5c2da91c881b81596e18aec6bfb77d9c515642f9e6a",
+        "imaadp32.acm": "1e8e83eaaeb948317d7366ee9d4f300cbfb188b2473b2e7a86339c22d8868b90",
         "imm32.dll": "bfc0303ec9f37891e39d7bc340e3e5551035b1dc1758310b2482f1f2dd8200c6",
-        "iphlpapi.dll": "e36c51ac2e69d4f9a7a79f5d01521c18467e1139c502e9379fe9cf219ddedca6",
-        "kernel32.dll": "adeb033e1fe3f1cf2d90c0caf93526ad22103ede3f24718cdff1cdc170363146",
+        "iphlpapi.dll": "8cbacc90aa854c0db8cbd0e7fe7d5291e1cd7f7956b39f9a900234af36390f3b",
+        "kernel32.dll": "e3fcf3c5b41d6f3cf7cceeb2ac9643148d67850f21dfacfa615f4c291ceb73a8",
         "lz32.dll": "1e7e8dd8a9e4a57646395f0fbc20977bd2e4888e7137f6fe97d6b8beeb1b2dcb",
-        "mciavi32.dll": "c4c097fd72ec1c5ccc637db7a1c84598f39b18e84f1c96aa417773c1a6d48332",
-        "mlang.dll": "81d96685ce1a42c5afa7321b8d1a2e4805a4737eff60759dfdd9300ee7069d4d",
-        "mpr.dll": "94095be46f0c329b1717c969c4489c2279ab8fcefbf20deca952445a41bbd747",
-        "msacm32.dll": "8fdc8b104ed5e4d0737f59b50daae71de0346536daa99dad8e1e2b4f48fd6e9a",
-        "msadp32.acm": "9cc692be390c1c7bf98f69140e7a4f7c353e707804607829eb6732688c7c9455",
-        "msrle32.dll": "57954f8fe5688f8fba232ea7c63808e885ec62709e2fdffd858d4c093b9596d3",
-        "msvfw32.dll": "46a6368adf3a8579abcd1c755fe7d02e311f0178c22a6cd961412f92b0e1f380",
-        "msvidc32.dll": "663ca8015ed5242522501e1c1e593a870d580bff3d9f2217b88c694615047d35",
-        "ntdll.dll": "19d26d7630a0926b1ae0514f05364c3908735719155d4159340208eba9d6a76b",
-        "ole32.dll": "2f5c5765b15597d49ae48e1551be0f2a3bf1e1cddbc9f16d99bf7f6acb71e966",
-        "secur32.dll": "122366b92328a599a19d4d155fcbbf4e5be6e36d32cb42e41ac8e6602309a019",
-        "shdocvw.dll": "5b4209a4f04b87744d8f3a775940e8163a8ad6d682ca788188d030138540012d",
-        "shell32.dll": "0c94de808a244dffa80fe6aa639ed03f1dcfc18fb3c4be508f76047e52877415",
-        "urlmon.dll": "0fad75548bd0ae105a483402e4709379443685e4f43a497cc7afbe5a2b27e691",
-        "user32.dll": "d0f0e90e0ab39be5456cfe573e545a00b40e2d83ccf64c8228bf7048df8bfd05",
-        "uxtheme.dll": "a51ac7076997781eaba40e4f69fc053178531175e9b8aaa81826bc1112e8e2f1",
-        "version.dll": "a2315b21da32282c29c8e92ae5d2d83eaca56e058f0c18ca23e3c04ada603c3d",
-        "windowscodecs.dll": "6b7ffb77aefff6c9ddd67ff6701d85690fac49a2b023509d7beac2e2c62b8336",
-        "winmm.dll": "2f44c523598a104c819a6e8da0c6d59a1d646123ed7a0c0c13bd7759efba24ae",
-        "winspool.drv": "da4e1af89639718e0ceed444c470c0ffb647fde0cb4a27666197b02863f931a0",
-        "wintrust.dll": "61f628f3c65e13f9fdc43c509301c466646a351e1eea5d84ae8e9baa385efe9c",
-        "wsock32.dll": "fcd9c8f1bbb1d9bbcca74bd693bab883fc48ea7f36df49c8590e169deaa777ed"
+        "mciavi32.dll": "700277bb6a13f25b8ec75c5eb60675667c779a3e39142443cca3abc91b613cdc",
+        "mlang.dll": "e3d117fc469a7d84512e8e7b6dd8925ba8b340682076652a427fe305c4e56e91",
+        "mpr.dll": "6f9bf6248a70caeb0e6d40f7b2377546bfeca48fe1c5d0c91f9f700fdc81123b",
+        "msacm32.dll": "b5853213cd319d646f238d9fc23f03bca0d3c0923041a85f585f62c4fca7dd75",
+        "msadp32.acm": "04bc81ed9a3fbfe69f4032ee9002fb2dd7269310fae9e5c92c955ee4aeae3eb8",
+        "msrle32.dll": "d2aa53813b41f8cf3ac35df6d0d3a62d55d613a282277bb15a5ab7e46ccd23a2",
+        "msvfw32.dll": "5f0e1aa6f2220d0c01145e6fb48daa6fda636a5c754051cd4b5f6524958f47cb",
+        "msvidc32.dll": "97b04ea696fc40fb0da85dc85dcfa47fd7bcafef6a2c53da0a73594f573995bf",
+        "ntdll.dll": "c024665020981f5db0c5c92add93a0dea586314a0a25d7a0ad3db5a8b594d6e3",
+        "ole32.dll": "f41cd7a4e60118f32d455140bc25d073006dc62f31d5e076b1102f08338ea532",
+        "opengl32.dll": "3476a395375106ec5aecf7dbb3bfb25035c42e1857d8aa7255c7c084145b0466",
+        "secur32.dll": "aafff2cfb3a566e7ead499cf7206295fbe058a2d8f8ab711dfd33670b003be69",
+        "shdocvw.dll": "ce9853ecec3d7672418d2be3182df3da6ceb3332e117d665886f762d834fcf7d",
+        "shell32.dll": "0eb583699e3f5395c011a306f0f9cbce1ea3e4e12dca7e87d8ca870e9f7ca765",
+        "urlmon.dll": "7cf171c73ea1db4d4e81d82271b001f0483fad54717f078901899f5170cd9cc3",
+        "user32.dll": "c37f657ce010c2d162e1312049a569db80c8d918902901a037e780fd87144268",
+        "uxtheme.dll": "a98dff78d8ea63a30b6aba8520b4c3dd37f7ec04fdbd705c40f9345c04f8d107",
+        "version.dll": "2178a19894de306582014714c1dcf5e058d3553838ed3e6393551f9e6b1d6996",
+        "windowscodecs.dll": "dba4f13327018b67569964fcaff08895863ab94ddb53984d0a5f9aec25cac82d",
+        "winmm.dll": "64825d520494706103ae5677ae93a132210bffb49d777c05d05e4bed7882a1bf",
+        "winspool.drv": "5c0acac9dba5f495f335ea2f406d2b5875d48742dcb611b5f3a3f7a3ec42a8b0",
+        "wintrust.dll": "a09ce69f755507a0db0bd7d4a0ee51991c54b0dabab564f824077185d5d5c808",
+        "ws2_32.dll": "6567a2e5891fff71332cd62d6cde68a78d42206345baa6e083ebf4b00eac7d27",
+        "wsock32.dll": "a2601c1279d5bfd53d0c281f1ba4f24e116bd8871da7b6ded332ef5b9f3c3108"
       },
       "dlls": {
         "advpack.dll": {
@@ -27413,6 +27281,21 @@
           "bound": true,
           "dllmain_attach_observed": 3,
           "dllmain_detach_observed": 3
+        },
+        "dplay.dll": {
+          "bound": true,
+          "dllmain_attach_observed": 2,
+          "dllmain_detach_observed": 2
+        },
+        "dplayx.dll": {
+          "bound": true,
+          "dllmain_attach_observed": 10,
+          "dllmain_detach_observed": 10
+        },
+        "dpwsockx.dll": {
+          "bound": true,
+          "dllmain_attach_observed": 4,
+          "dllmain_detach_observed": 4
         },
         "msvcrt.dll": {
           "bound": true,
@@ -27472,6 +27355,9 @@
         "comctl32.dll": "2a53a0928333182841b15f7395b8db48a01b9016a2194e420f7c29780b6b212b",
         "comdlg32.dll": "88dc12a9b05acf4006b2bd87c0ac02b04558fe62e7985066563a499e2063f160",
         "coml2.dll": "a503cc5b92f4bd1e3fb10fd88ef8e0ebf2cab7ad9ec4a03ff01a8eae8edd4045",
+        "dplay.dll": "0ed89cc3472bcf0cb6b51ceefae57fb69c5d0079d099d11bc50ff3279dfec6f1",
+        "dplayx.dll": "c27b7d9a8a0ee8d202de02e38b0e4d54057259efdfa653ae1fb2413073857804",
+        "dpwsockx.dll": "7fea3de795289a9901e7d7601886d65029c85880cea273c682c55ea66dcaac68",
         "msvcrt.dll": "8161d40c05af35d2ca99ced2c4d4cead51b3a11d12104fb2ada2e22d67c89967",
         "ole32.dll": "af5a3bd5db02edd9747d383e515f0cd66fa309dd9b7d4e606d9746b79ef612ea",
         "oleaut32.dll": "83d80452bdb4c017ab938cb9d737ebe136b4e82d99b11bcb7615162c22cadee8",
@@ -27485,50 +27371,53 @@
       }
     },
     "h1": {
-      "adapter_ntdll_sha256": "2c94f3081d20bce35d336f7519c2217d73fa8ac98f7ae41a074ff90e4a2b3358",
+      "adapter_ntdll_sha256": "c8405060c771760cab523e6b993503ff368e647224cf8b8610d1919402e12643",
       "core_pe_sha256": {
-        "advapi32.dll": "ecbb4d0ab9fc42fe282ea3b96d58ca88518fe5ce6fe22d4b61fa0c4e67529223",
-        "avifil32.dll": "68a928f770ca0a0ff27d34c0831bda7b65da40d57bee955b20ce523e493b0c74",
-        "comctl32.dll": "60023ab3a5dcd5044c90bdc7973f6b9113a15b71378740b722da88f5b4ccadbd",
+        "advapi32.dll": "3f77f061c1bb639ff9ab96b7e0e3481c3e513d557410fab3ce9b8b312aa6ae55",
+        "avifil32.dll": "c77006a43c4294de7f3417d1dc1ed437061f79e64b6f472c797f65b349dc4ffb",
+        "ciukishell.dll": "5ce78ec5ad02e6e3b5faf8712eaa7e2e4a11d5563b91381b651c0b17d4812bb0",
+        "comctl32.dll": "8d7eb0beb67752e31f5ff2bc5d51cebd0e1da19d496a029dcefec0909143d1e3",
         "comdlg32.dll": "859b99b4b82f4aa5bfe8cd8586c1d7743fc4c92131777990aef2561cbce79c8c",
         "crtdll.dll": "1c56dd2bb2f3de7bc972924b8beaa6dad647c77bc09f5a6a915006344aeb36b4",
-        "ddraw.dll": "6bbfeebd08e1a24e9eae42e03e22b7a855005fb5d99dee72be9d6db68619980c",
-        "dinput.dll": "552620525c582c1b40a2477be350e3cb92a76f2d8243d29ddd181d0662ccec43",
-        "dinput8.dll": "1389d06459dd4445bed126f793eb38b17f14a00719559f9c18a65c85855ec791",
+        "ddraw.dll": "b4e8bf8d14349b096260b9f20beb87d0d0808f16d98b261d1d6dbec69303aa2b",
+        "dinput.dll": "001412e12e9566363236fa9848d35f62ffbe5ddb6f6c3434936cb71e8221a520",
+        "dinput8.dll": "8599cc4834c32db00aa7ecb5aae4061fdd47a7194f35868f0d3e3249e320df0f",
         "dplayx.dll": "5ba9965df79b392af4606b94956ae6fdbab4e7e4284898b4e5a813d61e1ea98b",
-        "dsetup.dll": "d1c48247c011618b98c152c0949053fad7b7a26260f1bad631fdd26194d98701",
-        "dsetup32.dll": "aa49303dcbc34618364e21bb52ac05349892dbdf8c71dbd0a168d9fc61101c9c",
-        "dsound.dll": "811c62a2a7baab464196430a5c40d6f5a0bd5053406c7b7a50c543de47013064",
-        "gdi32.dll": "f9eb26d9e82a235f470efdb60f4e76820968e9c52a488baea0d89da764c6cf22",
-        "gdiplus.dll": "c6ed204fc3d8f68cf74677bdf52c9c515c404264ea0a0173e19e5dcc5504b2e4",
-        "iccvid.dll": "5a81d929d57369e5f2cf30669e1e03d7f8853c3d79148697248a464239d79f6e",
-        "imaadp32.acm": "6d929c3e2fba7dd42d0c10f786f499aee047e4a9ceaa9550f28a471296098d48",
+        "dsetup.dll": "9274f53f6d5ca4922f3e262629afa2f14406520fcacd08f20aa9c39824e58c20",
+        "dsetup32.dll": "91f69e3ec7a682500427c439dc8192f5581b28b95deddf1376431b094eb23b58",
+        "dsound.dll": "855fa6414ce50d66d31b09f88484627690d289e11fbaa90cc917afa19addffd8",
+        "gdi32.dll": "272e1bf6d08308d1e1babf2398b04b379a9e35b129425fba47a7cc29d6827c37",
+        "gdiplus.dll": "3ed094b7673e3bc0814591e29113d7a92971e8c5958410fea9038154d7b5527f",
+        "iccvid.dll": "d8b3f834cb9bfe60ff3ce5c2da91c881b81596e18aec6bfb77d9c515642f9e6a",
+        "imaadp32.acm": "1e8e83eaaeb948317d7366ee9d4f300cbfb188b2473b2e7a86339c22d8868b90",
         "imm32.dll": "bfc0303ec9f37891e39d7bc340e3e5551035b1dc1758310b2482f1f2dd8200c6",
-        "iphlpapi.dll": "e36c51ac2e69d4f9a7a79f5d01521c18467e1139c502e9379fe9cf219ddedca6",
-        "kernel32.dll": "adeb033e1fe3f1cf2d90c0caf93526ad22103ede3f24718cdff1cdc170363146",
+        "iphlpapi.dll": "8cbacc90aa854c0db8cbd0e7fe7d5291e1cd7f7956b39f9a900234af36390f3b",
+        "kernel32.dll": "e3fcf3c5b41d6f3cf7cceeb2ac9643148d67850f21dfacfa615f4c291ceb73a8",
         "lz32.dll": "1e7e8dd8a9e4a57646395f0fbc20977bd2e4888e7137f6fe97d6b8beeb1b2dcb",
-        "mciavi32.dll": "c4c097fd72ec1c5ccc637db7a1c84598f39b18e84f1c96aa417773c1a6d48332",
-        "mlang.dll": "81d96685ce1a42c5afa7321b8d1a2e4805a4737eff60759dfdd9300ee7069d4d",
-        "mpr.dll": "94095be46f0c329b1717c969c4489c2279ab8fcefbf20deca952445a41bbd747",
-        "msacm32.dll": "8fdc8b104ed5e4d0737f59b50daae71de0346536daa99dad8e1e2b4f48fd6e9a",
-        "msadp32.acm": "9cc692be390c1c7bf98f69140e7a4f7c353e707804607829eb6732688c7c9455",
-        "msrle32.dll": "57954f8fe5688f8fba232ea7c63808e885ec62709e2fdffd858d4c093b9596d3",
-        "msvfw32.dll": "46a6368adf3a8579abcd1c755fe7d02e311f0178c22a6cd961412f92b0e1f380",
-        "msvidc32.dll": "663ca8015ed5242522501e1c1e593a870d580bff3d9f2217b88c694615047d35",
-        "ntdll.dll": "19d26d7630a0926b1ae0514f05364c3908735719155d4159340208eba9d6a76b",
-        "ole32.dll": "2f5c5765b15597d49ae48e1551be0f2a3bf1e1cddbc9f16d99bf7f6acb71e966",
-        "secur32.dll": "122366b92328a599a19d4d155fcbbf4e5be6e36d32cb42e41ac8e6602309a019",
-        "shdocvw.dll": "5b4209a4f04b87744d8f3a775940e8163a8ad6d682ca788188d030138540012d",
-        "shell32.dll": "0c94de808a244dffa80fe6aa639ed03f1dcfc18fb3c4be508f76047e52877415",
-        "urlmon.dll": "0fad75548bd0ae105a483402e4709379443685e4f43a497cc7afbe5a2b27e691",
-        "user32.dll": "d0f0e90e0ab39be5456cfe573e545a00b40e2d83ccf64c8228bf7048df8bfd05",
-        "uxtheme.dll": "a51ac7076997781eaba40e4f69fc053178531175e9b8aaa81826bc1112e8e2f1",
-        "version.dll": "a2315b21da32282c29c8e92ae5d2d83eaca56e058f0c18ca23e3c04ada603c3d",
-        "windowscodecs.dll": "6b7ffb77aefff6c9ddd67ff6701d85690fac49a2b023509d7beac2e2c62b8336",
-        "winmm.dll": "2f44c523598a104c819a6e8da0c6d59a1d646123ed7a0c0c13bd7759efba24ae",
-        "winspool.drv": "da4e1af89639718e0ceed444c470c0ffb647fde0cb4a27666197b02863f931a0",
-        "wintrust.dll": "61f628f3c65e13f9fdc43c509301c466646a351e1eea5d84ae8e9baa385efe9c",
-        "wsock32.dll": "fcd9c8f1bbb1d9bbcca74bd693bab883fc48ea7f36df49c8590e169deaa777ed"
+        "mciavi32.dll": "700277bb6a13f25b8ec75c5eb60675667c779a3e39142443cca3abc91b613cdc",
+        "mlang.dll": "e3d117fc469a7d84512e8e7b6dd8925ba8b340682076652a427fe305c4e56e91",
+        "mpr.dll": "6f9bf6248a70caeb0e6d40f7b2377546bfeca48fe1c5d0c91f9f700fdc81123b",
+        "msacm32.dll": "b5853213cd319d646f238d9fc23f03bca0d3c0923041a85f585f62c4fca7dd75",
+        "msadp32.acm": "04bc81ed9a3fbfe69f4032ee9002fb2dd7269310fae9e5c92c955ee4aeae3eb8",
+        "msrle32.dll": "d2aa53813b41f8cf3ac35df6d0d3a62d55d613a282277bb15a5ab7e46ccd23a2",
+        "msvfw32.dll": "5f0e1aa6f2220d0c01145e6fb48daa6fda636a5c754051cd4b5f6524958f47cb",
+        "msvidc32.dll": "97b04ea696fc40fb0da85dc85dcfa47fd7bcafef6a2c53da0a73594f573995bf",
+        "ntdll.dll": "c024665020981f5db0c5c92add93a0dea586314a0a25d7a0ad3db5a8b594d6e3",
+        "ole32.dll": "f41cd7a4e60118f32d455140bc25d073006dc62f31d5e076b1102f08338ea532",
+        "opengl32.dll": "3476a395375106ec5aecf7dbb3bfb25035c42e1857d8aa7255c7c084145b0466",
+        "secur32.dll": "aafff2cfb3a566e7ead499cf7206295fbe058a2d8f8ab711dfd33670b003be69",
+        "shdocvw.dll": "ce9853ecec3d7672418d2be3182df3da6ceb3332e117d665886f762d834fcf7d",
+        "shell32.dll": "0eb583699e3f5395c011a306f0f9cbce1ea3e4e12dca7e87d8ca870e9f7ca765",
+        "urlmon.dll": "7cf171c73ea1db4d4e81d82271b001f0483fad54717f078901899f5170cd9cc3",
+        "user32.dll": "c37f657ce010c2d162e1312049a569db80c8d918902901a037e780fd87144268",
+        "uxtheme.dll": "a98dff78d8ea63a30b6aba8520b4c3dd37f7ec04fdbd705c40f9345c04f8d107",
+        "version.dll": "2178a19894de306582014714c1dcf5e058d3553838ed3e6393551f9e6b1d6996",
+        "windowscodecs.dll": "dba4f13327018b67569964fcaff08895863ab94ddb53984d0a5f9aec25cac82d",
+        "winmm.dll": "64825d520494706103ae5677ae93a132210bffb49d777c05d05e4bed7882a1bf",
+        "winspool.drv": "5c0acac9dba5f495f335ea2f406d2b5875d48742dcb611b5f3a3f7a3ec42a8b0",
+        "wintrust.dll": "a09ce69f755507a0db0bd7d4a0ee51991c54b0dabab564f824077185d5d5c808",
+        "ws2_32.dll": "6567a2e5891fff71332cd62d6cde68a78d42206345baa6e083ebf4b00eac7d27",
+        "wsock32.dll": "a2601c1279d5bfd53d0c281f1ba4f24e116bd8871da7b6ded332ef5b9f3c3108"
       },
       "dlls": {
         "advpack.dll": {
@@ -27627,7 +27516,7 @@
           "exit": 0,
           "gate_calls": 0,
           "outcome": "loaded",
-          "resources": "DONE detach=11 gate_total=0 kernel_records=12 kernel_enosys=10 server_requests=0 server_unsupported=0 console_writes=0 enosys:0x00000109=3 enosys:0x00000006=2 enosys:0x0000010a=1 enosys:0x00000100=4 allocations=2 mappings=0"
+          "resources": "DONE detach=11 gate_total=0 kernel_records=15 kernel_enosys=13 server_requests=0 server_unsupported=0 console_writes=0 enosys:0x00000109=6 enosys:0x00000006=2 enosys:0x0000010a=1 enosys:0x00000100=4 allocations=2 mappings=0"
         },
         "cabinet.dll": {
           "attach": [
@@ -27653,7 +27542,7 @@
           "exit": 0,
           "gate_calls": 0,
           "outcome": "loaded",
-          "resources": "DONE detach=2 gate_total=0 kernel_records=9 kernel_enosys=8 server_requests=0 server_unsupported=0 console_writes=0 enosys:0x00000109=3 enosys:0x00000006=2 enosys:0x0000010a=1 enosys:0x00000100=2 allocations=2 mappings=0"
+          "resources": "DONE detach=2 gate_total=0 kernel_records=12 kernel_enosys=11 server_requests=0 server_unsupported=0 console_writes=0 enosys:0x00000109=6 enosys:0x00000006=2 enosys:0x0000010a=1 enosys:0x00000100=2 allocations=2 mappings=0"
         },
         "combase.dll": {
           "attach": [
@@ -27719,7 +27608,7 @@
           "exit": 0,
           "gate_calls": 0,
           "outcome": "loaded",
-          "resources": "DONE detach=7 gate_total=0 kernel_records=9 kernel_enosys=8 server_requests=0 server_unsupported=0 console_writes=0 enosys:0x00000109=3 enosys:0x00000006=2 enosys:0x0000010a=1 enosys:0x00000100=2 allocations=2 mappings=0"
+          "resources": "DONE detach=7 gate_total=0 kernel_records=12 kernel_enosys=11 server_requests=0 server_unsupported=0 console_writes=0 enosys:0x00000109=6 enosys:0x00000006=2 enosys:0x0000010a=1 enosys:0x00000100=2 allocations=2 mappings=0"
         },
         "comctl32.dll": {
           "attach": [
@@ -27777,7 +27666,7 @@
           "exit": 0,
           "gate_calls": 2,
           "outcome": "loaded",
-          "resources": "DONE detach=6 gate_total=2 kernel_records=9 kernel_enosys=8 server_requests=44 server_unsupported=0 console_writes=0 enosys:0x00000109=3 enosys:0x00000006=2 enosys:0x0000010a=1 enosys:0x00000100=2 allocations=2 mappings=0"
+          "resources": "DONE detach=6 gate_total=2 kernel_records=52 kernel_enosys=51 server_requests=44 server_unsupported=0 console_writes=0 enosys:0x00000109=7 enosys:0x00000006=2 enosys:0x0000010a=1 enosys:0x00000002=38 enosys:0x00000200=1 enosys:0x00000100=2 allocations=2 mappings=0"
         },
         "comdlg32.dll": {
           "attach": [
@@ -27851,7 +27740,7 @@
           "exit": 0,
           "gate_calls": 2,
           "outcome": "loaded",
-          "resources": "DONE detach=8 gate_total=2 kernel_records=9 kernel_enosys=8 server_requests=44 server_unsupported=0 console_writes=0 enosys:0x00000109=3 enosys:0x00000006=2 enosys:0x0000010a=1 enosys:0x00000100=2 allocations=2 mappings=0"
+          "resources": "DONE detach=8 gate_total=2 kernel_records=52 kernel_enosys=51 server_requests=44 server_unsupported=0 console_writes=0 enosys:0x00000109=7 enosys:0x00000006=2 enosys:0x0000010a=1 enosys:0x00000002=38 enosys:0x00000200=1 enosys:0x00000100=2 allocations=2 mappings=0"
         },
         "coml2.dll": {
           "attach": [
@@ -27877,7 +27766,7 @@
           "exit": 0,
           "gate_calls": 0,
           "outcome": "loaded",
-          "resources": "DONE detach=2 gate_total=0 kernel_records=9 kernel_enosys=8 server_requests=0 server_unsupported=0 console_writes=0 enosys:0x00000109=3 enosys:0x00000006=2 enosys:0x0000010a=1 enosys:0x00000100=2 allocations=2 mappings=0"
+          "resources": "DONE detach=2 gate_total=0 kernel_records=12 kernel_enosys=11 server_requests=0 server_unsupported=0 console_writes=0 enosys:0x00000109=6 enosys:0x00000006=2 enosys:0x0000010a=1 enosys:0x00000100=2 allocations=2 mappings=0"
         },
         "msvcrt.dll": {
           "attach": [
@@ -27895,7 +27784,7 @@
           "exit": 0,
           "gate_calls": 0,
           "outcome": "loaded",
-          "resources": "DONE detach=1 gate_total=0 kernel_records=9 kernel_enosys=8 server_requests=0 server_unsupported=0 console_writes=0 enosys:0x00000109=3 enosys:0x00000006=2 enosys:0x0000010a=1 enosys:0x00000100=2 allocations=2 mappings=0"
+          "resources": "DONE detach=1 gate_total=0 kernel_records=12 kernel_enosys=11 server_requests=0 server_unsupported=0 console_writes=0 enosys:0x00000109=6 enosys:0x00000006=2 enosys:0x0000010a=1 enosys:0x00000100=2 allocations=2 mappings=0"
         },
         "ole32.dll": {
           "attach": [
@@ -27961,7 +27850,7 @@
           "exit": 0,
           "gate_calls": 0,
           "outcome": "loaded",
-          "resources": "DONE detach=7 gate_total=0 kernel_records=9 kernel_enosys=8 server_requests=0 server_unsupported=0 console_writes=0 enosys:0x00000109=3 enosys:0x00000006=2 enosys:0x0000010a=1 enosys:0x00000100=2 allocations=2 mappings=0"
+          "resources": "DONE detach=7 gate_total=0 kernel_records=12 kernel_enosys=11 server_requests=0 server_unsupported=0 console_writes=0 enosys:0x00000109=6 enosys:0x00000006=2 enosys:0x0000010a=1 enosys:0x00000100=2 allocations=2 mappings=0"
         },
         "oleaut32.dll": {
           "attach": [
@@ -28035,7 +27924,7 @@
           "exit": 0,
           "gate_calls": 0,
           "outcome": "loaded",
-          "resources": "DONE detach=8 gate_total=0 kernel_records=9 kernel_enosys=8 server_requests=0 server_unsupported=0 console_writes=0 enosys:0x00000109=3 enosys:0x00000006=2 enosys:0x0000010a=1 enosys:0x00000100=2 allocations=2 mappings=0"
+          "resources": "DONE detach=8 gate_total=0 kernel_records=12 kernel_enosys=11 server_requests=0 server_unsupported=0 console_writes=0 enosys:0x00000109=6 enosys:0x00000006=2 enosys:0x0000010a=1 enosys:0x00000100=2 allocations=2 mappings=0"
         },
         "riched20.dll": {
           "attach": [
@@ -28117,7 +28006,7 @@
           "exit": 0,
           "gate_calls": 0,
           "outcome": "loaded",
-          "resources": "DONE detach=9 gate_total=0 kernel_records=10 kernel_enosys=8 server_requests=8 server_unsupported=0 console_writes=0 enosys:0x00000109=3 enosys:0x00000006=2 enosys:0x0000010a=1 enosys:0x00000100=2 allocations=2 mappings=0"
+          "resources": "DONE detach=9 gate_total=0 kernel_records=13 kernel_enosys=11 server_requests=8 server_unsupported=0 console_writes=0 enosys:0x00000109=6 enosys:0x00000006=2 enosys:0x0000010a=1 enosys:0x00000100=2 allocations=2 mappings=0"
         },
         "riched32.dll": {
           "attach": [
@@ -28207,7 +28096,7 @@
           "exit": 0,
           "gate_calls": 0,
           "outcome": "loaded",
-          "resources": "DONE detach=10 gate_total=0 kernel_records=10 kernel_enosys=8 server_requests=10 server_unsupported=0 console_writes=0 enosys:0x00000109=3 enosys:0x00000006=2 enosys:0x0000010a=1 enosys:0x00000100=2 allocations=2 mappings=0"
+          "resources": "DONE detach=10 gate_total=0 kernel_records=13 kernel_enosys=11 server_requests=10 server_unsupported=0 console_writes=0 enosys:0x00000109=6 enosys:0x00000006=2 enosys:0x0000010a=1 enosys:0x00000100=2 allocations=2 mappings=0"
         },
         "rpcrt4.dll": {
           "attach": [
@@ -28233,7 +28122,7 @@
           "exit": 0,
           "gate_calls": 0,
           "outcome": "loaded",
-          "resources": "DONE detach=2 gate_total=0 kernel_records=9 kernel_enosys=8 server_requests=0 server_unsupported=0 console_writes=0 enosys:0x00000109=3 enosys:0x00000006=2 enosys:0x0000010a=1 enosys:0x00000100=2 allocations=2 mappings=0"
+          "resources": "DONE detach=2 gate_total=0 kernel_records=12 kernel_enosys=11 server_requests=0 server_unsupported=0 console_writes=0 enosys:0x00000109=6 enosys:0x00000006=2 enosys:0x0000010a=1 enosys:0x00000100=2 allocations=2 mappings=0"
         },
         "setupapi.dll": {
           "attach": [
@@ -28291,7 +28180,7 @@
           "exit": 0,
           "gate_calls": 0,
           "outcome": "loaded",
-          "resources": "DONE detach=6 gate_total=0 kernel_records=12 kernel_enosys=10 server_requests=0 server_unsupported=0 console_writes=0 enosys:0x00000109=3 enosys:0x00000006=2 enosys:0x0000010a=1 enosys:0x00000100=4 allocations=2 mappings=0"
+          "resources": "DONE detach=6 gate_total=0 kernel_records=15 kernel_enosys=13 server_requests=0 server_unsupported=0 console_writes=0 enosys:0x00000109=6 enosys:0x00000006=2 enosys:0x0000010a=1 enosys:0x00000100=4 allocations=2 mappings=0"
         },
         "shcore.dll": {
           "attach": [
@@ -28317,7 +28206,7 @@
           "exit": 0,
           "gate_calls": 0,
           "outcome": "loaded",
-          "resources": "DONE detach=2 gate_total=0 kernel_records=9 kernel_enosys=8 server_requests=0 server_unsupported=0 console_writes=0 enosys:0x00000109=3 enosys:0x00000006=2 enosys:0x0000010a=1 enosys:0x00000100=2 allocations=2 mappings=0"
+          "resources": "DONE detach=2 gate_total=0 kernel_records=12 kernel_enosys=11 server_requests=0 server_unsupported=0 console_writes=0 enosys:0x00000109=6 enosys:0x00000006=2 enosys:0x0000010a=1 enosys:0x00000100=2 allocations=2 mappings=0"
         },
         "shell32.dll": {
           "attach": [
@@ -28375,7 +28264,7 @@
           "exit": 0,
           "gate_calls": 0,
           "outcome": "loaded",
-          "resources": "DONE detach=6 gate_total=0 kernel_records=9 kernel_enosys=8 server_requests=0 server_unsupported=0 console_writes=0 enosys:0x00000109=3 enosys:0x00000006=2 enosys:0x0000010a=1 enosys:0x00000100=2 allocations=2 mappings=0"
+          "resources": "DONE detach=6 gate_total=0 kernel_records=12 kernel_enosys=11 server_requests=0 server_unsupported=0 console_writes=0 enosys:0x00000109=6 enosys:0x00000006=2 enosys:0x0000010a=1 enosys:0x00000100=2 allocations=2 mappings=0"
         },
         "shlwapi.dll": {
           "attach": [
@@ -28425,7 +28314,7 @@
           "exit": 0,
           "gate_calls": 0,
           "outcome": "loaded",
-          "resources": "DONE detach=5 gate_total=0 kernel_records=9 kernel_enosys=8 server_requests=0 server_unsupported=0 console_writes=0 enosys:0x00000109=3 enosys:0x00000006=2 enosys:0x0000010a=1 enosys:0x00000100=2 allocations=2 mappings=0"
+          "resources": "DONE detach=5 gate_total=0 kernel_records=12 kernel_enosys=11 server_requests=0 server_unsupported=0 console_writes=0 enosys:0x00000109=6 enosys:0x00000006=2 enosys:0x0000010a=1 enosys:0x00000100=2 allocations=2 mappings=0"
         }
       },
       "pe_sha256": {
@@ -28465,16 +28354,19 @@
     "imm32",
     "msvcrt",
     "coml2",
-    "shcore"
+    "shcore",
+    "dplayx",
+    "dplay",
+    "dpwsockx"
   ],
   "msvcrt": {
     "method": "Wine side: actual PE and section-store model. Newlib side: static CiukiOS SDK ELF with every covered surface function referenced, --gc-sections, minus an empty program; MSVCRT ABI glue (FILE/_iob layout, _errno, locale, SEH/C++ EH, startup) not included.",
     "newlib": {
-      "covered": 74,
+      "covered": 75,
       "linked_bytes_over_empty": {
-        "bss": 0,
+        "bss": 40,
         "data": 420,
-        "text": 93542
+        "text": 104438
       },
       "missing": [
         "__iob_func",
@@ -28491,8 +28383,8 @@
         "_wopen",
         "wcscpy_s"
       ],
-      "sdk_libc_sha256": "cd8d9c82981bc3dd9018f054aaa7db21f9522c13856cee1ce36f9e22e70ccf3e",
-      "startup_pages_estimate": 24
+      "sdk_libc_sha256": "e5dfc95851ece618ae75bef1c116c6081aa4f889c515ae4f0fe2d2445887db3d",
+      "startup_pages_estimate": 27
     },
     "surface": [
       "__iob_func",
@@ -28562,6 +28454,7 @@
       "strncmp",
       "strrchr",
       "strtol",
+      "swscanf",
       "tolower",
       "toupper",
       "towlower",
@@ -28583,7 +28476,7 @@
       "wcstol",
       "wcstoul"
     ],
-    "surface_count": 87,
+    "surface_count": 88,
     "wine": {
       "exports": 1290,
       "file_bytes": 606208,
@@ -28594,11 +28487,16 @@
         "startup_committed_pages_model": 153
       },
       "size_of_image": 614400,
-      "surface_exported": 87
+      "surface_exported": 88
     }
   },
   "not_reused": {
     "imm32.dll": "The CiukiOS IMM32 W21 placeholder is smaller (3,072 file bytes, 20,480 SizeOfImage versus 102,400) with the same no-IME behaviour; the Wine build also needs twelve WIN32U system-call exports that only Wine and Windows 10 provide."
+  },
+  "pending_qualification": {
+    "dplay.dll": "f6-26: H0 binds; H1 execution is blocked by sandbox SIGSYS; DirectPlay end-to-end and Windows 98 interoperability gates remain",
+    "dplayx.dll": "f6-26: H0 binds; H1 execution is blocked by sandbox SIGSYS; DirectPlay end-to-end and Windows 98 interoperability gates remain",
+    "dpwsockx.dll": "f6-26: H0 binds; H1 execution is blocked by sandbox SIGSYS; DirectPlay end-to-end and Windows 98 interoperability gates remain"
   },
   "recipe": {
     "base_region": [
@@ -28625,7 +28523,10 @@
       "0007-kernelbase-retarget.patch": "4de38f4475f23eea73877b4a6ab13203a57cfb7be4df845c95e57241e32be0dd",
       "0008-kernelbase-compile-in.patch": "3cc7558345be2bdc19182c63020a6435c9a346aefc2e33674485622651bf739f",
       "0009-shell32-wine-private-calls.patch": "7ad67fb7f42f39aff801fbf355b7e1ef4ae24e8ab9461529971a3bd96df56eca",
-      "0010-msvcrt-sbcs-code-page.patch": "f8a8a9fd32068f1178b327a4f6b727a0319ad6104ceb5750f6d0bd3e7c442870"
+      "0010-msvcrt-sbcs-code-page.patch": "f8a8a9fd32068f1178b327a4f6b727a0319ad6104ceb5750f6d0bd3e7c442870",
+      "0011-directplay-lan.patch": "bfd3ed25ec82479e9b195f4c2abafc2dd1445948ddbc12ecf3e07a13322f66eb",
+      "0012-directplay-lobby.patch": "7a48280f6b928187c8dc74f8bb4ccf6856dec440a22cd67e23f46387cfd24383",
+      "0013-directplay-enumeration.patch": "fa3d13ff507e75f0b7f549ff65cdd9ac251b486532f3eb569988b4655d4d8415"
     },
     "strip": "llvm-objcopy --strip-all"
   },
@@ -28657,7 +28558,7 @@
     "wine-private": "Wine-private helper with no Windows 98 meaning; a Wine-side source patch removes the call path. No Wine-private export enters the core."
   },
   "schema": 2,
-  "status": "built twice identically with patches 0001-0010; re-audited against the core; 16 reused PEs qualified by the recorded H0 binding and H1 DllMain evidence and staged in the image builtin store (f5-20D); the guest case w32-upper-dlls-qemu-t23 is the gate for their use; the others are rejected by T1",
+  "status": "built twice identically with the recorded patches; re-audited against the core; 16 reused PEs qualified by the recorded H0 binding and H1 DllMain evidence and staged in the image builtin store (f5-20D); the guest case w32-upper-dlls-qemu-t23 is the gate for their use; the others are rejected by T1",
   "w21_bound": [
     {
       "importer": "combase.dll",
@@ -28847,6 +28748,15 @@
       "provider": "kernel32.dll",
       "status": "W21 typed failure",
       "symbol": "ReleaseActCtx"
+    },
+    {
+      "importer": "dpwsockx.dll",
+      "kind": "import",
+      "linked": "kernel32.dll",
+      "name": "SetThreadDescription",
+      "provider": "kernel32.dll",
+      "status": "W21 typed failure",
+      "symbol": "SetThreadDescription"
     },
     {
       "importer": "msvcrt.dll",
