@@ -205,6 +205,12 @@ static int boot_save(void *ctx, const char *text, size_t length)
 {
     char previous[CP_BOOT_MAX]; size_t n = 0;
     if (length >= CP_BOOT_MAX || boot_load(ctx, previous, sizeof(previous), &n)) return -1;
+    /* sec-sysvc: BOOT.CFG is a sealed boot input; an administrator saves it
+     * through the SYSTEM boot-configuration service (it restores the old
+     * text itself after a failed write). ENOSYS: an older kernel; ENODEV:
+     * no managed system volume (Setup media), where the file is written. */
+    if (!ciuki_boot_config_set(text, length)) return 0;
+    if (errno != ENOSYS && errno != ENODEV) return -1;
     int fd = open("/system/BOOT.CFG", O_RDWR | O_CLOEXEC);
     if (fd < 0) return -1;
     int r = boot_write(fd, text, length);
@@ -232,9 +238,25 @@ static int hw_load(void *ctx, char *text, size_t size, size_t *length)
     text[n] = 0; *length = n;
     return 0;
 }
+/* sec-sysvc2: HWPROF.CFG, performance.cfg and accel-retry.cfg are sealed
+ * boot inputs (the loader and the kernel read them at the next start). An
+ * administrator saves them through the SYSTEM setting service (EPERM for
+ * other accounts); ENOSYS (an older kernel) or ENODEV (no managed system
+ * volume) keep the direct file write. 1: write the file yourself. */
+static int setting_service(unsigned setting, const char *text, size_t length, int *error)
+{
+    *error = 0;
+    if (!ciuki_system_setting_set(setting, text, length)) return 0;
+    if (errno != ENOSYS && errno != ENODEV) { *error = -errno; return 0; }
+    return 1;
+}
 /* Atomic replace: temporary file, fsync, rename (cfg_write_at). */
 static int hw_save(void *ctx, const char *text, size_t length)
-{ (void)ctx; int e = cfg_write_at(CP_HW_FILE, "/system/HWPROF.TMP", text, length); return e ? -e : 0; }
+{
+    (void)ctx; int e;
+    if (!setting_service(CIUKI_SYSTEM_SETTING_HWPROFILES, text, length, &e)) return e;
+    e = cfg_write_at(CP_HW_FILE, "/system/HWPROF.TMP", text, length); return e ? -e : 0;
+}
 static uint32_t boot_serial(void *ctx)
 {
     (void)ctx; struct ciuki_recovery_status status;
@@ -258,7 +280,9 @@ static int perf_save(void *ctx, const struct system_perf *p)
     char text[256];
     int n = snprintf(text, sizeof(text), "version=1\nrole=%u\nread_ahead=%u\ngraphics=%u\nvm=%u\nmin_mb=%u\nmax_mb=%u\n",
         p->role, p->read_ahead, p->graphics, p->vm, p->min_mb, p->max_mb);
-    int e = cfg_write_at(SYSTEM_PERF_PATH, CFG_DIR "/performance.tmp", text, (size_t)n);
+    int e;
+    if (!setting_service(CIUKI_SYSTEM_SETTING_PERFORMANCE, text, (size_t)n, &e)) return e; /* sec-sysvc2 */
+    e = cfg_write_at(SYSTEM_PERF_PATH, CFG_DIR "/performance.tmp", text, (size_t)n);
     return e ? -e : 0;
 }
 static int memory_query(void *ctx, uint64_t *total_k, uint64_t *free_k)
@@ -325,6 +349,17 @@ static int pack_present(const struct ndp_device *d)
     }
     free(info); return found;
 }
+/* sec-sysvc: the driver store is sealed (K-Q4); the SYSTEM driver-pack
+ * service installs and removes packages after an administrator check, reads
+ * the package folder as this user and verifies every byte it writes. */
+static int pack_service(struct ciuki_driver_pack_job *job,char reason[160])
+{
+    job->version=CIUKI_DRIVER_PACK_JOB_VERSION; job->size=sizeof(*job);
+    int r=ciuki_driver_pack(job) ? -errno : 0;
+    snprintf(reason,160,"%s",job->reason[0] ? job->reason : r==-EPERM ? "You must be an administrator to change driver packages." :
+             r ? "The driver package service is unavailable." : "");
+    return r;
+}
 static int pack_install(void *ctx,const struct dp_plan *plan,const char *root,char reason[160])
 {
     (void)ctx;
@@ -335,21 +370,25 @@ static int pack_install(void *ctx,const struct dp_plan *plan,const char *root,ch
             snprintf(reason,160,"Qualification changed or the driver host is busy. Select the package again."); return -EBUSY;
         }
     }
-    /* /System already belongs to the installed OS; never create a source-media store. */
-    if(mkdir(NDP_ROOT,0700) && errno!=EEXIST) { snprintf(reason,160,"The system driver store is unavailable."); return -errno; }
-    return dp_install(plan,root,NDP_ROOT,reason);
-}
-static int pack_busy(void *ctx,const struct ndp_device *d)
-{
-    (void)ctx; struct ciuki_driver_pack_query q;
-    /* Fail closed: an unreadable host state counts as busy. */
-    return pack_query(d,NULL,&q) || q.busy;
+    struct ciuki_driver_pack_job *job=calloc(1,sizeof(*job));
+    if(!job) { snprintf(reason,160,"Not enough memory to install the package."); return -ENOMEM; }
+    if(strlen(root)>=sizeof(job->root)) { free(job); snprintf(reason,160,"The location is too long."); return -ENAMETOOLONG; }
+    job->action=CIUKI_DRIVER_PACK_INSTALL; strcpy(job->root,root);
+    job->manifest=(uint32_t)(uintptr_t)&plan->manifest; job->manifest_bytes=sizeof(plan->manifest);
+    job->sources=(uint32_t)(uintptr_t)plan->source; job->source_bytes=plan->manifest.file_count*(uint32_t)sizeof(plan->source[0]);
+    int r=pack_service(job,reason);
+    free(job);
+    return r;
 }
 static int pack_remove(void *ctx,const struct ndp_device *d,char reason[160])
 {
     (void)ctx;
     if(!pack_present(d)) { snprintf(reason,160,"Device changed or is quarantined. Refresh the inventory."); return -EBUSY; }
-    return dp_uninstall_checked(d,NDP_ROOT,pack_busy,ctx,reason);
+    /* The service checks the host as SYSTEM: an unreadable host state counts as busy. */
+    struct ciuki_driver_pack_job job; memset(&job,0,sizeof(job));
+    job.action=CIUKI_DRIVER_PACK_REMOVE; job.bus=d->bus; job.slot=d->slot; job.function=d->function;
+    job.vendor=d->vendor; job.device=d->device; job.sub_vendor=d->sub_vendor; job.sub_device=d->sub_device; job.revision=d->revision;
+    return pack_service(&job,reason);
 }
 /* The id database is intentionally opened on first Device Manager lookup.
  * Its generator emits a flat, deterministic JSON object with no escaped
@@ -524,6 +563,10 @@ static int accel_retry(void *ctx)
 {
     struct cp_main *m=ctx;
     if (!m->engine_ok || m->generic_engine.version!=CIUKI_DISPLAY_ENGINE_VERSION) return -EAGAIN;
+    /* sec-sysvc2: the retry request is a sealed boot input (setting_service). */
+    char text[48]; int n=cp_accel_retry_text(&m->generic_engine,text,sizeof(text)),e;
+    if (n<0) return n;
+    if (!setting_service(CIUKI_SYSTEM_SETTING_ACCEL_RETRY,text,(size_t)n,&e)) return e;
     return cp_accel_retry_request(CP_ACCEL_RETRY_PATH,&m->generic_engine);
 }
 static int engine_query(void *ctx, struct ciuki_accel_info *info)
@@ -546,6 +589,15 @@ static int network_poll(void *ctx,struct cp_network_result *result)
 { return network_worker_poll(&((struct cp_main *)ctx)->network_worker,result); }
 static int log_read(void *ctx,uint32_t offset,char *text,size_t cap,size_t *length,uint32_t *total)
 {
+    /* sec-sysvc: the boot log is a system log; administrators read it
+     * through the SYSTEM log service (Event Viewer model). ENOSYS (an older
+     * kernel) or ENODEV (no system volume for the service): read the file. */
+    size_t got=0; uint32_t size=0;
+    if (cap>CIUKI_SYSTEM_LOG_DATA_MAX) cap=CIUKI_SYSTEM_LOG_DATA_MAX;
+    if (!ciuki_system_log_read(CIUKI_SYSTEM_LOG_MACHINE,"BOOT.LOG",offset,text,cap,&got,&size)) {
+        *length=got; *total=size; return 0;
+    }
+    if (errno!=ENOSYS && errno!=ENODEV) return -errno;
     (void)ctx; int fd=open(CP_LOG_FILE,O_RDONLY|O_CLOEXEC);
     if (fd<0) return -errno;
     struct stat st;

@@ -444,9 +444,11 @@ static void test_reboot(void)
 /* A first boot cut after OWNER's durable RESERVE and before ACCOUNT's
  * intent (second volume with the same ready provisioning). The next boot
  * opens the store and OWNER aborts the orphan from ACCOUNT's evidence (no
- * COMMIT_REQUIRED); the abort retires G and the reserved ids (contract 3.5:
- * watermarks never decrease), so the ready recipe's uid 1000 cannot be
- * created again: the installation stays closed (fail closed, repair). */
+ * COMMIT_REQUIRED, contract 3.5). sec-sysvc (lead decision): because every
+ * receipt was aborted before any batch committed, the recipe's uid 1000 may
+ * be reserved again, so the installation opens at the next generation; the
+ * aborted generation and transaction stay retired. A uid that was never
+ * reserved, or any uid once a batch has committed, stays retired (H02). */
 static void test_reserve_cut(void)
 {
     CHECK(!owner_system_attach(volume_vfs,2,volume_id,false) && owner_system_state()==OWNER_SYSTEM_UNPROVISIONED);
@@ -459,14 +461,31 @@ static void test_reserve_cut(void)
     owner_system_detach(); CHECK(!owner_system_attach(volume_vfs,2,volume_id,false) && owner_system_state()==OWNER_SYSTEM_OPEN);
     const struct owner_store *o=volume_vfs->policy[2]->owners;
     CHECK(!o->active && !o->profile_count && o->receipt_count==1 && !o->generation && o->transaction_high==1 && o->uid_high==1001);
+    CHECK(o->receipts[0]->state==OWNER_ABORTED);
     tables=service_tables();
     CHECK(!acct_server_init(&service_server,&tables,0)); service_server.tree=&service_tree;
-    CHECK(acct_server_open(&service_server,0)==1 && !service_server.service.available && service_server.firstboot_result==-EIO);
-    struct acct_bootstrap b; CHECK(!acct_boot_read(&service_server.service.store,&b) && b.state==ACCT_UNPROVISIONED);
-    CHECK(!o->profile_count && o->receipt_count==1 && !exists_at("/System/Security/accounts.db") && !exists_at("/Windows/Profiles/u000003e8"));
+    int opened=acct_server_open(&service_server,0);
+    if (opened!=1 || service_server.firstboot_result!=ACCT_FIRSTBOOT_PROMOTED)
+        printf("  resume after the cut: open=%d available=%d firstboot=%d\n",opened,service_server.service.available,service_server.firstboot_result);
+    CHECK(opened==1 && service_server.service.available && service_server.firstboot_result==ACCT_FIRSTBOOT_PROMOTED);
+    const struct acct_db *d=&service_server.service.db;
+    CHECK(d->count==3 && d->generation==2 && d->auto_logon_uid==1000 && d->records[2].uid==1000 && !strcmp(d->records[2].name,"CiukiUser"));
+    struct acct_bootstrap b; CHECK(!acct_boot_read(&service_server.service.store,&b) && b.state==ACCT_CONSUMED && b.accounts_generation==2);
+    CHECK(o->profile_count==3 && o->receipt_count==2 && o->receipts[0]->state==OWNER_ABORTED && o->receipts[1]->state==OWNER_COMMITTED);
+    CHECK(o->generation && o->transaction_high==2 && o->uid_high==1001 && !o->active);
+    CHECK(o->profiles[2].binding.uid==1000 && !strcmp(o->profiles[2].binding.path,"/Windows/Profiles/u000003e8"));
+    CHECK(exists_at("/System/Security/accounts.db") && exists_at("/Windows/Profiles/u000003e8/Settings") && !exists_at("/System/Security/provision.seed"));
+    acct_server_close(&service_server);
+    /* The next boot reopens the published store; nothing is resumed again. */
+    owner_system_detach(); CHECK(!owner_system_attach(volume_vfs,2,volume_id,false) && owner_system_state()==OWNER_SYSTEM_OPEN);
+    o=volume_vfs->policy[2]->owners; CHECK(o->profile_count==3 && o->receipt_count==2);
+    tables=service_tables();
+    CHECK(!acct_server_init(&service_server,&tables,0)); service_server.tree=&service_tree;
+    CHECK(acct_server_open(&service_server,0)==1 && service_server.service.available && service_server.firstboot_result==ACCT_FIRSTBOOT_NOTHING);
+    CHECK(service_server.service.db.generation==2);
     acct_server_close(&service_server);
     owner_system_detach();
-    puts("H15 sec-own cut after OWNER RESERVE: orphan aborted at the next boot, retired uid 1000 keeps the ready recipe closed (no account, no profile; contract watermark rule) PASS");
+    puts("H15 sec-sysvc cut after OWNER RESERVE: orphan aborted at the next boot, uid 1000 (only aborted reservations, nothing ever committed) reserved again, ready recipe promoted at generation 2, reboot opens without resume PASS");
 }
 int main(int argc, char **argv)
 {

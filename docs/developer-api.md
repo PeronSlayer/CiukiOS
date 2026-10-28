@@ -3588,8 +3588,432 @@ char first_problem[64];
 
 ```c
 };
+```
 
+---- sec-sysvc: SYSTEM services on call 99 (user-security-kernel.md
+"SYSTEM services and logs", K-Q4). The kernel checks the caller's retained
+subject, then acts as SYSTEM on fixed targets; a caller-chosen input is read
+as the caller and no SYSTEM descriptor is handed out. EPERM: not an
+administrator (or SYSTEM). EDX is the exact record size.
+BOOT_CONFIG SET (administrators): C:\SYSTEM\BOOT.CFG becomes `length`
+bytes of `text` (printable ASCII, tab, CR, LF; the loader's 127 at most);
+the previous text is restored when the write fails.
+LOG: MACHINE scope is C:\SYSTEM\LOGS. LIST and READ are for administrators
+(Event Viewer model); its files are written by SYSTEM, except APPEND of the
+maintenance reports SCANDISK.LOG and SFC.LOG by an administrator. USER scope
+is the caller's own log folder, <profile>\Local Settings\Application Data\
+CiukiOS\Logs, listed, read and written as the caller; a session without a
+profile (the interim administrator session of a first boot) uses
+C:\SYSTEM\LOGS\Users\u<8 hex uid>. Names are 8.3 of [A-Za-z0-9_-]; MACHINE
+names may also be Users/u<8 hex>/NAME. LIST returns the index-th file
+(ENOENT past the last); READ copies `bytes` (at most DATA_MAX) from
+`offset`; APPEND starts the file over when it would pass `limit`; REPLACE
+rewrites it. `total` returns the file size.
+DRIVER_PACK (administrators): INSTALL copies the files named by the sealed
+package manifest (the exact manifest.ndp image) from `root`, read as the
+caller, into C:\SYSTEM\DRIVERS\<package>, verifying every byte; REMOVE
+deletes the adapter's installed package once its host is stopped. The
+result is 0 or -errno; `reason` says what happened in words.
+SFC_RESTORE (administrators): System File Checker's "Restore file" for any
+file of the sealed baseline C:\SYSTEM\SFC.LST: `source` + `path`, read as
+the caller, must have the baseline's size and SHA-256 (EILSEQ otherwise;
+ENOENT: not in the baseline); the current file is first copied to
+C:\SYSTEM\Helpdesk\SFC, then the original replaces it in one rename.
 
+```c
+#define CIUKI_RECOVERY_BOOT_CONFIG 5u
+#define CIUKI_RECOVERY_LOG 6u
+#define CIUKI_RECOVERY_DRIVER_PACK 7u
+#define CIUKI_RECOVERY_SFC_RESTORE 8u
+#define CIUKI_BOOT_CONFIG_VERSION 1u
+#define CIUKI_BOOT_CONFIG_SET 1u
+#define CIUKI_BOOT_CONFIG_MAX 127u
+struct ciuki_boot_config {
+    uint32_t version;
+```
+
+0
+
+```c
+uint32_t size;
+```
+
+4
+
+```c
+uint32_t action;
+```
+
+8: CIUKI_BOOT_CONFIG_SET
+
+```c
+uint32_t length;
+```
+
+12: bytes of text
+
+```c
+char text[128];
+```
+
+16
+
+```c
+};
+
+#define CIUKI_SYSTEM_LOG_VERSION 1u
+#define CIUKI_SYSTEM_LOG_LIST 1u
+#define CIUKI_SYSTEM_LOG_READ 2u
+#define CIUKI_SYSTEM_LOG_APPEND 3u
+#define CIUKI_SYSTEM_LOG_REPLACE 4u
+#define CIUKI_SYSTEM_LOG_MACHINE 1u
+#define CIUKI_SYSTEM_LOG_USER 2u
+#define CIUKI_SYSTEM_LOG_NAME_MAX 48u
+#define CIUKI_SYSTEM_LOG_DATA_MAX 65536u
+#define CIUKI_SYSTEM_LOG_LIMIT 65536u
+#define CIUKI_SYSTEM_LOG_LIMIT_MAX 1048576u
+struct ciuki_system_log {
+    uint32_t version;
+```
+
+0
+
+```c
+uint32_t size;
+```
+
+4
+
+```c
+uint32_t action;
+```
+
+8: CIUKI_SYSTEM_LOG_*
+
+```c
+uint32_t scope;
+```
+
+12: MACHINE or USER
+
+```c
+uint32_t index;
+```
+
+16: LIST
+
+```c
+uint32_t offset;
+```
+
+20: READ
+
+```c
+uint32_t buffer;
+```
+
+24: READ, APPEND, REPLACE: data address
+
+```c
+uint32_t bytes;
+```
+
+28: READ: capacity in, bytes out; APPEND, REPLACE: bytes
+
+```c
+uint32_t total;
+```
+
+32: out: the file's size
+
+```c
+uint32_t limit;
+```
+
+36: APPEND: 0 is CIUKI_SYSTEM_LOG_LIMIT
+
+```c
+uint32_t reserved[2];
+```
+
+40
+
+```c
+char name[48];
+```
+
+48: NUL terminated; LIST returns it
+
+```c
+};
+
+#define CIUKI_DRIVER_PACK_JOB_VERSION 1u
+#define CIUKI_DRIVER_PACK_INSTALL 1u
+#define CIUKI_DRIVER_PACK_REMOVE 2u
+#define CIUKI_DRIVER_PACK_MANIFEST_BYTES 48088u
+#define CIUKI_DRIVER_PACK_SOURCE_BYTES 192u
+#define CIUKI_DRIVER_PACK_FILES 32u
+struct ciuki_driver_pack_job {
+    uint32_t version;
+```
+
+0
+
+```c
+uint32_t size;
+```
+
+4
+
+```c
+uint32_t action;
+```
+
+8: INSTALL or REMOVE
+
+```c
+uint32_t manifest;
+```
+
+12: INSTALL: address of the sealed manifest image
+
+```c
+uint32_t manifest_bytes;
+```
+
+16: CIUKI_DRIVER_PACK_MANIFEST_BYTES
+
+```c
+uint32_t sources;
+```
+
+20: INSTALL: one 192-byte path per manifest file, relative to root
+
+```c
+uint32_t source_bytes;
+```
+
+24: file count times 192
+
+```c
+uint32_t reserved;
+```
+
+28
+
+```c
+uint32_t bus;
+```
+
+32: REMOVE: the adapter
+
+```c
+uint32_t slot;
+```
+
+36
+
+```c
+uint32_t function;
+```
+
+40
+
+```c
+uint32_t vendor;
+```
+
+44
+
+```c
+uint32_t device;
+```
+
+48
+
+```c
+uint32_t sub_vendor;
+```
+
+52
+
+```c
+uint32_t sub_device;
+```
+
+56
+
+```c
+uint32_t revision;
+```
+
+60
+
+```c
+char root[256];
+```
+
+64: INSTALL: the package folder, a native path
+
+```c
+char reason[160];
+```
+
+320: out: the outcome in words
+
+```c
+};
+
+#define CIUKI_SFC_RESTORE_VERSION 1u
+struct ciuki_sfc_restore {
+    uint32_t version;
+```
+
+0
+
+```c
+uint32_t size;
+```
+
+4
+
+```c
+uint32_t reserved[2];
+```
+
+8
+
+```c
+char path[160];
+```
+
+16: the baseline path, as /System/VMM.ELF
+
+```c
+char source[256];
+```
+
+176: the folder holding the originals, a native path
+
+```c
+};
+```
+
+---- end sec-sysvc ----
+
+---- sec-sysvc2: SYSTEM jobs and sealed boot settings on call 99
+(user-security-kernel.md, sec-sysvc2 amendment). Same model as the
+services above: the kernel checks the caller's retained subject, then acts
+as SYSTEM on fixed targets.
+JOB (every live session subject, administrators, standard users, Guest,
+and SYSTEM): scheduled system maintenance runs as SYSTEM, never as the
+session user (Windows XP runs it under LocalSystem). STARTUP_REPORT appends
+every ScanDisk check this start ran (REPORT) to C:\SYSTEM\LOGS\SCANDISK.LOG,
+once per start and drive, formatted by the kernel from its own record; no
+caller data reaches the log. `done` returns the reports this call appended.
+SETTING SET (administrators, or SYSTEM): a sealed boot setting, a file the
+kernel or the loader reads at the next start, becomes `length` bytes read
+from `buffer`: HWPROFILES C:\SYSTEM\HWPROF.CFG (printable text, tab, CR,
+LF, at most SETTING_MAX), PERFORMANCE C:\SYSTEM\SETTINGS\performance.cfg
+(a complete valid performance record), ACCEL_RETRY the display retry
+request C:\SYSTEM\SETTINGS\accel-retry.cfg (exactly
+"driver=<id>\npci=<vvvv>:<dddd>\n" of DM8: id 1..15 of [a-z0-9_-],
+lowercase hex). EINVAL otherwise; the previous text is restored when the
+write fails.
+
+```c
+#define CIUKI_RECOVERY_JOB 9u
+#define CIUKI_RECOVERY_SETTING 10u
+#define CIUKI_SYSTEM_JOB_VERSION 1u
+#define CIUKI_SYSTEM_JOB_STARTUP_REPORT 1u
+struct ciuki_system_job {
+    uint32_t version;
+```
+
+0
+
+```c
+uint32_t size;
+```
+
+4
+
+```c
+uint32_t job;
+```
+
+8: CIUKI_SYSTEM_JOB_*
+
+```c
+uint32_t done;
+```
+
+12: out: work done by this call (reports appended)
+
+```c
+uint32_t reserved[4];
+```
+
+16: zero
+
+```c
+};
+
+#define CIUKI_SYSTEM_SETTING_VERSION 1u
+#define CIUKI_SYSTEM_SETTING_SET 1u
+#define CIUKI_SYSTEM_SETTING_HWPROFILES 1u
+#define CIUKI_SYSTEM_SETTING_PERFORMANCE 2u
+#define CIUKI_SYSTEM_SETTING_ACCEL_RETRY 3u
+#define CIUKI_SYSTEM_SETTING_MAX 24575u
+struct ciuki_system_setting {
+    uint32_t version;
+```
+
+0
+
+```c
+uint32_t size;
+```
+
+4
+
+```c
+uint32_t action;
+```
+
+8: CIUKI_SYSTEM_SETTING_SET
+
+```c
+uint32_t setting;
+```
+
+12: HWPROFILES, PERFORMANCE or ACCEL_RETRY
+
+```c
+uint32_t buffer;
+```
+
+16: address of the text
+
+```c
+uint32_t length;
+```
+
+20: bytes of text
+
+```c
+uint32_t reserved[2];
+```
+
+24: zero
+
+```c
+};
+```
+
+---- end sec-sysvc2 ----
+
+```c
 struct ciuki_spawn_fd {
     int32_t source;
 ```
@@ -7992,6 +8416,7 @@ SPDX-License-Identifier: MIT
 ```c
 #ifndef CIUKI_USER_RECOVERY_H
 #define CIUKI_USER_RECOVERY_H
+#include <stddef.h>
 #include <ciuki/abi.h>
 ```
 
@@ -8027,6 +8452,48 @@ The check that ran on drive at this start (RAN clear: none).
 
 ```c
 int ciuki_scandisk_report(unsigned drive, struct ciuki_scandisk *out);
+```
+
+sec-sysvc: SYSTEM services of call 99 (abi.h "SYSTEM services"). Each
+returns 0, or -1 with errno (EPERM: not an administrator; ENOENT: no such
+log, or LIST past the last entry).
+boot_config_set: C:\SYSTEM\BOOT.CFG becomes text (administrators).
+system_log_list/read: scope CIUKI_SYSTEM_LOG_MACHINE (the system logs,
+administrators) or CIUKI_SYSTEM_LOG_USER (the caller's own logs); read
+copies at most CIUKI_SYSTEM_LOG_DATA_MAX bytes from offset, *total is the
+file size. system_log_write: append (replace 0; the file starts over past
+limit, 0 for CIUKI_SYSTEM_LOG_LIMIT) or rewrite one of the caller's own
+logs; MACHINE accepts only an administrator's append of SCANDISK.LOG and
+SFC.LOG. driver_pack: the job record (version, size and action filled in by
+the caller); job->reason receives the outcome even on failure.
+
+```c
+int ciuki_boot_config_set(const char *text, size_t length);
+int ciuki_system_log_list(unsigned scope, unsigned index, char name[CIUKI_SYSTEM_LOG_NAME_MAX], uint32_t *total);
+int ciuki_system_log_read(unsigned scope, const char *name, uint32_t offset, void *buffer, size_t capacity,
+                          size_t *got, uint32_t *total);
+int ciuki_system_log_write(unsigned scope, const char *name, int replace, const void *data, size_t bytes, uint32_t limit);
+int ciuki_driver_pack(struct ciuki_driver_pack_job *job);
+```
+
+System File Checker "Restore file" (administrators): source + path must be
+the baseline's original (EILSEQ otherwise, ENOENT: not in SFC.LST).
+
+```c
+int ciuki_sfc_restore(const char *path, const char *source);
+```
+
+sec-sysvc2: SYSTEM jobs and sealed boot settings of call 99 (abi.h
+"sec-sysvc2"). Each returns 0, or -1 with errno.
+system_job: run a CIUKI_SYSTEM_JOB_* as SYSTEM (every session, Guest too);
+*done (optional) counts the work done, e.g. the ScanDisk reports appended.
+system_setting_set: a sealed boot setting (CIUKI_SYSTEM_SETTING_HWPROFILES,
+_PERFORMANCE, _ACCEL_RETRY) becomes text (administrators; EPERM otherwise,
+EINVAL for text the kernel would not accept).
+
+```c
+int ciuki_system_job(unsigned job, uint32_t *done);
+int ciuki_system_setting_set(unsigned setting, const char *text, size_t length);
 #endif
 ```
 

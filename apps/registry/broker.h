@@ -40,6 +40,7 @@ struct rb_link {
     int win32;
     struct rb_identity identity;
 };
+struct rb_checker;
 struct rb_broker {
     struct rb_authority authority;
     struct rb_storage storage;
@@ -49,6 +50,8 @@ struct rb_broker {
     struct rb_link links[RB_LINK_MAX];
     uint32_t high_id;
     int busy, faulted;
+    /* sec-sysvc2: Registry Checker (checker.h); NULL refuses RB_CHECKER_*. */
+    struct rb_checker *checker;
 };
 void rb_storage_posix(struct rb_storage *);
 int rb_init(struct rb_broker *,const struct rb_authority *,const struct rb_storage *,struct wr_server *);

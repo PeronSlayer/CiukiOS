@@ -268,6 +268,21 @@ restart prompt). Restoring needs no other registry writer, so the
 Terminal refuses `/RESTORE` unless the start is "Command prompt only"
 (Windows 98: "you must use the MS-DOS-based utility outside of Windows").
 
+*sec-sysvc2 amendment (user security, `docs/validation/sec-sysvc2.md`):*
+since sec-k06 the registry is the SYSTEM registry broker's, so Registry
+Checker runs there (`apps/registry/checker.c`, engine `regcheck.c`). A
+backup holds the broker's machine registry (native System and Programs
+roots, the committed Win32 machine hive slot under
+`C:\SYSTEM\SECURITY\REGISTRY\MACHINE`), BOOT.CFG, HWPROF.CFG and the settings
+files; `C:\SYSTEM\SYSBCKUP` is SYSTEM-only. Listing, backups, `/RESTORE` and
+`/FIX` are for administrators; the daily backup is a SYSTEM job every
+session's desktop asks for, made once a local day by the broker's clock. A
+restore is applied by the broker at the next start, before anything uses the
+registry (so `/RESTORE` no longer needs Command prompt only); a damaged root
+is restored at that start and the desktop reports it. The desktop's at-start
+ScanDisk reports are appended to SCANDISK.LOG by the kernel as SYSTEM
+(call 99 JOB), whoever logs on.
+
 ### 2.6 System File Checker
 
 `scripts/build_image.py` writes `/System/SFC.LST` (the `Default.sfc`
