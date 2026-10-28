@@ -326,6 +326,8 @@ static __attribute__((noinline)) int user_program(struct cp_program_store *s,
     const char *root_path,const char *name,unsigned root,struct desk_uninstall_entry *r,
     const struct desk_uninstall_entry *out,int n)
 {
+    /* U6-4: retain the runtime probe on disk, outside Add/Remove Programs. */
+    if (root && !strcasecmp(name,"sectest")) return 0;
     char full[1024];int e;
     *r=(struct desk_uninstall_entry){.kind=root ? DESK_PROGRAM_NATIVE : DESK_PROGRAM_DOS};
     int len=snprintf(r->location,sizeof(r->location),"%s/%s",root_path,name);

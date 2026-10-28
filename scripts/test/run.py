@@ -35,6 +35,7 @@ import win32_runner
 import win32_inventory
 import https_fixture
 import acceptance
+import dos_games
 from mount_fixtures import place_marker, WriteGate, classify_crash_checker, check_crash_files, check_recovered_fixture
 
 ROOT=Path(__file__).resolve().parents[2]
@@ -1120,8 +1121,12 @@ NORMAL_BOOT_MILESTONES = (
     ('loader_banner', re.compile(rb'L:CPU signature=')),
     ('loader_source', re.compile(rb'L:SELECT_SOURCE=menu$')),
     ('kernel_banner', re.compile(rb'Ciuki VMM F0 build ([!-~]+) - CiukiOS$')),
-    ('desktop_spawn', re.compile(rb'\[supervisor\] bootstrap: spawning /Programs/desktop(?: |$)')),
-    ('desktop_pid', re.compile(rb'\[supervisor\] desktop pid=([0-9]+) pgid=([0-9]+)(?: |$)')),
+    # sec-user-06: on images with the trusted LOGON service PID 1 starts LOGON
+    # (supervisor.c "trusted logon pid=") and LOGON's SESSION_LAUNCH publishes
+    # the desktop (security.c "[security] session S desktop pid="); the
+    # autologon of the ready image's CiukiUser reaches it without input.
+    ('desktop_spawn', re.compile(rb'\[supervisor\] bootstrap: (?:spawning /Programs/desktop|trusted logon pid=[0-9]+)(?: |$)')),
+    ('desktop_pid', re.compile(rb'(?:\[supervisor\]|\[security\] session [0-9]+) desktop pid=([0-9]+) pgid=([0-9]+)(?: |$)')),
 )
 NORMAL_BOOT_NEGATIVE = (
     ('panic', re.compile(rb'Ciuki VMM (?:panic|double fault)')),
@@ -1489,17 +1494,32 @@ class Host:
     @contextmanager
     def export_readonly(self,overlay,directory,offset,size):
         """A FUSE raw slice, never an image conversion or writable mount."""
-        target=directory/'check-volume.raw';target.touch()
-        args=['qemu-storage-daemon','--blockdev',json.dumps({'driver':'qcow2','node-name':'overlay','read-only':True,
+        with self._export_volume(overlay,directory,offset,size,False) as target:
+            yield target
+    @contextmanager
+    def export_writable(self,overlay,directory,offset,size):
+        """Offline fixture staging in this run's qcow2 overlay only."""
+        directory=Path(directory).resolve();overlay=Path(overlay).resolve()
+        if not overlay.is_relative_to(directory) or overlay.suffix!='.qcow2':
+            raise res.Refusal('writable export requires a run overlay')
+        dos_fixtures.check_output(directory,ROOT)
+        with self._export_volume(overlay,directory,offset,size,True) as target:
+            yield target
+    @contextmanager
+    def _export_volume(self,overlay,directory,offset,size,writable):
+        if type(offset) is not int or type(size) is not int or offset<0 or size<=0 or offset%512 or size%512:
+            raise res.Refusal('invalid export extent')
+        target=directory/'check-volume.raw';target.touch(exist_ok=False)
+        args=['qemu-storage-daemon','--blockdev',json.dumps({'driver':'qcow2','node-name':'overlay','read-only':not writable,
               'file':{'driver':'file','filename':str(overlay)}}),'--blockdev',json.dumps({'driver':'raw','node-name':'volume',
-              'file':'overlay','offset':offset,'size':size,'read-only':True}),
-              '--export',f'type=fuse,id=checker,node-name=volume,mountpoint={target},writable=off,allow-other=off']
+              'file':'overlay','offset':offset,'size':size,'read-only':not writable}),
+              '--export',f'type=fuse,id=checker,node-name=volume,mountpoint={target},writable={"on,writethrough=on" if writable else "off"},allow-other=off']
         with (directory/'export.log').open('wb') as log:
             process=subprocess.Popen(args,stdout=log,stderr=subprocess.STDOUT,start_new_session=True)
             try:
                 deadline=time.monotonic()+5
                 while target.stat().st_size!=size:
-                    if process.poll() is not None or time.monotonic()>=deadline:raise res.Refusal('read-only FUSE export unavailable')
+                    if process.poll() is not None or time.monotonic()>=deadline:raise res.Refusal('FUSE export unavailable')
                     time.sleep(.025)
                 yield target
             finally:
@@ -1943,7 +1963,7 @@ def manifest_identity(image):
     return {'path':'unknown','sha256':'unknown','revision':'unknown','dirty':'unknown'}
 
 
-def _run_boot(root,suite,case,profile,image,executable,firmware,host=None,keep=False,qemu_img='qemu-img',shared_overlay=None,retain_overlay=False):
+def _run_boot(root,suite,case,profile,image,executable,firmware,host=None,keep=False,qemu_img='qemu-img',shared_overlay=None,retain_overlay=False,cancel_event=None):
     """Caller holds the common lock. Every failure after creation has result.json."""
     case=json.loads(json.dumps(case))
     host=host or Host();runs=root/'build/test-runs';res.check_budget(runs)
@@ -2033,6 +2053,9 @@ def _run_boot(root,suite,case,profile,image,executable,firmware,host=None,keep=F
         # fx-accept: a pending item and absent site snapshots end as not_run
         # before an overlay or a generated image is created.
         if accept:accept_session.precheck()
+        if case.get('dos_game'):
+            if profile.get('name')!='qemu-t23':raise res.Refusal('DOS gameplay calibration requires qemu-t23')
+            dos_games.precheck(case['dos_game'],root,result['image']['sha256'])
         if sites_absent:raise https_fixture.SitesAbsent(sites_absent)
         if case.get('probe')=='title':
             if len(case.get('fixtures',[]))!=1:raise res.Refusal('title requires one private fixture')
@@ -2040,6 +2063,7 @@ def _run_boot(root,suite,case,profile,image,executable,firmware,host=None,keep=F
             dos_titles.validate({'schema_version':1,'titles':[title]})
             if request != 'f3:title run='+run_id+' title='+title['id']:raise res.Refusal('selector/title mismatch')
             dos_titles.ready(title,json.loads((ROOT/'config/dos-titles.json').read_text()),case['fixtures'][0].get('calibrate',False))
+        if cancel_event is not None and cancel_event.is_set():raise EvidenceError('LAN peer failed before fixture staging')
         if shared_overlay is None:
             subprocess.run([qemu_img,'create','-f','qcow2','-b',str(image),'-F','raw',str(overlay)],check=True,stdout=subprocess.DEVNULL,timeout=10)
         blkdebug_config(case,overlay.parent)
@@ -2051,6 +2075,9 @@ def _run_boot(root,suite,case,profile,image,executable,firmware,host=None,keep=F
             if shared_overlay is not None:raise res.Refusal('crash marker is placed only before the first boot')
             result['marker_manifest']=[place_marker(host,overlay,directory,image.stat().st_size,case['preboot_marker'])]
         result['overlay_path']=str(overlay)
+        if case.get('dos_game'):
+            identity=bytes.fromhex(case['_lan']['identity']) if '_lan' in case else None
+            result['dos_game_fixture']=dos_games.stage(host,case['dos_game'],image,overlay,directory,root,identity,cancel_event)
         result['fixtures']=prepare_fixtures(host,case,directory,image,result['image']['sha256'])
         if accept:result['acceptance_media']=accept_session.prepare()
         if win32:
@@ -2062,6 +2089,7 @@ def _run_boot(root,suite,case,profile,image,executable,firmware,host=None,keep=F
             parser=session.parser
         os.mkfifo(fifo,0o600);fd=os.open(fifo,os.O_RDWR|os.O_NONBLOCK)
         serial=(directory/'serial.log').open('wb');stderr=(directory/'stderr.log').open('wb');qlog=(directory/'qmp.log').open('wb');logs=[serial,stderr,qlog]
+        if cancel_event is not None and cancel_event.is_set():raise EvidenceError('LAN peer failed before launch')
         launched=time.monotonic()
         deadline=launched+(NORMAL_BOOT_LOADER_SECONDS if normal else case['timeout'])
         host_ms=lambda:int((time.monotonic()-launched)*1000)
@@ -2072,6 +2100,7 @@ def _run_boot(root,suite,case,profile,image,executable,firmware,host=None,keep=F
         # cgroup files are verified. No unrestricted fallback is possible.
         last_error=None
         while time.monotonic()<min(deadline,launched+5):
+            if cancel_event is not None and cancel_event.is_set():raise EvidenceError('LAN peer failed during scope startup')
             if process.poll() is not None:break
             try:
                 properties,cgroup=host.verify(unit);result['host']['effective_limits']=properties;break
@@ -2137,6 +2166,7 @@ def _run_boot(root,suite,case,profile,image,executable,firmware,host=None,keep=F
 
         while True:
             now=time.monotonic()
+            if cancel_event is not None and cancel_event.is_set():raise EvidenceError('LAN peer failed; stopping guest')
             if now>=deadline:
                 result['timeout']['occurred']=True;raise EvidenceError('host monotonic deadline exceeded')
             res.check_budget(runs)
@@ -2732,6 +2762,9 @@ def check_overlay(host,overlay,directory,checks,result):
 
 
 def run_case(root,suite,case,profile,image,executable,firmware,host=None,keep=False,qemu_img='qemu-img'):
+    if 'guests' in case:
+        import lan_runner
+        return lan_runner.run_pair(root,suite,case,profile,image,executable,firmware,host or Host(),keep,qemu_img,_run_boot)
     if case.get('sweep'):
         return run_sweep(root,suite,case,profile,image,executable,firmware,host,keep,qemu_img)
     boots=case.get('boots')

@@ -21,6 +21,7 @@
 #include "wire.h"
 #include <ciuki/abi.h>
 #include <errno.h>
+#include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 
@@ -473,6 +474,22 @@ static void exchange_end(void *ctx, const struct acct_subject *p)
     }
 }
 
+/* sec-user-06: the account-management audit record (adapter.h audit) on
+ * the kernel debug log, which reaches the serial port and the boot log. */
+#pragma weak acct_sys_log /* host fixtures may link no log sink */
+static void audit(void *ctx, unsigned operation, uint32_t caller, uint32_t target, const char *type, int status)
+{
+    (void)ctx;
+    if (!acct_sys_log) return;
+    static const char *const names[]={[ACCT_CREATE]="create",[ACCT_DELETE]="delete",[ACCT_RENAME]="rename",
+        [ACCT_ENABLE]="enable",[ACCT_ROLE]="type",[ACCT_PASSWORD]="password",[ACCT_PICTURE]="picture",
+        [ACCT_UPDATE]="update"};
+    const char *name=operation<sizeof(names)/sizeof(names[0]) && names[operation] ? names[operation] : "other";
+    char line[128];
+    snprintf(line,sizeof(line),"[accounts] manage op=%s caller=%u target=%u type=%s result=%d",name,
+             (unsigned)caller,(unsigned)target,type ? type : "-",status);
+    acct_sys_log(line);
+}
 int acct_kernel_adapter_init(struct acct_kernel_adapter *k, struct acct_kernel *out)
 {
     if (!k || !out) return -EINVAL;
@@ -488,7 +505,8 @@ int acct_kernel_adapter_init(struct acct_kernel_adapter *k, struct acct_kernel *
         .allocate=allocate, .deallocate=deallocate, .picture_valid=picture_valid, .auth_binding=auth_binding,
         .gate_state=gate_state, .role_generations=role_generations, .auth_outcome=auth_outcome,
         .enrollment_authorized=enrollment_authorized, .session_lock=session_lock, .service_link=service_link,
-        .exchange_begin=exchange_begin, .deliver_reply=deliver_reply, .exchange_end=exchange_end };
+        .exchange_begin=exchange_begin, .deliver_reply=deliver_reply, .exchange_end=exchange_end,
+        .audit=audit };   /* sec-user-06 */
     return 0;
 }
 int acct_kernel_adapter_accept(struct acct_kernel_adapter *k, uint32_t service, int *fd)

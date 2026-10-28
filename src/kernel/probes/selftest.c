@@ -159,6 +159,51 @@ bool selftest_device_state(char *reason, size_t size, uint32_t *generation)
 }
 void selftest_request_dosbox(void) { set_device("launch-dosbox"); }
 void selftest_device_running(void) { set_device("running"); }
+/* sec-user-06: figures a session program measures (selftest.h). One latest
+ * answer per name; a name is [a-z0-9_]{1,23}, its tokens the record grammar
+ * (selftest_sanitize keeps only valid key=value tokens when they are shown). */
+#define FIGURE_SLOTS 4u
+static struct { char name[SELFTEST_ID_MAX]; char tokens[SELFTEST_FIGURES]; } figures[FIGURE_SLOTS];
+void selftest_request_registry_backup(void)
+{
+    uint32_t f = irq_save();
+    for (unsigned i = 0; i < FIGURE_SLOTS; i++)
+        if (!strncmp(figures[i].name, "registry_backup", SELFTEST_ID_MAX)) figures[i].name[0] = 0;
+    irq_restore(f);
+    set_device("registry-backup");
+}
+void selftest_submit(const char *line)
+{
+    if (!active || finished || !line) return;
+    char name[SELFTEST_ID_MAX]; unsigned n = 0;
+    while (n + 1 < sizeof(name) && ((line[n] >= 'a' && line[n] <= 'z') || (line[n] >= '0' && line[n] <= '9') || line[n] == '_'))
+        { name[n] = line[n]; n++; }
+    name[n] = 0;
+    if (!n || (line[n] && line[n] != ' ')) return;
+    const char *tokens = line[n] ? line + n + 1 : "";
+    uint32_t f = irq_save();
+    unsigned slot = FIGURE_SLOTS;
+    for (unsigned i = 0; i < FIGURE_SLOTS && slot == FIGURE_SLOTS; i++) if (!strncmp(figures[i].name, name, sizeof(name))) slot = i;
+    for (unsigned i = 0; i < FIGURE_SLOTS && slot == FIGURE_SLOTS; i++) if (!figures[i].name[0]) slot = i;
+    if (slot < FIGURE_SLOTS) {
+        memcpy(figures[slot].name, name, n + 1);
+        ksnprintf(figures[slot].tokens, sizeof(figures[slot].tokens), "%s", tokens);
+    }
+    irq_restore(f);
+    if (slot < FIGURE_SLOTS) klog("[selftest] figure %s received", name);
+}
+bool selftest_figure(const char *name, char *tokens, size_t size)
+{
+    bool found = false;
+    uint32_t f = irq_save();
+    for (unsigned i = 0; i < FIGURE_SLOTS && !found; i++)
+        if (figures[i].name[0] && !strncmp(figures[i].name, name, SELFTEST_ID_MAX)) {
+            ksnprintf(tokens, size, "%s", figures[i].tokens); found = true;
+        }
+    irq_restore(f);
+    if (found) set_device("running");
+    return found;
+}
 
 /* Full-screen text summary when no desktop can show the notice. */
 static void pin_summary(const char *title)

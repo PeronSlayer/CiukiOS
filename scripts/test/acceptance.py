@@ -65,17 +65,18 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 import resources as res  # noqa: E402
 from evidence import EvidenceError, EvidenceNotRun  # noqa: E402
 import iso_fixtures  # noqa: E402
+import dos_games  # noqa: E402
 
 ROOT = Path(__file__).resolve().parents[2]
 KIND = 'acceptance'
 CASE_KEYS = {'id', 'kind', 'probe', 'profile', 'timeout', 'expected', 'item', 'items', 'title', 'gate', 'devices',
              'media', 'resets', 'forbid', 'steps', 'assertions', 'figures', 'disk', 'pending', 'note',
-             'blocking', '_run_id', '_prune_keep'}
+             'blocking', '_run_id', '_prune_keep', 'dos_game', 'guests', '_lan'}
 STEP_KEYS = {'name', 'check', 'wait', 'fail', 'since', 'timeout', 'wait_event', 'settle', 'actions',
              'screen_settle', 'screen', 'required', 'on_fail', 'known_failure', 'requires', 'unless', 'fallback',
              'arm', 'note', 'wizard'}
-TEMPLATE_KEYS = {'template', 'prefix', 'check', 'note', 'settle', 'timeout'}
-ACTION_KEYS = {'keys', 'text', 'pause', 'media', 'screendump', 'sleep', 'hold'}
+TEMPLATE_KEYS = {'template', 'prefix', 'check', 'note', 'settle', 'timeout', 'user', 'password'}
+ACTION_KEYS = {'keys', 'text', 'pause', 'media', 'screendump', 'sleep', 'hold', 'mouse', 'power_cut'}
 ASSERTION_KEYS = {'name', 'check', 'pattern', 'from', 'to', 'min', 'max', 'required', 'known_failure', 'note'}
 FIGURE_KEYS = {'name', 'check', 'pattern', 'from', 'to', 'reducer', 'page'}
 WIZARD_KEYS = {'keys', 'then', 'idle', 'max', 'focus', 'press_when', 'close_when', 'close_keys', 'max_closes',
@@ -111,6 +112,13 @@ DESKTOP = r'\[user \d+\] \[desktop\]'
 WINDOW_RECORD = re.compile(r'^\[user \d+\] \[desktop\] window pid=(?P<pid>\d+) window=(?P<window>\d+) owner=(?P<owner>\d+) '
                            r'modal=(?P<modal>[01]) state=(?P<state>[a-z]+) title=(?P<title>\S+)$')
 FOCUS_RECORD = re.compile(r'^\[user \d+\] \[desktop\] focus pid=(?P<pid>\d+) window=(?P<window>\d+) ')
+# sec-user-06: the trusted LOGON service and its UI (apps/logon/coordinator.c
+# lgn_note, apps/logon/ui.c view_record; debug_write prefixes "[user N] ").
+LOGON = r'\[user \d+\] \[logon\]'
+LOGON_UI = r'\[user \d+\] \[logon-ui\]'
+# Account names (the LOGON_UI typed-name grammar, lgn_name_syntax) and secrets
+# (8..63 printable bytes, or empty for the ready image's blank CiukiUser).
+ACCOUNT_NAME = re.compile(r'[A-Za-z0-9_-]{1,31}')
 
 # ---- keys ----------------------------------------------------------------
 # QAPI QKeyCode names (qapi/ui.json). Friendly aliases first.
@@ -165,7 +173,53 @@ def key_event(qcode, down):
 
 # ---- templates ---------------------------------------------------------------
 
-def boot_template(prefix, check, safe=False, settle=8, timeout=900):
+def display_step(prefix, check, safe, settle):
+    """The desktop's display record (apps/desktop/desktop.c display_start_record)."""
+    p = prefix
+    return {'name': p + '-display', 'check': check, 'timeout': 300, 'settle': settle,
+            'wait': r'^%s display start mode=(?P<%s_mode>\d+) (?P<%s_width>\d+)x(?P<%s_height>\d+)x(?P<%s_bpp>\d+) '
+                    r'saved=(?P<%s_saved>\d+) safe=%d$' % (DESKTOP, p, p, p, p, p, 1 if safe else 0)}
+
+
+def logon_steps(prefix, check, user, password, safe=False, settle=8, timeout=900):
+    """sec-user-06: a typed-name logon at the trusted Welcome screen
+    (apps/logon/ui.c): the painted list view (accounts listed), Up twice
+    (the item list wraps from the first tile through Turn Off Computer to
+    "Type a user name"), Enter, the typed view, the name, Enter (to the
+    password field), the password, Enter. Then LOGON's records: the
+    authenticated uid, the session, the kernel's desktop record with its
+    credential (security.c launch_record) and the running session, and the
+    desktop's display record. A refusal or a failed session start ends the
+    step. Captures: <prefix>_uid, _session, _desktop, _gid, _groups and the
+    display captures. The password never reaches result.json (typed text is
+    counted only) or a record."""
+    p = prefix
+    typed = [{'text': user}, {'keys': 'ret', 'pause': 0.5}]
+    if password:
+        typed.append({'text': password})
+    typed.append({'keys': 'ret'})
+    return [
+        {'name': p + '-welcome', 'check': check, 'timeout': timeout, 'settle': 1,
+         'wait': r'^%s view mode=welcome view=list items=\d+ accounts=[1-9]\d* status=\w+$' % LOGON_UI,
+         'actions': [{'keys': ['up', 'up', 'ret'], 'pause': 0.5}],
+         'note': 'Welcome: Up twice reaches "Type a user name", Enter'},
+        {'name': p + '-typed', 'check': check, 'timeout': 60, 'settle': 0.5,
+         'wait': r'^%s view mode=welcome view=typed ' % LOGON_UI, 'actions': typed,
+         'note': 'typed name %s, Enter, the password, Enter' % user},
+        {'name': p + '-auth', 'check': check, 'timeout': 120,
+         'wait': r'^%s authenticated uid=(?P<%s_uid>\d+); starting session$' % (LOGON, p),
+         'fail': [r'^%s authentication refused ' % LOGON, r'^%s session start failed: ' % LOGON]},
+        {'name': p + '-desktop', 'check': check, 'timeout': 300,
+         'wait': [r'^%s session (?P<%s_session>\d+) created uid=<<%s_uid>>$' % (LOGON, p, p),
+                  r'^\[security\] session <<%s_session>> desktop pid=(?P<%s_desktop>\d+) pgid=\d+ uid=<<%s_uid>> '
+                  r'gid=(?P<%s_gid>\d+) groups=(?P<%s_groups>[0-9,]+)$' % (p, p, p, p, p),
+                  r'^%s session <<%s_session>> running uid=<<%s_uid>> start_ms=\d+$' % (LOGON, p, p)],
+         'fail': [r'^%s session start failed: ' % LOGON]},
+        display_step(p, check, safe, settle),
+    ]
+
+
+def boot_template(prefix, check, safe=False, settle=8, timeout=900, logon=None):
     """A boot as the user starts it from the loader menu (src/boot/ciukldr/menu.inc).
 
     Normal: `n` at SELECT_READY selects Normal at once (the menu's 3 s wait
@@ -174,26 +228,42 @@ def boot_template(prefix, check, safe=False, settle=8, timeout=900):
     Startup menu item 3 (startup.inc: CBI_F_SAFE_MODE|CBI_F_SAFE_STORAGE,
     record L:STARTUP=3). Then the kernel banner, the desktop process and the
     desktop's display record (apps/desktop/desktop.c display_start_record).
-    Captures: <prefix>_build, _desktop, _mode, _width, _height, _bpp, _saved."""
+    sec-user-06: the desktop process is PID 1's ("[supervisor] desktop pid=")
+    or, with the trusted LOGON service, the one LOGON's SESSION_LAUNCH
+    published ("[security] session S desktop pid="), reached without input by
+    the ready image's automatic logon. Safe mode never logs on automatically
+    (apps/logon/coordinator.c), so boot-safe logs on as the blank CiukiUser;
+    logon=(user, password) logs on at Welcome instead of waiting for the
+    automatic logon (boot-logon).
+    Captures: <prefix>_build, _desktop, _mode, _width, _height, _bpp, _saved
+    (and with a logon _uid, _session, _gid, _groups)."""
     p = prefix
     kernel = ([r'^L:STARTUP=3$'] if safe else []) + [
         r'^L:SELECT_SOURCE=menu$', r'^Ciuki VMM F0 build (?P<%s_build>[!-~]+) - CiukiOS$' % p]
-    return [
+    steps = [
         {'name': p + '-loader', 'check': check, 'wait': r'^SELECT_READY$', 'timeout': timeout,
          'actions': [{'keys': 'f5' if safe else 'n'}],
          'note': 'loader menu: %s' % ('F5, Safe mode' if safe else 'N, Normal')},
         {'name': p + '-kernel', 'check': check, 'wait': kernel, 'timeout': 600,
          'fail': [r'^L:SAFE=1$', r'^L:STARTUP=[1245678]$'] if safe else [r'^L:SAFE=1$', r'^L:STARTUP=']},
+    ]
+    if safe and logon is None:
+        logon = ('CiukiUser', '')
+    if logon is not None:
+        return steps + logon_steps(p, check, logon[0], logon[1], safe, settle, timeout)
+    return steps + [
         {'name': p + '-desktop', 'check': check, 'timeout': timeout,
-         'wait': r'^\[supervisor\] desktop pid=(?P<%s_desktop>\d+) pgid=\d+' % p},
-        {'name': p + '-display', 'check': check, 'timeout': 300, 'settle': settle,
-         'wait': r'^%s display start mode=(?P<%s_mode>\d+) (?P<%s_width>\d+)x(?P<%s_height>\d+)x(?P<%s_bpp>\d+) '
-                 r'saved=(?P<%s_saved>\d+) safe=%d$' % (DESKTOP, p, p, p, p, p, 1 if safe else 0)},
+         'wait': r'^(?:\[supervisor\]|\[security\] session (?P<%s_session>\d+)) desktop pid=(?P<%s_desktop>\d+) pgid=\d+' % (p, p)},
+        display_step(p, check, safe, settle),
     ]
 
 
-TEMPLATES = {'boot': lambda p, c, s, t: boot_template(p, c, False, s, t),
-             'boot-safe': lambda p, c, s, t: boot_template(p, c, True, s, t)}
+TEMPLATES = {'boot': lambda p, c, s, t, a: boot_template(p, c, False, s, t),
+             'boot-safe': lambda p, c, s, t, a: boot_template(p, c, True, s, t),
+             'boot-logon': lambda p, c, s, t, a: boot_template(p, c, False, s, t, logon=a),
+             'boot-safe-logon': lambda p, c, s, t, a: boot_template(p, c, True, s, t, logon=a),
+             'logon': lambda p, c, s, t, a: logon_steps(p, c, a[0], a[1], False, s, t)}
+LOGON_TEMPLATES = ('boot-logon', 'boot-safe-logon', 'logon')
 
 
 def expand_steps(steps):
@@ -209,7 +279,22 @@ def expand_steps(steps):
             settle, timeout = step.get('settle', 8), step.get('timeout', 900)
             refuse(type(settle) in (int, float) and 0 <= settle <= 120 and type(timeout) is int and 60 <= timeout <= 3600,
                    'step %d: template settle 0..120, timeout 60..3600' % index)
-            out.extend(TEMPLATES[step['template']](prefix, step.get('check', 'main'), settle, timeout))
+            account = None
+            if step['template'] in LOGON_TEMPLATES:
+                user, password = step.get('user'), step.get('password', '')
+                refuse(isinstance(user, str) and ACCOUNT_NAME.fullmatch(user), 'step %d: template user [A-Za-z0-9_-]{1,31}' % index)
+                refuse(isinstance(password, str) and (not password or 8 <= len(password) <= 63),
+                       'step %d: template password empty or 8..63 characters' % index)
+                for text in (user, password):
+                    if text:
+                        try:
+                            text_chords(text)
+                        except ValueError as error:
+                            raise res.Refusal('acceptance case: step %d: %s' % (index, error)) from error
+                account = (user, password)
+            else:
+                refuse('user' not in step and 'password' not in step, 'step %d: user/password only with %s' % (index, ', '.join(LOGON_TEMPLATES)))
+            out.extend(TEMPLATES[step['template']](prefix, step.get('check', 'main'), settle, timeout, account))
         else:
             out.append(step)
     return out
@@ -245,8 +330,19 @@ def media_var(name):
 
 def validate_action(action, where):
     refuse(isinstance(action, dict) and action and not set(action) - ACTION_KEYS, where + ': action keys ' + ', '.join(sorted(ACTION_KEYS)))
-    kinds = [k for k in ('keys', 'text', 'media', 'screendump', 'sleep') if k in action]
-    refuse(len(kinds) == 1, where + ': one of keys, text, media, screendump or sleep per action')
+    kinds = [k for k in ('keys', 'text', 'media', 'screendump', 'sleep', 'mouse', 'power_cut') if k in action]
+    refuse(len(kinds) == 1, where + ': one of keys, text, media, screendump, sleep, mouse or power_cut per action')
+    if 'mouse' in action:
+        mouse = action['mouse']
+        refuse(isinstance(mouse, dict) and set(mouse) <= {'dx', 'dy', 'button'} and mouse,
+               where + ': mouse dx/dy/button')
+        refuse(all(type(mouse.get(axis, 0)) is int and -32767 <= mouse.get(axis, 0) <= 32767 for axis in ('dx', 'dy')),
+               where + ': bounded relative mouse motion')
+        refuse(mouse.get('button') in (None, 'left', 'middle', 'right'), where + ': mouse button')
+    # sec-user-06 (SU-13): a host reset through QMP system_reset, the runner's
+    # power cut: the guest loses what it had not written, the overlay keeps
+    # what reached it (https://www.qemu.org/docs/master/interop/qemu-qmp-ref.html).
+    refuse(action.get('power_cut', True) is True, where + ': power_cut is true')
     if 'keys' in action:
         keys = action['keys'] if isinstance(action['keys'], list) else [action['keys']]
         refuse(keys and len(keys) <= 64, where + ': 1..64 key chords')
@@ -334,6 +430,9 @@ def validate_wizard(spec, where):
 
 
 def validate_case(case, root=ROOT):
+    if 'guests' in case:
+        import lan_runner
+        return lan_runner.validate(case, root)
     refuse(case.get('kind') == KIND and case.get('probe') == KIND, 'kind and probe are "acceptance"')
     extra = sorted(set(case) - CASE_KEYS)
     refuse(not extra, 'refused keys: ' + ', '.join(extra))
@@ -348,6 +447,21 @@ def validate_case(case, root=ROOT):
     refuse(isinstance(devices, dict) and set(devices) <= {'optical', 'network'}, 'devices: optical, network')
     refuse(devices.get('optical') in (None, 'empty'), 'devices.optical is "empty" (media come from steps)')
     refuse(devices.get('network') in NICS, 'devices.network: ' + ', '.join(n for n in NICS if n))
+    if 'dos_game' in case:
+        spec = case['dos_game']
+        refuse(isinstance(spec, dict) and set(spec) == {'title', 'role'} and spec['role'] in ('single', 'host', 'join'), 'dos_game title/role')
+        try:
+            title, _ = dos_games.title_for(spec['title'], root)
+        except (ValueError, OSError) as error:
+            raise res.Refusal(str(error)) from error
+        refuse(spec['role'] == 'single' or title['lan'] is not None, 'IPX title required')
+        recipe = dos_games.acceptance_case(title, spec['role'])
+        refuse({k: v for k, v in case.items() if k not in ('_run_id', '_prune_keep', '_lan')} == recipe,
+               'DOS title case must use the complete menu/screen/audio/gameplay/exit recipe (dos_games.py write-cases)')
+    if '_lan' in case:
+        import lan_runner
+        lan_runner.validate_network(case['_lan'])
+        refuse(devices.get('network') is not None and case.get('dos_game', {}).get('role') in ('host', 'join'), 'LAN network requires paired DOS title')
     media = case.get('media', {})
     refuse(isinstance(media, dict) and len(media) <= 6, 'media: at most 6 generated images')
     for name, spec in media.items():
@@ -385,6 +499,8 @@ def validate_case(case, root=ROOT):
         refuse(not (step.get('wait') and step.get('wait_event')), where + ': wait or wait_event')
         refuse(step.get('arm') in (None, 'reset', 'shutdown'), where + ': arm reset|shutdown')
         reset_armed |= step.get('arm') == 'reset'
+        # sec-user-06: a power cut (QMP system_reset) arms its own reset.
+        reset_armed |= any('power_cut' in a for a in [*step.get('actions', []), *step.get('fallback', {}).get('actions', [])])
         shutdown_armed |= step.get('arm') == 'shutdown'
         refuse(step.get('wait_event') != 'RESET' or reset_armed, where + ': wait_event RESET needs an earlier arm reset')
         refuse(step.get('wait_event') != 'SHUTDOWN' or shutdown_armed, where + ': wait_event SHUTDOWN needs an earlier arm shutdown')
@@ -410,7 +526,12 @@ def validate_case(case, root=ROOT):
         refuse(settle is None or isinstance(settle, dict) and set(settle) <= {'stable', 'timeout', 'changed', 'region'},
                where + ': screen_settle stable, timeout, changed, region')
         screen = step.get('screen')
-        refuse(screen is None or isinstance(screen, dict) and set(screen) <= {'geometry', 'desktop'}, where + ': screen geometry, desktop')
+        refuse(screen is None or isinstance(screen, dict) and set(screen) <= {'geometry', 'desktop', 'region', 'sha256'}, where + ': screen geometry, desktop, region, sha256')
+        if screen and 'sha256' in screen:
+            refuse(isinstance(screen['sha256'], str) and re.fullmatch('[0-9a-f]{64}', screen['sha256']), where + ': screen SHA-256')
+            region = screen.get('region')
+            refuse(isinstance(region, list) and len(region) == 4 and all(type(v) is int and 0 <= v <= 2048 for v in region) and min(region[2:]) > 0,
+                   where + ': bounded nonempty screen region')
         refuse(step.get('on_fail', 'stop') in ('stop', 'continue'), where + ': on_fail stop|continue')
         refuse(type(step.get('required', True)) is bool, where + ': required boolean')
         refuse('known_failure' not in step or isinstance(step['known_failure'], dict) and step['known_failure'].get('directive')
@@ -432,6 +553,8 @@ def validate_case(case, root=ROOT):
             for match in PLACEHOLDER.finditer(pattern):
                 refuse(match[1] in captured | own, where + ': <<%s>> is not captured by an earlier wait' % match[1])
         captured |= own
+    cuts = sum(1 for s in steps for a in [*s.get('actions', []), *s.get('fallback', {}).get('actions', [])] if 'power_cut' in a)
+    refuse(cuts <= case.get('resets', 0), 'each power_cut needs one of the case\'s resets')
     for media_name in (a['media'].get('insert') for s in steps for a in [*s.get('actions', []), *s.get('fallback', {}).get('actions', [])] if 'media' in a):
         refuse(media_name is None or media_name in media, 'media insert names a declared image: ' + str(media_name))
     for key, allowed in (('assertions', ASSERTION_KEYS), ('figures', FIGURE_KEYS)):
@@ -487,8 +610,15 @@ def qemu_args(case):
     if devices.get('network'):
         # The T23's NIC model on a restricted user network: DHCP from slirp,
         # no route to the host or the internet.
-        args += ['-netdev', 'user,id=ciuknet0,restrict=on',
-                 '-device', devices['network'] + ',netdev=ciuknet0,mac=52:54:00:12:34:56,romfile=']
+        if '_lan' in case:
+            import lan_runner
+            lan_runner.validate_network(case['_lan'])
+            network = case['_lan']
+            netdev = 'socket,id=ciuknet0,mcast=%s:%d,localaddr=127.0.0.1' % (network['group'], network['port'])
+            mac = network['mac']
+        else:
+            netdev, mac = 'user,id=ciuknet0,restrict=on', '52:54:00:12:34:56'
+        args += ['-netdev', netdev, '-device', devices['network'] + ',netdev=ciuknet0,mac=' + mac + ',romfile=']
     if devices.get('optical') == 'empty':
         # The T23 CD drive is the secondary master (channel 1 unit 0). A
         # backend without a file is an empty drive (no medium); the explicit
@@ -585,12 +715,21 @@ class Session:
                       for s in self.steps]
         self.index = 0; self.phase = 'start'; self.cursor = 0; self.vars = {}; self.ctx = {}
         self.media = {}; self.events_seen = 0; self.resets = 0; self.reset_armed = False; self.reset_base = None
-        self.shutdown_armed = False; self.shutdown = False
+        self.shutdown_armed = False; self.shutdown = False; self.power_cut = False; self.cut_stamp = None
         self.done = not self.steps; self.failed = None; self.observations = []; self.launched = None
         self.screens = []
 
     # -- run.py hooks --
     def precheck(self):
+        if 'dos_game' in self.case:
+            title, _, _ = dos_games.precheck(self.case['dos_game'], self.root)
+            role = self.case['dos_game']['role']
+            # The placeholder screen cannot pass without a reviewed calibration.
+            for step in self.steps:
+                if step['name'] == 'gameplay':
+                    step['screen'] = {'desktop': False, **title['calibration'][role]}
+                if step['name'] == 'enter-game' and role != 'single':
+                    step['actions'] = [{'keys': title['lan'][role + '_input'], 'pause': 1}]
         pending = self.case.get('pending')
         if pending:
             missing = [p for p in pending.get('requires', []) if not (self.root / p).exists()]
@@ -644,9 +783,21 @@ class Session:
             self.events_seen += 1
             name, data = event.get('event'), event.get('data', {})
             reason = str(data.get('reason'))
+            stamp = event.get('timestamp', {})
+            stamp = stamp.get('seconds', 0) + stamp.get('microseconds', 0) / 1e6
+            if name == 'RESET' and reason == 'guest-reset' and self.cut_stamp is not None and 0 <= stamp - self.cut_stamp <= 3:
+                # SeaBIOS's own hard reboot right after a host system_reset
+                # (run.py unexpected_resets): part of the power cut.
+                self.cut_stamp = None
+                self.observations.append({'event': 'RESET', 'reason': reason, 'line': len(self.parser.lines), 'after_power_cut': True})
+                continue
             if name == 'RESET':
-                if not reason.startswith('guest'):
+                host_cut = self.power_cut and reason.startswith('host')
+                if not reason.startswith('guest') and not host_cut:
                     raise StepFailure('unexpected reset (%s)' % reason)
+                self.power_cut = False
+                if host_cut:
+                    self.cut_stamp = stamp
                 if not self.reset_armed or self.resets >= self.case.get('resets', 0):
                     raise StepFailure('unexpected guest reset (%s)' % reason)
                 self.resets += 1; self.reset_armed = False
@@ -855,10 +1006,14 @@ class Session:
                         for c in text_chords(action['text'])]
             elif 'media' in action:
                 out.append({'media': action['media'], 'pause': pause})
+            elif 'mouse' in action:
+                out.append({'mouse': action['mouse'], 'pause': pause, 'hold': action.get('hold', KEY_HOLD)})
             elif 'screendump' in action:
                 out.append({'screendump': action['screendump'], 'pause': pause})
             elif 'sleep' in action:
                 out.append({'sleep': action['sleep']})
+            elif 'power_cut' in action:
+                out.append({'power_cut': True, 'pause': pause})
         return out
 
     def _press(self, keys, qmp):
@@ -889,6 +1044,18 @@ class Session:
             qmp.command(command, args)
             log.append({'t': self._rel(now), 'qmp': command, **({'media': item['media']['insert']} if 'insert' in item['media'] else {})})
             return item['pause']
+        if 'mouse' in item:
+            mouse = item['mouse']
+            events = [{'type': 'rel', 'data': {'axis': axis, 'value': mouse[key]}}
+                      for axis, key in (('x', 'dx'), ('y', 'dy')) if mouse.get(key)]
+            if events:
+                qmp.input_events(events)
+            if mouse.get('button'):
+                qmp.input_events([{'type': 'btn', 'data': {'button': mouse['button'], 'down': True}}])
+                time.sleep(item['hold'])
+                qmp.input_events([{'type': 'btn', 'data': {'button': mouse['button'], 'down': False}}])
+            log.append({'t': self._rel(now), 'mouse': mouse})
+            return item['pause']
         if 'screendump' in item:
             path = self._screendump(qmp, item['screendump'])
             log.append({'t': self._rel(now), 'screendump': path.name})
@@ -896,6 +1063,12 @@ class Session:
         if 'sleep' in item:
             log.append({'t': self._rel(now), 'sleep': item['sleep']})
             return item['sleep']
+        if 'power_cut' in item:
+            # The cut arms its own reset (counted against the case's resets).
+            self.power_cut = True; self.reset_armed = True; self.reset_base = self.resets
+            qmp.command('system_reset', {})
+            log.append({'t': self._rel(now), 'qmp': 'system_reset'})
+            return item['pause']
         raise AssertionError(item)
 
     def _screendump(self, qmp, name):
@@ -1096,6 +1269,15 @@ class Session:
                      screen_file=path.name)
         if observed['failures']:
             raise StepFailure('step %s: screen check failed: %s' % (step['name'], ', '.join(observed['failures'])), 'screen')
+        if 'sha256' in spec:
+            width, height, _ = self.read_ppm(path)
+            x, y, w, h = spec['region']
+            if x + w > width or y + h > height:
+                raise StepFailure('gameplay region outside screen', 'screen')
+            actual = screen_hash(self.read_ppm, path, spec['region'])
+            self._record(gameplay_sha256=actual, expected_sha256=spec['sha256'])
+            if actual != spec['sha256']:
+                raise StepFailure('gameplay frame does not match reviewed checkpoint', 'screen')
 
     def _fail_step(self, now, qmp, reason, kind='other'):
         """A blocking failure stops the script unless on_fail is continue; a

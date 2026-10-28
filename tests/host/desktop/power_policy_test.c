@@ -206,8 +206,31 @@ static void test_broadcast_rule(void)
     p.batteries[0].remaining = CIUKI_POWER_UNKNOWN; pp_summarize(&p, &s); assert(pp_status_changed(&b, &s));
     puts("PASS power policy: PBT_APMPOWERSTATUSCHANGE on AC, battery flag, 3 % steps, below 10 %, below 5 minutes, unknown charge");
 }
+/* ---- sec-k08 (U4-6): the machine's power buttons, power.cfg. */
+static void test_machine_buttons(void)
+{
+    struct pp_machine m; char out[PP_MACHINE_MAX + 1];
+    static const char both[] = "power_button=standby\npower_lid=shutdown\n";
+    assert(!pp_machine_parse(&m, both, sizeof(both) - 1));
+    assert(m.power_button == PP_BUTTON_STANDBY && m.lid == PP_LID_SHUTDOWN);
+    size_t n = pp_machine_format(&m, out, sizeof(out));
+    assert(n == sizeof(both) - 1 && !memcmp(out, both, n));
+    assert(!pp_machine_parse(&m, "", 0) && m.power_button == PP_BUTTON_SHUTDOWN && m.lid == PP_LID_NONE);
+    static const char *const bad[] = {"power_button=sleep\n", "power_scheme=1\n", "power_lid=none", "power_lid=none\npower_lid=shutdown\n",
+                                      "power_button\n"};
+    for (unsigned i = 0; i < sizeof(bad) / sizeof(*bad); i++) assert(pp_machine_parse(&m, bad[i], strlen(bad[i])) > 0);
+    assert(!pp_machine_format(&m, out, 10));
+    /* Applied over a user's configuration: only the two machine fields. */
+    struct pp_config c; assert(!pp_load(&c, "power_button=standby\npower_lid=standby\npower_meter=0\n"));
+    pp_machine_defaults(&m); pp_machine_apply(&c, &m);
+    assert(c.power_button == PP_BUTTON_SHUTDOWN && c.lid == PP_LID_NONE && !c.show_meter);
+    c.power_button = PP_BUTTON_STANDBY; pp_machine_take(&m, &c); assert(m.power_button == PP_BUTTON_STANDBY);
+    puts("PASS sec-k08 machine power buttons: power.cfg parse/format, rejected lines, applied over the user's own lines");
+}
+/* ---- end sec-k08 ---- */
 int main(void)
 {
+    test_machine_buttons();   /* sec-k08 */
     test_schemes();
     test_persistence();
     test_summary_and_tooltip();

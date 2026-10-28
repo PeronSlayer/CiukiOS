@@ -51,7 +51,7 @@ struct lui {
     struct lgn_state state;
     int state_valid, visible, dirty, view, focus, selected, busy;
     uint64_t next_query, retry_until, last_generation;
-    struct { uint32_t uid; char name[32]; } accounts[LUI_ACCOUNTS];
+    struct { uint32_t uid; int blank_logon; char name[32]; } accounts[LUI_ACCOUNTS];
     unsigned count;
     int list_valid;
     char name[32], password[64], status[160];
@@ -67,6 +67,9 @@ struct lui {
     struct lgn_source source;
     int source_valid, first_admin, enroll_record;
     char labels[LGN_SOURCE_MAX][32];
+    /* sec-user-06: the last painted view the serial record named. */
+    uint32_t recorded[5];
+    int recorded_valid;
 };
 
 void lui_init(struct lui *, const struct lui_host *, const uint32_t *portrait, int layout);

@@ -138,6 +138,11 @@ static int self_admin(void *ctx)
     for (unsigned i=0;i<n;i++) if (groups[i]==CPA_GROUP_ADMINS && uid) return 1;
     return 0;
 }
+/* sec-k08 (lead decision U4-6): the machine's power buttons, power.cfg. */
+static int power_machine_load(void *ctx,char *text,size_t cap,size_t *n)
+{ (void)ctx; int e=cfg_read_at(PP_MACHINE_FILE,text,cap,n); return e ? -e : 0; }
+static int power_machine_save(void *ctx,const char *text,size_t n)
+{ (void)ctx; return ciuki_system_setting_set(CIUKI_SYSTEM_SETTING_POWER,text,n) ? (errno ? -errno : -EIO) : 0; }
 #endif
 /* --- end sec-user-04 --- */
 /* All applet jobs share one bounded notification channel. Queue saturation
@@ -1062,6 +1067,7 @@ int main(int argc, char **argv)
     h->user_begin=user_begin; h->user_poll=user_poll;
 #ifdef __i386__
     if (profile_root_path()) { h->accounts_begin=accounts_begin; h->accounts_poll=accounts_poll_io; h->self_admin=self_admin; } /* sec-user-04 */
+    if (profile_root_path()) { h->power_machine_load=power_machine_load; h->power_machine_save=power_machine_save; } /* sec-k08 */
 #endif
     h->menu_begin=menu_begin_io;h->menu_poll=menu_poll_io;h->menu_explore=menu_explore;
     h->pack_scan=pack_scan; h->pack_preview=pack_preview;

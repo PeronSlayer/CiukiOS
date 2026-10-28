@@ -568,6 +568,39 @@ Implementation record, Windows XP research and evidence:
   broker at its next start, before any root or hive is loaded; a damaged root,
   and a machine hive without a valid slot, are restored there too.
 
+#### Coverage audit follow-ups (sec-k08 amendment, 2026-10-28)
+
+Implementation record, research and figures: `docs/validation/sec-k08.md`.
+
+- **Two more sealed machine settings** (lead decisions S2-5, U4-6). In
+  `C:\SYSTEM\SETTINGS`, `clock.cfg` (the time zone service's store, read at
+  boot) and `power.cfg` (the machine's power-button and lid actions, read by
+  every session's desktop) are SEALED by name like the boot inputs above.
+  Administrators change them through SETTING (`CIUKI_SYSTEM_SETTING_CLOCK` 4,
+  a complete `lib/tzrule.c` record of at most 511 bytes;
+  `CIUKI_SYSTEM_SETTING_POWER` 5, exactly the `power_button=`/`power_lid=`
+  lines of at most 127 bytes); the time zone service keeps writing
+  `clock.cfg` as SYSTEM. In a LOGON session the desktop applies `power.cfg`
+  over the user's own settings; schemes, alarms, the meter and the resume
+  preference stay per user. CiukiOS has no hibernation, so there is no
+  hibernation setting to move.
+- **Unknown policy kinds deny.** `policy_check` refuses a label whose kind is
+  outside `enum policy_kind` for every subject, SYSTEM included (corrupt
+  metadata is never a public object); unknown access bits already did.
+- **Firmware-initiated suspend** (lead decision U4-3). An APM Critical System
+  Suspend (0008h, acknowledged by the kernel itself), a Critical Resume
+  (0004h) and a resume notification that is not the echo of a call-73 Stand
+  by raise the trusted gate through PID 1, as a physical secure attention does,
+  before the session's desktop runs again. LOGON's watch sees the moved gate
+  and the call-73 resume/critical counts: an owner with a password is locked
+  (`SECURE_ENTER` RESUME), a passwordless owner is restored (no false lock).
+  ACPI sleeping states are entered only by OSPM and CiukiOS enters none.
+- **Census.** Every published selector (native calls, call-101 operations,
+  call-99 services and sub-actions, channel services/operations, call-69
+  device commands, VFS access bits and policy kinds) is derived from the
+  sources by H13 and has exactly one policy class and covering test
+  (`tests/host/security/policy_census.py`); each dispatcher's default denies.
+
 ### Enforcement points and retained handles
 
 | Operation | Required checks before first side effect |

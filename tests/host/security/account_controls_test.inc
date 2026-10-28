@@ -160,7 +160,7 @@ static void scenario_accounts(void)
     CHECK(cp_do(CPA_PASSWORD, 501, NULL, "", "guestpass2", NULL, 0, 0) == -EACCES);
     g_ticks += 1000;
     CHECK(!cp_do(CPA_PASSWORD, 501, NULL, "guestpass1", "guestpass2", NULL, 0, 0));
-    CHECK(cp_raw(4, 1024, 501, "Visitor", NULL, NULL, view.generation) == -EINVAL);   /* built-in name is fixed */
+    CHECK(cp_raw(4, 1024, 501, "Visitor", NULL, NULL, view.generation) == -EPERM);    /* sec-k08 (U4-5): no own rename */
     CHECK(cp_raw(5, 0, 1002, NULL, NULL, NULL, view.generation) == -EPERM);
     CHECK(cp_raw(4, 512 | 2, 501, NULL, NULL, NULL, view.generation) == -EPERM);
     puts("H12 Guest: own password only with the old password, rename/delete/type refused PASS");
@@ -213,6 +213,19 @@ static void scenario_saver(void)
     CHECK(p.disposition == LGN_AUTHENTICATED && !gate_trusted());
     puts("H12 resume: Stand by arms SECURE_ENTER(RESUME) and reports LOCKED before sleeping; the resumed session stays "
          "locked until the owner's password PASS");
+    /* sec-k08 (U4-3): a firmware-initiated suspend (APM Critical Suspend)
+     * the desktop never armed: the kernel conceals the session through PID 1
+     * and LOGON locks it; a plain Ctrl+Alt+Delete still shows the menu. */
+    fw_resumes++; security_attention_resume(); pid1();
+    RUN_UNTIL(logon.mode == LGN_MODE_LOCKED && !logon.enter_reason, 400);
+    CHECK(gate_trusted() && logon.session.console.reason == CIUKI_SECURITY_SECURE_RESUME &&
+          logon.session.console.authentication_required && logon.session.id == session);
+    p = authenticate(3, 1000, NULL, "password");
+    CHECK(p.disposition == LGN_AUTHENTICATED && !gate_trusted() && logon.mode == LGN_MODE_HIDDEN);
+    g_ticks += 5000; st = attention(); CHECK(st.mode == LGN_MODE_SECURITY);
+    CHECK(!ui_event(LGN_OP_LOCK_EVENT, LGN_EVENT_MENU_RETURN, st.session, st.console, &p) && !gate_trusted());
+    puts("H12 firmware resume (sec-k08): a suspend the desktop did not arm is concealed by the kernel and locked by LOGON "
+         "until the owner's password; a later Ctrl+Alt+Delete shows the security menu PASS");
 }
 static void scenario_saver_blank(void)
 {
@@ -225,6 +238,11 @@ static void scenario_saver_blank(void)
     struct lgn_progress p;
     CHECK(!desk_lock(&p) && p.status == LGN_STATUS_NO_PASSWORD && !gate_trusted());
     puts("H12 blank owner: saver dismissal and Stand by keep no false lock (BLANK), Lock gives the set-password guidance PASS");
+    /* sec-k08 (U4-3): a firmware resume conceals, then restores a passwordless owner. */
+    fw_resumes++; security_attention_resume(); pid1();
+    RUN_UNTIL(logon.mode == LGN_MODE_HIDDEN && !gate_trusted() && !logon.resume_until, 400);
+    CHECK(logon.session.blank && grants_display_pid() == logon.session.launch[0].pid);
+    puts("H12 firmware resume, blank owner (sec-k08): concealed by the kernel, restored by LOGON without a false lock PASS");
     /* User Accounts (Passwords alias): CiukiUser sets a password with the
      * empty old one; the desktop tells LOGON (notice PASSWORD). */
     CHECK(!cp_do(CPA_READ, 0, NULL, NULL, NULL, NULL, 0, 0) && view.self_admin && view.self_uid == 1000);

@@ -62,11 +62,14 @@ int main(int argc,char **argv)
     link_file("/Windows/Desktop/Native.lnk","Native shortcut","/Programs/UserNative","");
     link_file("/Documents/Desktop/Native.lnk","Native shortcut","/Programs/UserNative","");
     file("/Programs/UserNative","\177ELF",4);file("/Programs/control","\177ELF",4);file("/Programs/hwreport","\177ELF",4);
+    file("/Programs/sectest","\177ELF",4);
     struct desk_uninstall_entry limited[4];
     assert(cp_program_list(&store,limited,4)==4 && limited[0].inventory_more);
     for(unsigned j=0;j<4;j++)assert(limited[j].system_component);
     unsigned i=find("External DOS launch");assert(entries[i].kind==DESK_PROGRAM_DOS && entries[i].disk_bytes);
     int n=cp_program_list(&store,entries,96);assert(n>=10);
+    for(int j=0;j<n;j++)assert(strcasecmp(entries[j].name,"sectest"));
+    assert(exists("/Programs/sectest"));
     for(int j=1;j<n;j++)assert(strcasecmp(entries[j-1].name,entries[j].name)<=0);
     i=find("hwreport");assert(entries[i].system_component && cp_program_remove(&store,&entries[i])==-EPERM && exists("/Programs/hwreport"));
     i=find("control");assert(entries[i].system_component && cp_program_remove(&store,&entries[i])==-EPERM && exists("/Programs/control"));

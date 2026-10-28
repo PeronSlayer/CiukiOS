@@ -38,6 +38,15 @@ int copy_user(void *out,const void *in,uint32_t n)
 void klog(const char *fmt,...) { assert(!strcmp(fmt,"[user %u] %s"));logs++; }
 void cpu_stall_record(const char *text,size_t bytes)
 { assert(owner && logs==forced+1 && bytes==strlen(input) && !memcmp(text,input,bytes));forced++; }
+/* sec-user-06: the T boot's self-test figure hand-off (core/syscall.c). */
+#pragma weak selftest_active
+#pragma weak selftest_submit
+#pragma weak supervisor_desktop_pid
+static bool self_test;
+static unsigned submitted;
+bool selftest_active(void) { return self_test; }
+void selftest_submit(const char *line) { assert(self_test && !strcmp(line,"registry_backup backup_ms=9 result=0"));submitted++; }
+uint32_t supervisor_desktop_pid(void) { return 7; }
 '''
         harness += source[begin:end] + r'''
 int main(void)
@@ -50,6 +59,12 @@ int main(void)
     range_ok=false;assert(sys_debug_write(0x800000,15)==-EFAULT && logs==3);
     range_ok=true;copy_ok=false;assert(sys_debug_write(0x800000,15)==-EFAULT && logs==3);
     assert(sys_debug_write(0x800000,241)==-EINVAL && logs==3);
+    /* sec-user-06: a "[selftest] " line reaches the self-test only during a
+     * T boot and only from the desktop process; it is logged either way. */
+    copy_ok=true;desktop.pid=7;input="[selftest] registry_backup backup_ms=9 result=0";n=(unsigned)strlen(input);
+    assert(sys_debug_write(0x800000,n)==(int)n && logs==4 && !submitted);
+    self_test=true;assert(sys_debug_write(0x800000,n)==(int)n && logs==5 && submitted==1);
+    desktop.pid=8;assert(sys_debug_write(0x800000,n)==(int)n && logs==6 && submitted==1);
     return 0;
 }
 '''

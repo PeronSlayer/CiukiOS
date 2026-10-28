@@ -42,6 +42,7 @@ int reg_registry_rpc(struct reg_remote *r,unsigned op,const void *in,size_t n,vo
         wr64(h+24,id);wr32(h+32,r->endpoint);wr32(h+36,(uint32_t)take);wr32(h+52,(uint32_t)n);wr32(h+56,(uint32_t)at);
         /* Body expected generation is root-specific; the envelope must carry it too. */
         if((!r->service||r->service==4)&&n>=32&&op<RB_WIN32)wr64(h+40,rd64((const uint8_t *)in+16));
+        if(r->service==2&&n==312)wr64(h+40,rd64((const uint8_t *)in+40));
         if(take)memcpy(h+64,(const uint8_t *)in+at,take);m.length=(uint32_t)(64+take);
         while(ciuki_channel_send(r->fd,&m,1)<0){
             if(errno!=EAGAIN||monotonic()>=deadline)goto transport_error;

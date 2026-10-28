@@ -34,11 +34,22 @@ static uint64_t now_of(struct lgn *g) { return g->sys->now_ms(g->sys->ctx); }
 static void changed(struct lgn *g) { g->state_generation++; }
 static void set_message(struct lgn *g, uint32_t message, int error)
 { g->message=message; g->error=error>0 ? -error : error; changed(g); }
+/* sec-user-06: the trusted screen's mode, one serial record per change, so
+ * the acceptance and security suites (tests/suites/acc-t23.json,
+ * sec-users.json) follow Welcome, lock, the security menu and log-off from
+ * LOGON itself rather than from screendumps. Mode names only. */
+static const char *mode_name(uint32_t mode)
+{
+    static const char *const names[]={"none","starting","welcome","loading","hidden","locked","security",
+                                      "ending","unavailable","power","enroll"};
+    return mode<sizeof(names)/sizeof(names[0]) ? names[mode] : "other";
+}
 static void set_screen(struct lgn *g, uint32_t mode)
 {
     if (g->mode==mode) return;
     if (mode!=LGN_MODE_LOCKED) g->override=0;   /* sec-user-04: armed only on the locked screen */
     g->mode=mode; changed(g);
+    lgn_note(g,"[logon] screen %s",mode_name(mode));   /* sec-user-06 */
 }
 
 /* ---- kernel calls --------------------------------------------------- */
@@ -227,13 +238,30 @@ static void session_poll(struct lgn *g)
     if (!e) session_activate(g);
     else if (e!=-EBUSY && e!=-EAGAIN) session_failed(g,e,LGN_MSG_START_FAILED);
 }
+/* sec-k08 (lead decision U4-3): firmware power events since the last
+ * watch. A firmware-initiated suspend (APM Critical Suspend, an unsolicited
+ * resume) never ran the desktop's password-on-resume, so the kernel
+ * concealed the session (core/power_source.c); LOGON then locks an owner
+ * with a password, as Windows XP prompts on resume by default, and restores
+ * a passwordless owner (no false lock, contract 4.3). */
+#define RESUME_GATE_MS 2000u   /* PID 1 moves the gate well within this */
+static int firmware_resumed(struct lgn *g)
+{
+    uint32_t count=0;
+    if (g->sys->resumes && !g->sys->resumes(g->sys->ctx,&count) && count!=g->resumes_seen) {
+        g->resumes_seen=count; g->resume_until=now_of(g)+RESUME_GATE_MS;
+    }
+    return now_of(g)<g->resume_until;
+}
 /* ACTIVE: a session generation the coordinator did not cause means the
- * kernel moved the gate (physical attention, a trusted role restart) or the
- * pair ended. One idempotent ATTENTION entry reads the current binding. */
+ * kernel moved the gate (physical attention, a firmware resume, a trusted
+ * role restart) or the pair ended. One idempotent ATTENTION entry reads the
+ * current binding. */
 static void session_watch(struct lgn *g)
 {
     struct lgn_session *s=&g->session;
     uint32_t state=0, generation=0;
+    int resumed=firmware_resumed(g);   /* sec-k08: sampled on every watch */
     int e=session_query(g,s->id,&state,&generation);
     if (e || state!=CIUKI_SECURITY_SESSION_ACTIVE) { begin_ending(g,LGN_END_CRASH); return; }
     if (generation==s->generation || g->enter_reason) return;
@@ -244,6 +272,16 @@ static void session_watch(struct lgn *g)
     if (s->console.authentication_required) {
         set_screen(g,LGN_MODE_LOCKED);
         if (g->message==LGN_MSG_NONE) set_message(g,LGN_MSG_SERVICE_RESTART,0);
+    } else if (resumed && s->blank) {   /* sec-k08: nothing to unlock with */
+        g->resume_until=0;
+        if (menu_return(g)) set_screen(g,LGN_MODE_SECURITY);
+        else lgn_note(g,"[logon] session %u resumed (no password)",s->id);
+    } else if (resumed) {               /* sec-k08 */
+        g->resume_until=0;
+        e=console_enter(g,s->id,CIUKI_SECURITY_SECURE_RESUME);
+        if (e && e!=-EBUSY) { set_screen(g,LGN_MODE_SECURITY); return; }
+        set_screen(g,LGN_MODE_LOCKED);
+        lgn_note(g,"[logon] session %u locked after a firmware resume",s->id);
     } else set_screen(g,LGN_MODE_SECURITY);
 }
 static void session_collect(struct lgn *g)
@@ -441,7 +479,10 @@ void lgn_auth_reply(struct lgn *g, const struct lgn_auth_request *q, int status,
     struct lgn_verify *v=verify_find(g,q->attempt);
     if (status && v && !v->outcome_seen) {
         if (q->link==NO_LINK) { lgn_note(g,"[logon] automatic logon failed: %d",status); set_screen(g,LGN_MODE_WELCOME); }
-        else if (link_waiting(g,q->link,q->attempt)) reply_progress(g,q->link,LGN_FAILED,status,0);
+        else if (link_waiting(g,q->link,q->attempt)) {
+            lgn_note(g,"[logon] authentication refused action=%u status=%d",v->action,status);   /* sec-user-06 */
+            reply_progress(g,q->link,LGN_FAILED,status,0);
+        }
     }
     if (v) memset(v,0,sizeof(*v));
 }
@@ -528,6 +569,7 @@ static int unlock(struct lgn *g, const struct acct_auth_outcome *o)
         o->challenge.console!=s->console.console_generation) return -EAGAIN;
     int e=console_leave(g);
     if (!e) { g->override=0; set_screen(g,LGN_MODE_HIDDEN); set_message(g,LGN_MSG_NONE,0); }
+    if (!e) lgn_note(g,"[logon] session %u unlocked",s->id);   /* sec-user-06 */
     return e;
 }
 static void outcome(struct lgn *g, unsigned i)
@@ -590,6 +632,11 @@ static void outcome(struct lgn *g, unsigned i)
     } else if (o.disposition==LGN_FAILED && link==NO_LINK) {
         lgn_note(g,"[logon] automatic logon refused: %d",o.status); set_screen(g,LGN_MODE_WELCOME);
     }
+    /* sec-user-06: an interactive attempt that did not authenticate (wrong
+     * password, unknown or disabled name: the same public refusal), with
+     * the action (2 logon, 3 unlock) and status only, never the name. */
+    if (link!=NO_LINK && p.disposition==LGN_FAILED)
+        lgn_note(g,"[logon] authentication refused action=%u status=%d",o.challenge.action,p.status);
     if (link!=NO_LINK && waiting) {
         uint8_t body[16];
         if (lgn_progress_encode(&p,body,16)) (void)lgn_reply(g,link,-EIO,NULL,0);
@@ -619,6 +666,9 @@ static void attention(struct lgn *g)
     int e=console_enter(g,s->id,CIUKI_SECURITY_SECURE_ATTENTION);
     if (g->mode==LGN_MODE_LOCKED || (e && e!=-EBUSY)) return;
     set_screen(g,!e && s->console.authentication_required ? LGN_MODE_LOCKED : LGN_MODE_SECURITY);
+    /* sec-user-06: the self-test's secure attention (one per T boot). */
+    if (g->selftest && !g->selftest_returned && !g->selftest_return_at && g->mode==LGN_MODE_SECURITY)
+        g->selftest_return_at=now_of(g)+3000;
 }
 static void ui_state(struct lgn *g, unsigned i)
 {
@@ -671,7 +721,10 @@ static void lock_event(struct lgn *g, unsigned i)
         else if (s->blank) { set_message(g,LGN_MSG_BLANK_LOCK,0); reply_progress(g,i,0,LGN_STATUS_NO_PASSWORD,0); return; }
         else {
             e=console_enter(g,s->id,CIUKI_SECURITY_SECURE_LOCK);
-            if (!e || e==-EBUSY) { e=0; set_screen(g,LGN_MODE_LOCKED); }
+            if (!e || e==-EBUSY) {
+                e=0; set_screen(g,LGN_MODE_LOCKED);
+                lgn_note(g,"[logon] session %u locked by the security menu",s->id);   /* sec-user-06 */
+            }
         }
     } else if (!e) {
         /* Menu return never lowers a lock. */
@@ -717,6 +770,7 @@ static void session_lock(struct lgn *g, unsigned i)
         int e=console_enter(g,s->id,CIUKI_SECURITY_SECURE_LOCK);
         if (e && e!=-EBUSY) { (void)lgn_reply(g,i,e,NULL,0); return; }
         set_screen(g,LGN_MODE_LOCKED);
+        lgn_note(g,"[logon] session %u locked by the desktop",s->id);   /* sec-user-06 */
     }
     reply_progress(g,i,0,0,0);
 }
@@ -831,14 +885,29 @@ int lgn_init(struct lgn *g, const struct lgn_sys *sys)
     int e=sys->boot_flags ? sys->boot_flags(sys->ctx,&flags) : -ENOSYS;
     /* Safe Mode cannot be attested: no automatic logon this boot. */
     g->safe=e ? 1 : !!(flags&CIUKI_BOOT_SAFE_MODE);
+    g->selftest=!e && (flags&LGN_BOOT_SELF_TEST);   /* sec-user-06 */
     if (e) g->autologon_done=1;
     g->started=now_of(g); g->mode=LGN_MODE_STARTING;
+    (void)firmware_resumed(g); g->resume_until=0;   /* sec-k08: the baseline count */
     return 0;
 }
 static void advance(struct lgn *g)
 {
     uint64_t now=now_of(g);
     struct lgn_session *s=&g->session;
+    /* sec-user-06: during a self-test boot (fx-selftest) the kernel's check
+     * security.lock_latency enters the secure attention as the physical
+     * Ctrl+Alt+Del does; LOGON leaves its security menu by itself once, so
+     * the unattended run measures conceal and restore and ends at the
+     * desktop. A gate still draining retries every 500 ms (at most 20). */
+    if (g->selftest_return_at && now>=g->selftest_return_at) {
+        int e=g->mode==LGN_MODE_SECURITY ? menu_return(g) : 0;
+        if ((e==-EAGAIN || e==-EBUSY) && ++g->selftest_tries<20) g->selftest_return_at=now+500;
+        else {
+            g->selftest_return_at=0; g->selftest_returned=1;
+            lgn_note(g,"[logon] self-test: security menu returned result=%d",e);
+        }
+    }
     if (!g->boot_valid && !s->phase) {
         int e=console_enter(g,0,CIUKI_SECURITY_SECURE_ATTENTION);
         if (e==-EBUSY) adopt(g);

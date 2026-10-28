@@ -874,6 +874,9 @@ static const struct expectation expectations[] = {
     {"constant.CIUKI_SYSTEM_SETTING_PERFORMANCE", CIUKI_SYSTEM_SETTING_PERFORMANCE, 2u},
     {"constant.CIUKI_SYSTEM_SETTING_ACCEL_RETRY", CIUKI_SYSTEM_SETTING_ACCEL_RETRY, 3u},
     {"constant.CIUKI_SYSTEM_SETTING_MAX", CIUKI_SYSTEM_SETTING_MAX, 24575u},
+    /* sec-k08: sealed clock.cfg (S2-5) and machine power buttons (U4-6). */
+    {"constant.CIUKI_SYSTEM_SETTING_CLOCK", CIUKI_SYSTEM_SETTING_CLOCK, 4u},
+    {"constant.CIUKI_SYSTEM_SETTING_POWER", CIUKI_SYSTEM_SETTING_POWER, 5u},
     {"sizeof.ciuki_system_job", sizeof(struct ciuki_system_job), 32u},
     {"alignof.ciuki_system_job", _Alignof(struct ciuki_system_job), 4u},
     {"offsetof.ciuki_system_job.version", __builtin_offsetof(struct ciuki_system_job, version), 0u},

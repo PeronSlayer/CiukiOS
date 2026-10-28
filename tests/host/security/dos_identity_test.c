@@ -433,6 +433,88 @@ static void test_private_stores(void)
     puts("H06 stores: PASS (Alice/Bob separate COW under their own profiles, persistence across sessions, Bob/Guest denied Alice's overlay, administrator file management)");
 }
 
+#ifdef CIUKI_POLICY_COVERAGE
+/* ---- sec-k08 H13 (tests/host/security/test_policy_coverage.py): the DOS
+ * VM frontend. A Standard user's (Bob's) and Guest's VM try another user's
+ * (Alice's) profile, hive and crash logs, SYSTEM state and the sealed
+ * boot/service set through the production DFV2 redirector on D:; each
+ * attempt fails with DOS error 5 (or 3/2 where the name is filtered), four
+ * repetitions change no VM hold, IFS statistic other than the denial count,
+ * open description, pin, page or heap block, and the VM's teardown returns
+ * every hold and the subject reference (finish() requires refs==1). ---- */
+static unsigned h13_cases;
+struct h13_state { unsigned pages,heap,held,opens; uint32_t descriptions,pins; };
+static void h13_snapshot(struct h13_state *s)
+{
+    struct file_ledger l; files_snapshot(space,&l);
+    *s=(struct h13_state){pages_used,heap_blocks,dfv2_ifs_held(&IFS),IFS.stats.opens,l.descriptions,l.pins};
+}
+static void h13_refused(const char *what,uint16_t ax,const char *path,unsigned slot)
+{
+    int first=ax==0x1116 ? dos_open(path,slot) : ax==0x1117 ? dos_create(path,slot) : dos_path(ax,path);
+    if (first!=5 && first!=3 && first!=2) printf("H13 dos %s %04x %s: %d\n",what,ax,path,first);
+    CHECK(first==5 || first==3 || first==2);
+    struct h13_state b,e; h13_snapshot(&b);
+    for (unsigned k=0;k<3;k++) {
+        int r=ax==0x1116 ? dos_open(path,slot) : ax==0x1117 ? dos_create(path,slot) : dos_path(ax,path);
+        CHECK(r==first);
+    }
+    h13_snapshot(&e);
+    if (memcmp(&b,&e,sizeof(b))) printf("H13 dos leak %s: pages %u/%u heap %u/%u held %u/%u opens %u/%u descriptions %u/%u pins %u/%u\n",what,
+        b.pages,e.pages,b.heap,e.heap,b.held,e.held,b.opens,e.opens,b.descriptions,e.descriptions,b.pins,e.pins);
+    CHECK(!memcmp(&b,&e,sizeof(b))); h13_cases++;
+}
+static void h13_dos(void)
+{
+    static const char *const dirs[]={"/Windows/Profiles/u00000003/Local Settings","/Windows/Profiles/u00000003/Local Settings/Application Data",
+        "/Windows/Profiles/u00000003/Local Settings/Application Data/CiukiOS","/Windows/Profiles/u00000003/Local Settings/Application Data/CiukiOS/Logs",
+        "/System/Logs","/System/Services"};
+    for (unsigned i=0;i<sizeof(dirs)/sizeof(*dirs);i++) { int e=make_dir(dirs[i]); CHECK(!e || e==-EEXIST); }
+    file_put("C:\\Windows\\Profiles\\u00000003\\USER.CRG","hive");
+    file_put("C:\\Windows\\Profiles\\u00000003\\Local Settings\\Application Data\\CiukiOS\\Logs\\CRASH1.TXT","crash");
+    file_put("C:\\Windows\\USER.CRG","hive"); file_put("C:\\System\\Logs\\BOOT.LOG","boot");
+    file_put("C:\\System\\VMM.ELF","kernel"); file_put("C:\\System\\BOOT.CFG","safe=0"); file_put("C:\\System\\Services\\LOGON.ELF","logon");
+    char path[192],ls[16];
+    { struct fat_entry entry; CHECK(!vfs_stat(host,"C:\\Windows\\Profiles\\u00000003\\Local Settings",&entry));
+      snprintf(ls,sizeof(ls),"%s",entry.alias[0] ? entry.alias : entry.name); }
+    const struct user *who[]={&BOB,&GUEST}; struct actor *actors[]={&bob,&guest_actor};
+    for (unsigned w=0;w<2;w++) {
+        logon(actors[w],who[w],2+2*w); c_format(); vm_start(actors[w]);
+        /* Alice's profile, hive and crash log. */
+        static const char *const leaves[]={"PRIVATE.TXT","USER.CRG"};
+        for (unsigned i=0;i<2;i++) {
+            snprintf(path,sizeof(path),"D:\\WINDOWS\\PROFILES\\%s\\%s",a_alias,leaves[i]);
+            h13_refused("Alice's file",0x1116,path,1); h13_refused("Alice's file attributes",0x110f,path,0);
+            h13_refused("Alice's file delete",0x1113,path,0);
+        }
+        snprintf(path,sizeof(path),"D:\\WINDOWS\\PROFILES\\%s\\%s\\APPLIC~1\\CIUKIOS\\LOGS\\CRASH1.TXT",a_alias,ls);
+        h13_refused("Alice's crash log",0x1116,path,1);
+        snprintf(path,sizeof(path),"D:\\WINDOWS\\PROFILES\\%s",a_alias);
+        h13_refused("Alice's profile chdir",0x1105,path,0); h13_refused("Alice's profile rmdir",0x1101,path,0);
+        snprintf(path,sizeof(path),"D:\\WINDOWS\\PROFILES\\%s\\PLANTED.TXT",a_alias);
+        h13_refused("plant in Alice's profile",0x1117,path,4);
+        snprintf(path,sizeof(path),"D:\\WINDOWS\\PROFILES\\%s\\NEWDIR",a_alias);
+        h13_refused("mkdir in Alice's profile",0x1103,path,0);
+        /* SYSTEM state. */
+        h13_refused("accounts",0x1116,"D:\\SYSTEM\\SECURITY\\ACCOUNTS.DB",1);
+        h13_refused("system log",0x1116,"D:\\SYSTEM\\LOGS\\BOOT.LOG",1);
+        h13_refused("machine hive",0x1116,"D:\\WINDOWS\\USER.CRG",1);
+        h13_refused("security folder",0x1105,"D:\\SYSTEM\\SECURITY",0);
+        /* The sealed boot/service set (D: is read-only for every VM). */
+        static const char *const sealed[]={"D:\\SYSTEM\\VMM.ELF","D:\\SYSTEM\\BOOT.CFG","D:\\SYSTEM\\SERVICES\\LOGON.ELF"};
+        for (unsigned i=0;i<3;i++) {
+            h13_refused("sealed delete",0x1113,sealed[i],0); h13_refused("sealed create",0x1117,sealed[i],4);
+        }
+        h13_refused("sealed plant",0x1117,"D:\\SYSTEM\\SERVICES\\EVIL.ELF",4);
+        h13_refused("sealed rmdir",0x1101,"D:\\SYSTEM\\SERVICES",0);
+        unsigned denied=IFS.stats.denied; CHECK(denied);
+        vm_stop(); CHECK(!dfv2_ifs_held(&IFS));
+        logoff(actors[w]);   /* finish(): the subject is back to its own reference */
+    }
+    printf("H13 dos: %u refusals (Standard user and Guest VMs: another user's profile/hive/crash log, SYSTEM state, sealed boot and service set on D:) without hold/description/pin/page/heap leaks; VM teardown returns every hold and subject reference PASS\n",h13_cases);
+}
+/* ---- end sec-k08 ---- */
+#endif
 int main(int argc,char **argv)
 {
     CHECK(argc==3); setvbuf(stdout,0,_IONBF,0);
@@ -465,6 +547,9 @@ int main(int argc,char **argv)
     test_removable_view();
     test_gate_swap();
     test_private_stores();
+#ifdef CIUKI_POLICY_COVERAGE
+    h13_dos();   /* sec-k08 */
+#endif
     CHECK(!owner_security_bind(0));
     vfs_lock(&vfs,0); policy_unbind_locked(&vfs,2); vfs_unlock(&vfs);
     vfs_table_destroy(host); free(host); free(policy); free(owners);

@@ -50,14 +50,16 @@ static void list(struct lui *u)
 {
     uint8_t reply[16+144*LUI_ACCOUNTS]; size_t used=0; int frame=0;
     int e=u->host->call(u->host->ctx,LGN_SERVICE_AUTH,LGN_AUTH_LIST,NULL,0,reply,sizeof(reply),&used,&frame);
-    uint32_t count=0;
-    if (!e && !frame && used>=16) rd(reply+4,&count);
-    if (e || frame || used<16 || count>LUI_ACCOUNTS || used!=16+144*(size_t)count) { u->list_valid=0; u->count=0; u->dirty=1; return; }
+    uint32_t count=0,version=0;
+    if (!e && !frame && used>=16) { rd(reply,&version); rd(reply+4,&count); }
+    if (e || frame || used<16 || version!=1 || count>LUI_ACCOUNTS || used!=16+144*(size_t)count) { u->list_valid=0; u->count=0; u->dirty=1; return; }
     u->count=0;
     for (uint32_t i=0;i<count;i++) {
         const uint8_t *r=reply+16+144*i;
         uint32_t uid; rd(r,&uid);
         if (!memchr(r+16,0,32) || !lgn_name_syntax((const char *)r+16)) continue;
+        uint32_t flags=0; rd(r+8,&flags);
+        u->accounts[u->count].blank_logon=!!(flags & 4u); /* AUTH LIST hint, never unlock authority */
         u->accounts[u->count].uid=uid; memcpy(u->accounts[u->count].name,r+16,32); u->count++;
     }
     u->list_valid=1; u->dirty=1;
@@ -317,7 +319,10 @@ static void activate(struct lui *u, const struct lui_item *it)
     if (!it) return;
     switch (it->action) {
     case LUI_TILE:
-        u->selected=it->index; u->view=LUI_VIEW_PASSWORD; u->focus=0; wipe_secret(u); u->status[0]=0; break;
+        if (it->index<0 || (unsigned)it->index>=u->count) break;
+        u->selected=it->index; u->view=LUI_VIEW_PASSWORD; u->focus=0; wipe_secret(u); u->status[0]=0;
+        if (u->accounts[u->selected].blank_logon && u->state.mode==LGN_MODE_WELCOME) submit(u);
+        break;
     case LUI_FIELD_NAME: case LUI_FIELD_PASSWORD: break;
     case LUI_OK: submit(u); break;
     case LUI_BACK:
@@ -578,9 +583,43 @@ static void user_glyph(struct du_canvas *c, int x, int y, const char *name)
     char initial[2]={(char)(name[0]>='a' && name[0]<='z' ? name[0]-32 : name[0]),0};
     centred(c,DESK_FONT_TITLE,x+15,y+9,initial,LUI_BAND);
 }
+/* sec-user-06: one serial record per painted view change (mode, view,
+ * items, listed accounts, status class), so the suites drive Welcome, the
+ * locked screen and the security menu from LOGON_UI's own state. Classes
+ * and counts only: no name, no typed text. */
+static const char *status_class(const struct lui *u)
+{
+    if (!u->status[0]) return "none";
+    if (!strncmp(u->status,"The user name or password is incorrect",38)) return "incorrect";
+    if (!strncmp(u->status,"Please wait",11)) return "wait";
+    if (!strncmp(u->status,"Logon is not available",22)) return "unavailable";
+    return "other";
+}
+static void view_record(struct lui *u)
+{
+    static const char *const modes[]={"none","starting","welcome","loading","hidden","locked","security",
+                                      "ending","unavailable","power","enroll"};
+    static const char *const views[]={"list","password","typed","confirm-logoff","confirm-power","blank-lock","menu",
+                                      "override","enroll-plan","enroll-password"};
+    static const char *const classes[]={"none","incorrect","wait","unavailable","other"};
+    const char *cls=status_class(u);
+    uint32_t klass=0;
+    while (klass<4 && strcmp(classes[klass],cls)) klass++;
+    uint32_t mode=u->state_valid ? u->state.mode : 0;
+    uint32_t now[5]={mode,(uint32_t)u->view,u->item_count,u->count,klass};
+    if (u->recorded_valid && !memcmp(now,u->recorded,sizeof(now))) return;
+    memcpy(u->recorded,now,sizeof(now)); u->recorded_valid=1;
+    char line[128];
+    snprintf(line,sizeof(line),"[logon-ui] view mode=%s view=%s items=%u accounts=%u status=%s",
+             mode<sizeof(modes)/sizeof(modes[0]) ? modes[mode] : "other",
+             (unsigned)u->view<sizeof(views)/sizeof(views[0]) ? views[u->view] : "other",
+             u->item_count,u->count,cls);
+    note(u,line);
+}
 void lui_paint(struct lui *u, struct du_canvas *c)
 {
     layout(u);
+    view_record(u);   /* sec-user-06 */
     du_fill(c,(struct du_rect){0,0,LUI_W,LUI_H},LUI_BACKGROUND);
     du_fill(c,(struct du_rect){0,0,LUI_W,56},LUI_BAND);
     du_fill(c,(struct du_rect){0,424,LUI_W,56},LUI_BAND);

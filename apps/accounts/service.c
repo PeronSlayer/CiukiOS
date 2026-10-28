@@ -194,6 +194,8 @@ static void snapshot(const struct acct_db *d, const struct acct_subject *subject
             !(subject->service==ACCT_ENDPOINT_AUTH && subject->safe_mode && r->uid == 500 && (r->flags & ACCT_PASSWORD_SET))) continue;
         struct acct_public *p = &out->records[out->count++];
         p->uid = r->uid; p->flags = (r->flags & ACCT_ENABLED) | (r->groups == ACCT_ADMIN ? 2u : 0u); p->groups = r->groups;
+        if (subject->service==ACCT_ENDPOINT_AUTH && (r->flags & ACCT_READY_BLANK))
+            p->flags |= ACCT_PUBLIC_BLANK_LOGON;
         memcpy(p->name, r->name, 32); memcpy(p->picture, r->picture, 96);
     }
 }
@@ -269,8 +271,12 @@ static int mutate(struct acct_service *s, struct acct_job *job)
             !acct_password_valid(q->password,0) || strcmp(q->password,q->confirm)) return -EINVAL;
     } else {
         if (index<0) return -ENOENT;
-        int personal=q->operation==ACCT_PASSWORD || q->operation==ACCT_PICTURE || q->operation==ACCT_RENAME ||
-            (q->operation==ACCT_UPDATE && !(q->selectors&~(1024u|4096u)));
+        /* sec-k08 (lead decision U4-5): a Standard user or Guest changes
+         * only their own password and picture (Windows XP limited accounts);
+         * the name, like type and status, is an administrator's change. The
+         * service refuses it, whatever the page offers. */
+        int personal=q->operation==ACCT_PASSWORD || q->operation==ACCT_PICTURE ||
+            (q->operation==ACCT_UPDATE && !(q->selectors&~4096u));
         if (!is_admin && !(self && personal)) return -EPERM;
         int destructive=q->operation==ACCT_DELETE || q->operation==ACCT_ROLE ||
             (q->operation==ACCT_ENABLE && !(q->flags&ACCT_ENABLED)) ||
@@ -369,6 +375,9 @@ static int profile(struct acct_service *s, struct acct_job *job, struct acct_res
 {
     struct acct_request *q=&job->request; int i=q->uid?find_uid(&s->db,q->uid):find_name(&s->db,q->name);
     int trusted=job->subject.role==ACCT_ROLE_LOGON || job->subject.role==ACCT_ROLE_ACCOUNT;
+    /* The sealed SYSTEM broker resolves the private hive of its retained
+     * caller. uid 0 by itself remains untrusted, as for all account APIs. */
+    if (job->subject.role==ACCT_ROLE_REGISTRY && !job->subject.uid && !job->subject.session_id) trusted=1;
     /* Deny a foreign selector before disclosing whether that mapping exists. */
     if(!admin(&job->subject) && !trusted && (q->uid?q->uid!=job->subject.uid:
         (i<0 || s->db.records[i].uid!=job->subject.uid))) return -EACCES;
@@ -425,6 +434,21 @@ static int execute(struct acct_service *s, struct acct_job *job, struct acct_res
     e=mutate(s,job);
     return acct_results_finish(s,q,e);
 }
+/* sec-user-06: the management audit record (adapter.h audit). The new
+ * account of a committed CREATE is the database's last record. */
+static void audit_management(const struct acct_service *s, int status)
+{
+    const struct acct_request *q = &s->active.request;
+    unsigned op = q->operation;
+    if (!s->store.kernel.audit || (op != ACCT_CREATE && op != ACCT_DELETE && op != ACCT_RENAME && op != ACCT_ENABLE &&
+                                   op != ACCT_ROLE && op != ACCT_PASSWORD && op != ACCT_PICTURE && op != ACCT_UPDATE)) return;
+    uint32_t target = q->uid, groups = q->groups;
+    if (op == ACCT_CREATE && !status && s->db.count) target = s->db.records[s->db.count - 1].uid;
+    for (uint32_t i = 0; op != ACCT_CREATE && op != ACCT_ROLE && i < s->db.count; i++)
+        if (s->db.records[i].uid == target) groups = s->db.records[i].groups;
+    const char *type = (groups & 1u) ? "admin" : groups == ACCT_GUEST ? "guest" : groups ? "standard" : "-";
+    s->store.kernel.audit(s->store.kernel.ctx, op, s->active.subject.uid, target, type, status);
+}
 int acct_work(struct acct_service *s, struct acct_response *out)
 {
     if (!out) return -EINVAL;
@@ -464,6 +488,7 @@ int acct_work(struct acct_service *s, struct acct_response *out)
     }
     struct acct_subject subject = s->active.subject;
     uint32_t wire_operation=s->active.request.wire_operation;
+    audit_management(s, out->error);   /* sec-user-06 */
     acct_wipe(&s->active, sizeof(s->active));
     s->active = s->pending;
     acct_wipe(&s->pending, sizeof(s->pending));

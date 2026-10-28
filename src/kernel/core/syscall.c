@@ -22,6 +22,10 @@ extern int32_t power_status_query(uint32_t address, uint32_t bytes) __attribute_
 extern int32_t power_record_call(uint32_t action, uint32_t address, uint32_t bytes) __attribute__((weak));
 extern int32_t dosvm_client_syscall(struct trap_frame *) __attribute__((weak));
 extern int security_syscall(struct trap_frame *) __attribute__((weak));
+/* sec-user-06: self-test figures from the desktop (ciuki/selftest.h). */
+extern bool selftest_active(void) __attribute__((weak));
+extern void selftest_submit(const char *) __attribute__((weak));
+#pragma weak supervisor_desktop_pid
 
 extern int copy_user(void *dst, const void *src, uint32_t len);
 extern bool probe_f2_libc_report(struct task *, const char *, uint32_t) __attribute__((weak));
@@ -41,6 +45,13 @@ static int32_t sys_debug_write(uint32_t buf, uint32_t len)
             kbuf[i] = '.';
     g_current->debug_bytes += len;
     klog("[user %u] %s", g_current->id, kbuf);
+    /* sec-user-06: during a T boot only, a "[selftest] " line of this boot's
+     * desktop process is a figure for the running self-test check. */
+    if (selftest_active && selftest_submit && supervisor_desktop_pid && len > 11 &&
+        !memcmp(kbuf, "[selftest] ", 11) && selftest_active()) {
+        struct process *p = proc_current();
+        if (p && p->pid == supervisor_desktop_pid()) selftest_submit(kbuf + 11);
+    }
     if (cpu_stall_record && len >= sizeof("[desktop] stall ")-1 &&
         !strncmp(kbuf, "[desktop] stall ", sizeof("[desktop] stall ")-1) &&
         grants_display_owner && grants_display_owner(proc_current()))

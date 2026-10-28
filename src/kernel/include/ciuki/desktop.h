@@ -85,6 +85,18 @@ void grants_console_release(uint32_t session);
 int grants_console_neutral(void);
 bool grants_console_trusted(void);
 void grants_console_snapshot(struct grants_console_state *out);
+/* sec-user-06: trusted-gate latency of this boot (contract 4.3; self-test
+ * security.lock_latency). A concealment that hid a visible session runs
+ * from grants_console_conceal to the neutral black frame (neutral_ms) and
+ * to the trusted UI's first presented frame (trusted_ms); a restoration
+ * from grants_console_activate to the session's first frame (restore_ms).
+ * Milliseconds of g_ticks; *_max over the boot, last_* the latest. */
+struct grants_console_timing {
+    uint32_t concealments, restorations;
+    uint32_t last_neutral_ms, last_trusted_ms, last_restore_ms;
+    uint32_t max_neutral_ms, max_trusted_ms, max_restore_ms;
+};
+void grants_console_timing(struct grants_console_timing *out);
 /* --- sec-k07 (end) --- */
 int grant_display_info(struct process *p, int32_t fd, struct ciuki_framebuffer_info *out);
 int grant_present(struct process *p, int32_t display, int32_t surface, const struct ciuki_rect *rect);

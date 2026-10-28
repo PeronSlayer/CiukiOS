@@ -85,6 +85,11 @@ struct acct_kernel {
     int (*deliver_reply)(void *, const struct acct_subject *, unsigned operation,
                           uint64_t generation, int status, const void *, size_t);
     void (*exchange_end)(void *, const struct acct_subject *);
+    /* sec-user-06 (optional): one record per completed account-management
+     * request, as Windows XP's account-management audit: operation, caller
+     * and target uids, the target's type and the result. No name, password
+     * or picture. NULL in host fixtures that do not record. */
+    void (*audit)(void *, unsigned operation, uint32_t caller, uint32_t target, const char *type, int status);
 };
 
 enum acct_owner_op { ACCT_OWNER_PREPARE = 1, ACCT_OWNER_COMMIT,

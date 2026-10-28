@@ -25,7 +25,7 @@ def validate_payloads():
     checker = lua.checker()
     files = {"/System/Win32/shell-launch": {"source": "build/apps/desktop/shell-launch",
              "sha256": desktop["files"]["shell-launch"], "elf": desktop["elf"]["shell-launch"]}}
-    for name in ("desktop", "demo", "gfxdemo", "dosbox", "files", "tasks", "ciuknote", "ciukide", "paint", "terminal", "hwreport", "resmeter", "schedtask", "sysinfo", "sysmon"):
+    for name in ("desktop", "demo", "gfxdemo", "dosbox", "files", "tasks", "ciuknote", "ciukide", "paint", "terminal", "hwreport", "resmeter", "schedtask", "sysinfo", "sysmon", "sectest"):
         files["/Programs/" + name] = {"source": "build/apps/desktop/" + name,
                                "sha256": desktop["files"][name], "elf": desktop["elf"][name]}
     for name, source in (("lua", "build/apps/lua/lua"), ("hello", "build/tools/ciuki-sdk/tests/hello.elf"),

@@ -631,6 +631,409 @@ static void test_settings(void)
 }
 /* ---- end sec-sysvc2 ---- */
 
+/* ---- sec-k08: clock.cfg sealed behind SETTING CLOCK (lead decision S2-5)
+ * and the machine power buttons power.cfg behind SETTING POWER (U4-6). */
+static int32_t sys_unlink_as(struct actor *a,const char *path)
+{ as(a); CHECK(!ua_write(a->p->memory,USER,path,(uint32_t)strlen(path)+1)); return call(CIUKI_SYS_UNLINK,USER,0,0,0,0); }
+static void test_k08_settings(void)
+{
+    char text[512]; size_t n;
+    const char clock[]="version=2\nrtc_local=1\noffset_minutes=60\nauto_dst=1\nrtc_bias_minutes=120\nzone=Europe/Rome\n"
+                       "tz=CET-1CEST,M3.5.0,M10.5.0/3\n";
+    const char power[]="power_button=standby\npower_lid=shutdown\n";
+    kernel_file("C:/System/Settings/clock.cfg","version=1\nrtc_local=0\noffset_minutes=0\n",37);
+    kernel_file("C:/System/Settings/power.cfg","power_button=shutdown\n",22);
+    static const char *const sealed[]={"/System/Settings/clock.cfg","/System/Settings/power.cfg","/System/Settings/CLOCK.CFG",
+        "/System/Settings/Power.Cfg"};
+    struct actor *direct[]={&admin,&interim,&alice,&guest};
+    for(unsigned i=0;i<sizeof(sealed)/sizeof(*sealed);i++) for(unsigned w=0;w<4;w++) {
+        CHECK(sys_open_as(direct[w],sealed[i],O_RDWR)==-EACCES);
+        CHECK(sys_open_as(direct[w],sealed[i],O_WRONLY|O_TRUNC)==-EACCES);
+    }
+    CHECK(sys_unlink_as(&admin,"/System/Settings/clock.cfg")==-EACCES);
+    /* Everyone reads them: the desktop of every session reads power.cfg. */
+    for(unsigned w=0;w<4;w++) for(unsigned i=0;i<2;i++) {
+        int32_t fd=sys_open_as(direct[w],sealed[i],O_RDONLY); CHECK(fd>=0); sys_close_as(direct[w],fd);
+    }
+    /* Look-alike names and the same names elsewhere keep their own class. */
+    int32_t fd=sys_open_as(&admin,"/System/Settings/clock2.cfg",O_RDWR|O_CREAT); CHECK(fd>=0); sys_close_as(&admin,fd);
+    struct actor *refused[]={&alice,&bob,&guest,&service_subject};
+    for(unsigned i=0;i<4;i++) {
+        CHECK(setting(refused[i],CIUKI_SYSTEM_SETTING_CLOCK,clock,sizeof(clock)-1)==-EPERM);
+        CHECK(setting(refused[i],CIUKI_SYSTEM_SETTING_POWER,power,sizeof(power)-1)==-EPERM);
+    }
+    CHECK(!kernel_read("C:/System/Settings/clock.cfg",text,sizeof(text),&n) && n==37);
+    CHECK(!kernel_read("C:/System/Settings/power.cfg",text,sizeof(text),&n) && n==22);
+    CHECK(!setting(&admin,CIUKI_SYSTEM_SETTING_CLOCK,clock,sizeof(clock)-1));
+    CHECK(!kernel_read("C:/System/Settings/clock.cfg",text,sizeof(text),&n) && n==sizeof(clock)-1 && !memcmp(text,clock,n));
+    CHECK(!setting(&interim,CIUKI_SYSTEM_SETTING_POWER,power,sizeof(power)-1));
+    CHECK(!kernel_read("C:/System/Settings/power.cfg",text,sizeof(text),&n) && n==sizeof(power)-1 && !memcmp(text,power,n));
+    CHECK(!setting(&systemp,CIUKI_SYSTEM_SETTING_POWER,"power_lid=none\n",15));
+    CHECK(!kernel_read("C:/System/Settings/power.cfg",text,sizeof(text),&n) && n==15);
+    /* Only what the time zone service and the desktop accept. */
+    static const char *const bad_clock[]={"","version=3\nrtc_local=0\n","rtc_local=0\n","version=1\nrtc_local=0","version=1\nrtc_local=2\n",
+        "version=2\nrtc_local=0\noffset_minutes=900\n","version=2\nrtc_local=0\ntz=@@@\n","version=2\nrtc_local=0\nzone\n"};
+    for(unsigned i=0;i<sizeof(bad_clock)/sizeof(*bad_clock);i++)
+        CHECK(setting(&admin,CIUKI_SYSTEM_SETTING_CLOCK,bad_clock[i],(uint32_t)strlen(bad_clock[i]))==-EINVAL);
+    static const char *const bad_power[]={"","power_button=standby","power_button=sleep\n","power_lid=open\n","power_scheme=0\n",
+        "power_button=standby\npower_button=shutdown\n","power_lid=none\npower_lid=none\n","power_button=standby\n\n",
+        " power_button=standby\n","power_button=standby\r\n"};
+    for(unsigned i=0;i<sizeof(bad_power)/sizeof(*bad_power);i++)
+        CHECK(setting(&admin,CIUKI_SYSTEM_SETTING_POWER,bad_power[i],(uint32_t)strlen(bad_power[i]))==-EINVAL);
+    char long_power[160]; memset(long_power,'x',sizeof(long_power));
+    CHECK(setting(&admin,CIUKI_SYSTEM_SETTING_POWER,long_power,128)==-EINVAL);
+    char long_clock[600]; memcpy(long_clock,clock,sizeof(clock)-1);
+    for(size_t i=sizeof(clock)-1;i<sizeof(long_clock);i++) long_clock[i]=(i%40==39)?'\n':'x';
+    long_clock[sizeof(long_clock)-1]='\n';
+    CHECK(setting(&admin,CIUKI_SYSTEM_SETTING_CLOCK,long_clock,sizeof(long_clock))==-EINVAL);
+    CHECK(setting(&admin,6,"x\n",2)==-EINVAL);
+    CHECK(!kernel_read("C:/System/Settings/clock.cfg",text,sizeof(text),&n) && n==sizeof(clock)-1);
+    CHECK(!kernel_read("C:/System/Settings/power.cfg",text,sizeof(text),&n) && n==15);
+    puts("H16 sec-k08 sealed clock.cfg and power.cfg: every direct writer refused (administrators and the interim session too), everyone reads; SETTING CLOCK/POWER for administrators, interim and SYSTEM with the time zone service's and the desktop's own validation; standard users, Guest and a no-session subject EPERM PASS");
+}
+#ifdef CIUKI_POLICY_COVERAGE
+/* H13 native frontend (tests/host/security/test_policy_coverage.py): a
+ * Standard user (Alice, uid 1007) and Guest try to reach SYSTEM state,
+ * another user's (Bob's) profile, hive, crash logs, process and token, and
+ * the sealed boot/service set, through the production native syscalls, call
+ * 99 and call 101 on the real FAT/VFS/policy/OWNER stack. Every attempt is
+ * refused; after one warm attempt, three more change no fd, open
+ * description, pin, namespace node, page, heap block or subject/session
+ * reference (the teardown in main then requires zero of each). Unknown
+ * selectors of every native dispatcher deny without side effects. */
+static unsigned h13_cases;
+struct h13_state { unsigned pages, heap, fds; uint32_t descriptions, pins, nodes, refs, session_refs, owner_reads, disk_reads; };
+static unsigned h13_owner_reads;
+static int (*h13_owner_read_next)(void *, unsigned, void *, size_t, size_t *);
+static int h13_owner_read(void *c, unsigned i, void *p, size_t cap, size_t *n) { h13_owner_reads++; return h13_owner_read_next(c, i, p, cap, n); }
+static void h13_snapshot(struct actor *a, struct h13_state *s)
+{
+    struct file_ledger l; files_snapshot(space, &l); unsigned fds = 0;
+    for (int i = 0; i < CIUKI_OPEN_MAX; i++) fds += !!a->p->fds[i].object;
+    *s = (struct h13_state){pages_used, heap_blocks, fds, l.descriptions, l.pins, l.nodes, a->p->subject->refs,
+        a->p->subject->session ? a->p->subject->session->refs : 0, h13_owner_reads, disk[0].read_calls + disk[1].read_calls};
+}
+static void h13_same(const char *what, const struct h13_state *b, const struct h13_state *e)
+{
+    if (memcmp(b, e, sizeof(*b))) printf("H13 leak in %s: pages %u/%u heap %u/%u fds %u/%u descriptions %u/%u pins %u/%u nodes %u/%u refs %u/%u\n",
+        what, b->pages, e->pages, b->heap, e->heap, b->fds, e->fds, b->descriptions, e->descriptions, b->pins, e->pins, b->nodes, e->nodes, b->refs, e->refs);
+    CHECK(b->pages == e->pages && b->heap == e->heap && b->fds == e->fds && b->descriptions == e->descriptions &&
+          b->pins == e->pins && b->nodes == e->nodes && b->refs == e->refs && b->session_refs == e->session_refs);
+}
+/* One warm attempt, then three counted ones: each must be one of the two
+ * expected refusals and leave every resource counter unchanged. */
+#define H13_REFUSED(a, what, expr, e1, e2) do { \
+    int32_t h13_r = (expr); \
+    if (h13_r != (e1) && h13_r != (e2)) printf("H13 %s %s: %d\n", (a)->name, what, h13_r); \
+    CHECK(h13_r == (e1) || h13_r == (e2)); \
+    struct h13_state h13_b, h13_e; h13_snapshot(a, &h13_b); \
+    for (unsigned h13_i = 0; h13_i < 3; h13_i++) { h13_r = (expr); CHECK(h13_r == (e1) || h13_r == (e2)); } \
+    h13_snapshot(a, &h13_e); h13_same(what, &h13_b, &h13_e); h13_cases++; } while (0)
+static int32_t h13_path_call(struct actor *a, uint32_t nr, const char *path, const char *path2, uint32_t c)
+{
+    as(a); CHECK(!ua_write(a->p->memory, USER, path, (uint32_t)strlen(path) + 1));
+    if (path2) CHECK(!ua_write(a->p->memory, USER2, path2, (uint32_t)strlen(path2) + 1));
+    return call(nr, USER, path2 ? USER2 : c, 0666, 0, 0);
+}
+static int32_t h13_open(struct actor *a, const char *path, uint32_t flags)
+{
+    int32_t fd = sys_open_as(a, path, flags);
+    if (fd >= 0) sys_close_as(a, fd);
+    return fd;
+}
+static int32_t h13_info(struct actor *a, const char *path, uint32_t operation)
+{
+    struct ciuki_file_info r = {.version = CIUKI_FILE_INFO_VERSION, .size = sizeof(r), .operation = operation,
+        .mask = operation == CIUKI_FILE_INFO_SET ? CIUKI_FILE_INFO_ATTRIBUTES : 0, .attributes = 1};
+    as(a); CHECK(!ua_write(a->p->memory, USER, path, (uint32_t)strlen(path) + 1));
+    CHECK(!ua_write(a->p->memory, USER2, &r, sizeof(r)));
+    return call(CIUKI_SYS_FILE_INFO, USER, USER2, sizeof(r), 0, 0);
+}
+static int32_t h13_proc(struct actor *a, uint32_t nr, uint32_t b, uint32_t c, uint32_t d)
+{
+    as(a); struct trap_frame tf = {.eax = nr, .ebx = b, .ecx = c, .edx = d};
+    CHECK(!file_syscall(&tf));
+    return proc_syscall(&tf);
+}
+static int32_t h13_security(struct actor *a, uint32_t operation, uint32_t target_pid, uint32_t session)
+{
+    struct ciuki_security_args r = {.version = 1, .size = 64, .operation = operation, .target_pid = target_pid,
+        .session_id = session};
+    if (operation >= 1 && operation <= 3) { r.output_address = USER2; r.output_bytes = 64; }
+    as(a); CHECK(!ua_write(a->p->memory, USER, &r, sizeof(r)));
+    return h13_proc(a, CIUKI_SYS_SECURITY, USER, 64, 0);
+}
+static int32_t h13_recovery(struct actor *a, uint32_t op, uint32_t bytes)
+{
+    uint8_t record[512] = {0}; uint32_t v[2] = {1, bytes}; memcpy(record, v, sizeof(v));
+    as(a); CHECK(!ua_write(a->p->memory, REC, record, bytes));
+    struct trap_frame tf = {.eax = CIUKI_SYS_RECOVERY, .ebx = op, .ecx = REC, .edx = bytes}; int32_t r = 0;
+    return sysvc_syscall(a->p, a->p->subject, &tf, &r) ? r : -ENOSYS;
+}
+static void h13_layout(void)
+{
+    static const char *const dirs[] = {BOB_HOME "/Local Settings", BOB_HOME "/Local Settings/Application Data",
+        BOB_HOME "/Local Settings/Application Data/CiukiOS", BOB_HOME SYSVC_USER_LOGS, BOB_HOME "/Settings",
+        "/System/Services", "/System/Drivers", "/Programs", "/Programs/setup", "/CIUKILDR", "/System/Registry", "/System/SysBckup",
+        "/System/Services/empty"};
+    for (unsigned i = 0; i < sizeof(dirs) / sizeof(*dirs); i++) { int e = make_dir(dirs[i]); CHECK(!e || e == -EEXIST); }
+    static const char *const files[] = {"C:" BOB_HOME "/notes.txt", "C:" BOB_HOME "/USER.CRG", "C:" BOB_HOME "/Settings/Registry",
+        "C:" BOB_HOME SYSVC_USER_LOGS "/CRASH1.TXT", "C:/System/Security/accounts.dat", "C:/System/VMM.ELF",
+        "C:/System/Services/logon.elf", "C:/System/Drivers/ata.sys", "C:/Programs/setup/setup.elf", "C:/CIUKILDR/stage2.bin",
+        "C:/BOOT.CFG", "C:/System/PAGEFILE.SWP", "C:/Windows/USER.CRG", "C:/System/SFC.LST", "C:/System/Registry/System.reg",
+        "C:/System/SysBckup/RB000001.CRB"};
+    for (unsigned i = 0; i < sizeof(files) / sizeof(*files); i++) kernel_file(files[i], "private\n", 8);
+}
+static void h13_native(void)
+{
+    h13_layout();
+    h13_owner_read_next = owners->io.read; owners->io.read = h13_owner_read;
+    struct process *bob_p = bob.p, *system_p = systemp.p;
+    struct actor *intruders[] = {&alice, &guest};
+    for (unsigned w = 0; w < 2; w++) {
+        struct actor *a = intruders[w];
+        /* SYSTEM state: SECRET files and folders, read or write. */
+        static const char *const secret[] = {"/System/Security/accounts.dat", "/System/Security", "/System/Logs/BOOT.LOG",
+            "/System/PAGEFILE.SWP", "/Windows/USER.CRG", "/System/SysBckup/x", "/System/Registry/System.reg"};
+        for (unsigned i = 0; i < sizeof(secret) / sizeof(*secret); i++) {
+            H13_REFUSED(a, secret[i], h13_open(a, secret[i], O_RDONLY), -EACCES, -ENOENT);
+            H13_REFUSED(a, secret[i], h13_open(a, secret[i], O_RDWR | O_CREAT), -EACCES, -EACCES);
+        }
+        H13_REFUSED(a, "chdir security", h13_path_call(a, CIUKI_SYS_CHDIR, "/System/Security", 0, 0), -EACCES, -EACCES);
+        /* call 101: every LOGON-only operation, then SYSTEM's token. */
+        static const uint32_t logon_only[] = {CIUKI_SECURITY_SESSION_CREATE, CIUKI_SECURITY_SPAWN_CREDENTIAL,
+            CIUKI_SECURITY_SESSION_END, CIUKI_SECURITY_SESSION_LAUNCH, CIUKI_SECURITY_LAUNCH_POLL,
+            CIUKI_SECURITY_SECURE_ENTER, CIUKI_SECURITY_SECURE_LEAVE};
+        for (unsigned i = 0; i < sizeof(logon_only) / sizeof(*logon_only); i++)
+            H13_REFUSED(a, "call 101 LOGON operation", h13_security(a, logon_only[i], 0, 100), -EPERM, -EPERM);
+        H13_REFUSED(a, "SYSTEM token", h13_security(a, CIUKI_SECURITY_QUERY_PROCESS, system_p->pid, 0), -EACCES, -EACCES);
+        H13_REFUSED(a, "PID 1", h13_proc(a, CIUKI_SYS_PROC_TERMINATE, 1, SIGKILL, CIUKI_PROC_NO_AUTHORITY), -EPERM, -EPERM);
+        H13_REFUSED(a, "SYSTEM process", h13_proc(a, CIUKI_SYS_PROC_TERMINATE, system_p->pid, SIGKILL, CIUKI_PROC_NO_AUTHORITY), -EPERM, -EPERM);
+        /* call 99: every administrator service. */
+        static const struct { uint32_t op, bytes; } admin_ops[] = {{CIUKI_RECOVERY_BOOT_CONFIG, sizeof(struct ciuki_boot_config)},
+            {CIUKI_RECOVERY_DRIVER_PACK, sizeof(struct ciuki_driver_pack_job)}, {CIUKI_RECOVERY_SFC_RESTORE, sizeof(struct ciuki_sfc_restore)},
+            {CIUKI_RECOVERY_SETTING, sizeof(struct ciuki_system_setting)}};
+        for (unsigned i = 0; i < sizeof(admin_ops) / sizeof(*admin_ops); i++)
+            H13_REFUSED(a, "call 99 administrator service", h13_recovery(a, admin_ops[i].op, admin_ops[i].bytes), -EPERM, -EINVAL);
+        H13_REFUSED(a, "SETTING CLOCK", setting(a, CIUKI_SYSTEM_SETTING_CLOCK, "version=1\nrtc_local=0\n", 22), -EPERM, -EPERM);
+        H13_REFUSED(a, "SETTING POWER", setting(a, CIUKI_SYSTEM_SETTING_POWER, "power_lid=none\n", 15), -EPERM, -EPERM);
+        H13_REFUSED(a, "system log", log_read(a, CIUKI_SYSTEM_LOG_MACHINE, "BOOT.LOG", (char[96]){0}, 64, 0), -EPERM, -EPERM);
+        /* Another user's profile, hive, crash logs, process and token. */
+        static const char *const bobs[] = {BOB_HOME "/notes.txt", BOB_HOME "/USER.CRG", BOB_HOME "/Settings/Registry",
+            BOB_HOME SYSVC_USER_LOGS "/CRASH1.TXT", BOB_HOME};
+        for (unsigned i = 0; i < sizeof(bobs) / sizeof(*bobs); i++) {
+            H13_REFUSED(a, bobs[i], h13_open(a, bobs[i], O_RDONLY), -EACCES, -EACCES);
+            H13_REFUSED(a, bobs[i], h13_open(a, bobs[i], O_RDWR), -EACCES, -EISDIR);
+            H13_REFUSED(a, bobs[i], h13_info(a, bobs[i], CIUKI_FILE_INFO_GET), -EACCES, -EACCES);
+            H13_REFUSED(a, bobs[i], h13_info(a, bobs[i], CIUKI_FILE_INFO_SET), -EACCES, -EACCES);
+            H13_REFUSED(a, bobs[i], h13_path_call(a, CIUKI_SYS_STAT, bobs[i], 0, USER2), -EACCES, -EACCES);
+        }
+        H13_REFUSED(a, "create in Bob's profile", h13_open(a, BOB_HOME "/planted.txt", O_RDWR | O_CREAT), -EACCES, -EACCES);
+        H13_REFUSED(a, "mkdir in Bob's profile", h13_path_call(a, CIUKI_SYS_MKDIR, BOB_HOME "/planted", 0, 0777), -EACCES, -EACCES);
+        H13_REFUSED(a, "unlink in Bob's profile", h13_path_call(a, CIUKI_SYS_UNLINK, BOB_HOME "/notes.txt", 0, 0), -EACCES, -EACCES);
+        H13_REFUSED(a, "rename out of Bob's profile", h13_path_call(a, CIUKI_SYS_RENAME, BOB_HOME "/notes.txt", "/Documents/stolen.txt", 0),
+                    -EACCES, -EACCES);
+        H13_REFUSED(a, "chdir into Bob's profile", h13_path_call(a, CIUKI_SYS_CHDIR, BOB_HOME, 0, 0), -EACCES, -EACCES);
+        H13_REFUSED(a, "Bob's process", h13_proc(a, CIUKI_SYS_PROC_TERMINATE, bob_p->pid, SIGKILL, CIUKI_PROC_NO_AUTHORITY), -EPERM, -EPERM);
+        H13_REFUSED(a, "Bob's token", h13_security(a, CIUKI_SECURITY_QUERY_PROCESS, bob_p->pid, 0), -EACCES, -EACCES);
+        H13_REFUSED(a, "Bob's crash log by name", log_read(a, CIUKI_SYSTEM_LOG_USER, "../../u000003e9/CRASH1.TXT", (char[96]){0}, 64, 0),
+                    -EINVAL, -ENOENT);
+        /* The sealed boot/service set: write, truncate, remove, rename, metadata. */
+        static const char *const sealed[] = {"/System/VMM.ELF", "/System/BOOT.CFG", "/BOOT.CFG", "/CIUKILDR/stage2.bin",
+            "/System/Services/logon.elf", "/System/Drivers/ata.sys", "/Programs/setup/setup.elf", "/System/SFC.LST",
+            "/System/HWPROF.CFG", "/System/Settings/clock.cfg", "/System/Settings/power.cfg", "/System/Settings/performance.cfg"};
+        for (unsigned i = 0; i < sizeof(sealed) / sizeof(*sealed); i++) {
+            H13_REFUSED(a, sealed[i], h13_open(a, sealed[i], O_WRONLY), -EACCES, -EACCES);
+            H13_REFUSED(a, sealed[i], h13_open(a, sealed[i], O_WRONLY | O_TRUNC), -EACCES, -EACCES);
+            H13_REFUSED(a, sealed[i], h13_path_call(a, CIUKI_SYS_UNLINK, sealed[i], 0, 0), -EACCES, -EACCES);
+            H13_REFUSED(a, sealed[i], h13_path_call(a, CIUKI_SYS_RENAME, sealed[i], "/Documents/moved.bin", 0), -EACCES, -EACCES);
+            H13_REFUSED(a, sealed[i], h13_info(a, sealed[i], CIUKI_FILE_INFO_SET), -EACCES, -EACCES);
+        }
+        H13_REFUSED(a, "plant in /System/Services", h13_open(a, "/System/Services/evil.elf", O_RDWR | O_CREAT), -EACCES, -EACCES);
+        H13_REFUSED(a, "replace /System/Services", h13_path_call(a, CIUKI_SYS_RENAME, "/Documents", "/System/Services", 0), -EACCES, -ENOTEMPTY);
+        /* An empty folder of the caller's over an empty sealed folder, and into the sealed set. */
+        if (a == &alice) { int32_t e = h13_path_call(a, CIUKI_SYS_MKDIR, "/Documents/mine", 0, 0777); CHECK(!e || e == -EEXIST); }
+        H13_REFUSED(a, "replace an empty sealed folder", h13_path_call(a, CIUKI_SYS_RENAME, "/Documents/mine", "/System/Services/empty", 0),
+                    -EACCES, -EACCES);
+        H13_REFUSED(a, "move into the sealed set", h13_path_call(a, CIUKI_SYS_RENAME, "/Documents/mine", "/System/Services/new", 0),
+                    -EACCES, -EACCES);
+    }
+    /* Unknown selectors of the native dispatchers deny with no side effect:
+     * numbers outside every table reach proc_syscall's default (core/syscall.c
+     * routes the default case file -> desktop fd -> process). */
+    static const uint32_t unknown_nr[] = {6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 92, 93, 94, 95, 102, 103, 255, 0x7fffffffu, 0xffffffffu};
+    for (unsigned i = 0; i < sizeof(unknown_nr) / sizeof(*unknown_nr); i++)
+        H13_REFUSED(&alice, "unknown syscall", h13_proc(&alice, unknown_nr[i], USER, 64, 0), -ENOSYS, -ENOSYS);
+    static const uint32_t unknown_101[] = {0, 15, 16, 255, 0xffffffffu};
+    for (unsigned i = 0; i < sizeof(unknown_101) / sizeof(*unknown_101); i++)
+        H13_REFUSED(&alice, "unknown call-101 operation", h13_security(&alice, unknown_101[i], 0, 0), -EINVAL, -EINVAL);
+    static const uint32_t unknown_99[] = {11, 12, 64, 0x7fffffffu, 0xffffffffu};
+    for (unsigned i = 0; i < sizeof(unknown_99) / sizeof(*unknown_99); i++)
+        H13_REFUSED(&admin, "unknown call-99 service", h13_recovery(&admin, unknown_99[i], 32), -ENOSYS, -ENOSYS);
+    H13_REFUSED(&admin, "unknown SETTING", setting(&admin, 99, "x\n", 2), -EINVAL, -EINVAL);
+    H13_REFUSED(&admin, "unknown JOB", job(&admin, 2, 0), -EINVAL, -EINVAL);
+    H13_REFUSED(&admin, "unknown LOG action", log_call(&admin, 9, CIUKI_SYSTEM_LOG_MACHINE, "BOOT.LOG", 0, 0, 0, 0, 0, 0), -EINVAL, -EINVAL);
+    H13_REFUSED(&admin, "unknown LOG scope", log_call(&admin, CIUKI_SYSTEM_LOG_READ, 7, "BOOT.LOG", 0, 0, 0, 0, 0, 0), -EINVAL, -EINVAL);
+    {   /* An unknown device command on a file descriptor, and on a bad one. */
+        int32_t fd = sys_open_as(&alice, "/Documents", O_RDONLY); CHECK(fd >= 0);
+        H13_REFUSED(&alice, "unknown devctl", call(CIUKI_SYS_DEVCTL, (uint32_t)fd, 0x7e7e7e7eu, USER2, 16, 0), -ENOTTY, -EINVAL);
+        sys_close_as(&alice, fd);
+        H13_REFUSED(&alice, "devctl bad fd", call(CIUKI_SYS_DEVCTL, 77, 0x7e7e7e7eu, USER2, 16, 0), -EBADF, -EBADF);
+    }
+    {   /* VFS: unknown access bits and an unknown (corrupt) label kind deny,
+         * for every subject including SYSTEM. */
+        struct px_path documents; struct policy_label root; CHECK(!resolve_path("/Documents", &documents));
+        vfs_lock(&vfs, 0); CHECK(!px_policy_label_locked(documents.node, &root)); vfs_unlock(&vfs);   /* borrowed, not retained */
+        struct actor *every[] = {&alice, &guest, &admin, &systemp};
+        for (unsigned i = 0; i < 4; i++) {
+            CHECK(policy_check(&policy, &root, every[i]->p->subject, 0) == -EACCES);
+            CHECK(policy_check(&policy, &root, every[i]->p->subject, 256) == -EACCES);
+            CHECK(policy_check(&policy, &root, every[i]->p->subject, POLICY_READ | 0x8000u) == -EACCES);
+            struct policy_label corrupt = root; corrupt.kind = POLICY_DENY + 1;
+            CHECK(policy_check(&policy, &corrupt, every[i]->p->subject, POLICY_READ) == -EACCES);
+            corrupt.kind = 0xff;
+            CHECK(policy_check(&policy, &corrupt, every[i]->p->subject, POLICY_READ | POLICY_TRAVERSE) == -EACCES);
+            h13_cases += 5;
+        }
+        /* Every label kind against SYSTEM, an administrator, the owner
+         * (Alice), another Standard user (Bob) and Guest, read and write,
+         * expected from the contract's rule table (user-security-kernel.md),
+         * not from policy_check. 1 allowed, 0 EACCES, 2 EROFS. */
+        static const struct { unsigned kind; const char *name; uint8_t read[5], write[5]; } kinds[] = {
+            {POLICY_PUBLIC, "POLICY_PUBLIC", {1,1,1,1,1}, {1,1,0,0,0}},
+            {POLICY_PROGRAM, "POLICY_PROGRAM", {1,1,1,1,1}, {1,1,0,0,0}},
+            {POLICY_SECRET, "POLICY_SECRET", {1,0,0,0,0}, {1,0,0,0,0}},
+            {POLICY_SEALED, "POLICY_SEALED", {1,1,1,1,1}, {1,0,0,0,0}},
+            {POLICY_PROFILES, "POLICY_PROFILES", {1,1,1,1,1}, {1,0,0,0,0}},
+            {POLICY_PROFILE, "POLICY_PROFILE", {1,1,1,0,0}, {1,1,1,0,0}},
+            {POLICY_SHARED, "POLICY_SHARED", {1,1,1,1,1}, {1,1,1,1,0}},
+            {POLICY_CREATOR, "POLICY_CREATOR", {1,1,1,1,1}, {1,1,1,0,0}},
+            {POLICY_REMOVABLE, "POLICY_REMOVABLE", {1,1,1,1,1}, {1,1,1,1,0}},
+            {POLICY_READONLY, "POLICY_READONLY", {1,1,1,1,1}, {2,2,2,2,2}},
+            {POLICY_DENY, "POLICY_DENY", {0,0,0,0,0}, {0,0,0,0,0}}};
+        struct actor *five[] = {&systemp, &admin, &alice, &bob, &guest};
+        for (unsigned k = 0; k < sizeof(kinds) / sizeof(*kinds); k++) for (unsigned i = 0; i < 5; i++) {
+            struct policy_label l = root; l.kind = (uint8_t)kinds[k].kind; l.uid = 1007; l.anchor = 0; l.owner_key = 7;
+            int r = policy_check(&policy, &l, five[i]->p->subject, POLICY_READ), w = policy_check(&policy, &l, five[i]->p->subject, POLICY_WRITE);
+            int er = kinds[k].read[i] == 1 ? 0 : -EACCES, ew = kinds[k].write[i] == 1 ? 0 : kinds[k].write[i] == 2 ? -EROFS : -EACCES;
+            if (r != er || w != ew) printf("H13 %s %s: read %d (%d) write %d (%d)\n", kinds[k].name, five[i]->name, r, er, w, ew);
+            CHECK(r == er && w == ew); h13_cases += 2;
+        }
+        /* POLICY_ROOT: Standard users add (creator-owned top-level entries,
+         * lead decision Q7) but change nothing else; Guest adds nothing. */
+        struct policy_label top; vfs_lock(&vfs, 0); CHECK(!px_policy_label_locked(space->root, &top)); vfs_unlock(&vfs);
+        CHECK(top.kind == POLICY_ROOT);
+        static const int add[5] = {0, 0, 0, 0, -EACCES}, meta[5] = {0, 0, -EACCES, -EACCES, -EACCES};
+        for (unsigned i = 0; i < 5; i++) {
+            CHECK(policy_check(&policy, &top, five[i]->p->subject, POLICY_READ | POLICY_TRAVERSE) == 0);
+            CHECK(policy_check(&policy, &top, five[i]->p->subject, POLICY_ADD) == add[i]);
+            CHECK(policy_check(&policy, &top, five[i]->p->subject, POLICY_META) == meta[i]); h13_cases += 3;
+        }
+    }
+    {   /* Public device queries a Guest may make, and their administrative
+         * neighbours it may not (NET_QUERY_DRIVER_PACK, MEDIA_GET_FORMAT,
+         * MEDIA_GET_CONVERT; CIUKI_SETUP_NET_QUERY, MEDIA_FORMAT). */
+        int32_t fd = sys_open_as(&guest, "/dev/net", O_RDONLY); CHECK(fd >= 0);
+        struct ciuki_driver_pack_query q = {.version = CIUKI_DRIVER_PACK_VERSION, .size = sizeof(q), .vendor = 0x10ec, .device = 0x8139};
+        as(&guest); CHECK(!ua_write(guest.p->memory, USER2, &q, sizeof(q)));
+        CHECK(!call(CIUKI_SYS_DEVCTL, (uint32_t)fd, NET_QUERY_DRIVER_PACK, USER2, sizeof(q), 0));
+        CHECK(!ua_read(guest.p->memory, &q, USER2, sizeof(q)) && !q.qualified && !q.busy);
+        struct ciuki_setup_net sq = {.version = CIUKI_SETUP_FAT_VERSION, .size = sizeof(sq)};
+        CHECK(!ua_write(guest.p->memory, USER2, &sq, sizeof(sq)));
+        H13_REFUSED(&guest, "CIUKI_SETUP_NET_QUERY", call(CIUKI_SYS_DEVCTL, (uint32_t)fd, CIUKI_SETUP_NET_QUERY, USER2, sizeof(sq), 0), -EPERM, -EPERM);
+        H13_REFUSED(&guest, "net unknown command", call(CIUKI_SYS_DEVCTL, (uint32_t)fd, MEDIA_FORMAT, USER2, 16, 0), -ENOTTY, -ENOTTY);
+        sys_close_as(&guest, fd);
+        fd = sys_open_as(&guest, "/dev/media", O_RDONLY); CHECK(fd >= 0);
+        struct ciuki_media_format f = {.version = CIUKI_MEDIA_VERSION, .size = sizeof(f), .drive = 2, .generation = 1};
+        struct ciuki_media_convert cv = {.version = CIUKI_MEDIA_VERSION, .size = sizeof(cv), .drive = 2};
+        as(&guest); CHECK(!ua_write(guest.p->memory, USER2, &f, sizeof(f)));
+        int32_t e = call(CIUKI_SYS_DEVCTL, (uint32_t)fd, MEDIA_GET_FORMAT, USER2, sizeof(f), 0); CHECK(e != -EPERM && e != -EACCES);
+        H13_REFUSED(&guest, "MEDIA_FORMAT", call(CIUKI_SYS_DEVCTL, (uint32_t)fd, MEDIA_FORMAT, USER2, sizeof(f), 0), -EPERM, -EPERM);
+        CHECK(!ua_write(guest.p->memory, USER2, &cv, sizeof(cv)));
+        e = call(CIUKI_SYS_DEVCTL, (uint32_t)fd, MEDIA_GET_CONVERT, USER2, sizeof(cv), 0); CHECK(e != -EPERM && e != -EACCES);
+        H13_REFUSED(&guest, "media unknown command", call(CIUKI_SYS_DEVCTL, (uint32_t)fd, 0x4dffu, USER2, 16, 0), -ENOTTY, -ENOTTY);
+        sys_close_as(&guest, fd); h13_cases += 2;
+    }
+    owners->io.read = h13_owner_read_next;
+    printf("H13 native: %u refusals (Standard user and Guest: SYSTEM state, Bob's profile/hive/crash log/process/token, sealed boot and service set; unknown selectors of syscalls, call 101, call 99, devctl and VFS access/kind) without fd/description/pin/node/page/heap/subject leaks PASS\n", h13_cases);
+}
+/* Bounded cost (docs/validation/sec-k08.md): warm descriptor checks perform
+ * no storage lookup; the metadata at 32 profiles and 256 creator-owned
+ * roots; the cold lookup bound. Figures are printed as "H13 cost" lines. */
+static uint64_t h13_now_ns(void) { struct timespec t; clock_gettime(CLOCK_MONOTONIC, &t); return (uint64_t)t.tv_sec * 1000000000ull + (uint64_t)t.tv_nsec; }
+static void h13_cost(void)
+{
+    /* Warm fds: open (cold resolution) once, then 1000 reads and 1000
+     * overwrites of cached data by Alice and by an administrator. */
+    kernel_file("C:/Documents/warm.txt", "0123456789abcdef0123456789abcdef", 32);
+    struct actor *who[] = {&alice, &admin};
+    for (unsigned w = 0; w < 2; w++) {
+        struct actor *a = who[w];
+        int32_t fd = sys_open_as(a, "/Documents/warm.txt", O_RDWR); CHECK(fd >= 0);
+        CHECK(call(CIUKI_SYS_PREAD, (uint32_t)fd, USER2, 32, 0, 0) == 32);
+        CHECK(call(CIUKI_SYS_PWRITE, (uint32_t)fd, USER2, 32, 0, 0) == 32);
+        struct h13_state b, e; h13_snapshot(a, &b);
+        uint64_t t0 = h13_now_ns();
+        for (unsigned i = 0; i < 1000; i++) {
+            as(a);
+            CHECK(call(CIUKI_SYS_PREAD, (uint32_t)fd, USER2, 32, 0, 0) == 32);
+            CHECK(call(CIUKI_SYS_PWRITE, (uint32_t)fd, USER2, 32, 0, 0) == 32);
+        }
+        uint64_t t1 = h13_now_ns();
+        h13_snapshot(a, &e);
+        printf("H13 cost warm-fd %s: 2000 descriptor reads/writes, disk reads %u, OWNER reads %u, %.0f ns each (host)\n",
+               a->name, e.disk_reads - b.disk_reads, e.owner_reads - b.owner_reads, (double)(t1 - t0) / 2000.0);
+        CHECK(e.disk_reads == b.disk_reads && e.owner_reads == b.owner_reads);
+        sys_close_as(a, fd);
+    }
+    /* Metadata at the bounds: a full store (32 profiles, 256 creator roots)
+     * and a full 32-rule trie; cold child resolution scans both at most once. */
+    struct owner_store *full = calloc(1, sizeof(*full)); CHECK(full);
+    full->volume = 31; full->ready = true; full->profile_count = OWNER_PROFILES; full->root_count = OWNER_ROOTS;
+    for (unsigned i = 0; i < OWNER_PROFILES; i++) {
+        struct owner_binding *b = &full->profiles[i].binding;
+        *b = (struct owner_binding){.uid = 1000 + i, .action = OWNER_CREATE, .volume = 31, .key = 1 + i, .locator = 1 + i, .generation = 1};
+        snprintf(b->path, sizeof(b->path), "/Windows/Profiles/u%08x", 1000 + i);
+    }
+    for (unsigned i = 0; i < OWNER_ROOTS; i++) {
+        struct owner_binding *b = &full->roots[i].binding;
+        *b = (struct owner_binding){.uid = 1000 + i % 32, .action = OWNER_CREATE, .volume = 31, .key = 100 + i, .locator = 100 + i, .generation = 1};
+        snprintf(b->path, sizeof(b->path), "/GAME%03u", i);
+    }
+    struct policy_volume *v = calloc(1, sizeof(*v)); CHECK(v);
+    CHECK(!policy_init(v, 31, 1, true, false, false, full));
+    unsigned rules = v->count; char name[64];
+    for (unsigned i = 0; v->count < POLICY_RULES; i++) { snprintf(name, sizeof(name), "/Extra%u", i); CHECK(!policy_rule_add(v, name, POLICY_PROGRAM)); }
+    snprintf(name, sizeof(name), "/Extra%u", 99); CHECK(policy_rule_add(v, name, POLICY_PROGRAM) == -ENOSPC);
+    struct policy_label root; CHECK(!policy_root(v, 1, &root));
+    struct policy_label profiles = root, child, label;
+    CHECK(!policy_child(v, &root, "Windows", 2, 0, &child)); CHECK(!policy_child(v, &child, "Profiles", 3, 0, &profiles));
+    /* Worst cases: the last root record (288 entries scanned) and the last profile. */
+    uint64_t t0 = h13_now_ns();
+    for (unsigned i = 0; i < 10000; i++) CHECK(!policy_child(v, &root, "GAME255", 9, 100 + 255, &label));
+    uint64_t t1 = h13_now_ns();
+    CHECK(label.kind == POLICY_CREATOR && label.uid == 1000 + 255 % 32);
+    char profile[16]; snprintf(profile, sizeof(profile), "u%08x", 1000 + 31);
+    for (unsigned i = 0; i < 10000; i++) CHECK(!policy_child(v, &profiles, profile, 10, 32, &label));
+    uint64_t t2 = h13_now_ns();
+    CHECK(label.kind == POLICY_PROFILE && label.uid == 1031);
+    static volatile int sink;
+    for (unsigned i = 0; i < 100000; i++) sink += policy_check(v, &label, alice.p->subject, POLICY_READ);
+    uint64_t t3 = h13_now_ns();
+    printf("H13 cost metadata: owner_store %zu bytes (profiles %u x %zu, roots %u x %zu, pending %u x %zu), receipts at most %u x %zu bytes, "
+           "policy_volume %zu bytes (%u rules, %u installed), policy_label %zu bytes per namespace node (px_node %zu)\n",
+           sizeof(*full), OWNER_PROFILES, sizeof(struct owner_record), OWNER_ROOTS, sizeof(struct owner_record), OWNER_PROFILES,
+           sizeof(struct owner_record), OWNER_RECEIPTS, sizeof(struct owner_receipt), sizeof(*v), POLICY_RULES, rules,
+           sizeof(struct policy_label), sizeof(struct px_node));
+    printf("H13 cost cold-lookup: creator root at record 288 %.0f ns, profile 32 %.0f ns, warm policy_check %.1f ns (host, -O1, sanitizers)\n",
+           (double)(t1 - t0) / 10000.0, (double)(t2 - t1) / 10000.0, (double)(t3 - t2) / 100000.0);
+    printf("H13 cost identity: credential %zu bytes (%u groups), subject %zu bytes, session %zu bytes x %u, process limit %u, thread limit %u\n",
+           sizeof(struct ciuki_credential), CIUKI_SECURITY_GROUP_MAX, sizeof(struct security_subject), sizeof(struct security_session),
+           CIUKI_SECURITY_SESSION_MAX, CIUKI_PROCESS_MAX, CIUKI_THREAD_MAX);
+    free(v); free(full);
+}
+#endif
+/* ---- end sec-k08 ---- */
 int main(int argc,char **argv)
 {
     CHECK(argc==3); setvbuf(stdout,0,_IONBF,0);
@@ -649,6 +1052,10 @@ int main(int argc,char **argv)
     bind_policy();
     test_boot_config(); test_machine_logs(); test_user_logs(); test_driver_packs(); test_sfc_restore();
     test_jobs(); test_settings(); /* sec-sysvc2 */
+    test_k08_settings(); /* sec-k08 */
+#ifdef CIUKI_POLICY_COVERAGE
+    h13_native(); h13_cost(); /* sec-k08: H13 native frontend and bounded cost */
+#endif
     struct actor *all[]={&alice,&bob,&admin,&guest,&interim,&systemp,&service_subject};
     for(unsigned i=0;i<7;i++) { as(all[i]); for(int fd=0;fd<CIUKI_OPEN_MAX;fd++) if(all[i]->p->fds[fd].object) file_close(all[i]->p,fd); stop_collect(all[i]->p); }
     g_current=client_thread->task; all_closed(); stop_collect(client);

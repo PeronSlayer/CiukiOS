@@ -25,11 +25,13 @@ OUT = ROOT / 'build/host/security/logon'
 WARN = ['-std=c17', '-O1', '-g', '-Wall', '-Wextra', '-Werror', '-ffunction-sections', '-fdata-sections']
 SANITIZE = ['-fsanitize=address,undefined', '-fno-sanitize-recover=all']
 INCLUDE = ['-I', str(ROOT / 'apps/accounts'), '-I', str(ROOT / 'apps/logon'), '-I', str(ROOT / 'sdk/private'),
-           '-I', str(ROOT / 'apps/desktop'), '-I', str(ROOT / 'src/kernel/include')]
+           '-I', str(ROOT / 'apps/desktop'), '-I', str(ROOT / 'src/kernel/include'),
+           '-idirafter', str(ROOT / 'sdk/sysroot-overlay/include')]
 ACCOUNT = ('crypto', 'codec', 'owner', 'bootstrap', 'protocol', 'store', 'service', 'migration', 'persist', 'results',
            'auth', 'enrollment', 'manifest', 'checkpoint', 'logon', 'kernel_adapter', 'server', 'firstboot')
 USER = ('sdk/private/accounts_link.c', 'tests/host/security/fake.c', 'apps/desktop/users.c',
-        'apps/logon/logon_proto.c', 'apps/logon/links.c', 'apps/logon/coordinator.c')
+        'apps/logon/logon_proto.c', 'apps/logon/links.c', 'apps/logon/coordinator.c',
+        'apps/logon/ui.c', 'apps/libdeskui/draw.c', 'apps/libdeskui/keymap.c', 'apps/desktop/theme.c')
 GOLDENS = ROOT / 'tests/host/security/logon-ui-goldens.json'
 
 
@@ -76,7 +78,7 @@ def _build_service():
                         '-o', str(obj)], check=True, env=env)
         objects.append(str(obj))
     program = OUT / 'logon_service'
-    subprocess.run(['clang', *WARN, '-Wl,--gc-sections', *SANITIZE, *INCLUDE,
+    subprocess.run(['clang', *WARN, '-DCIUKI_RUNTIME_UI', '-Wl,--gc-sections', *SANITIZE, *INCLUDE,
                     str(ROOT / 'tests/host/security/logon_service_test.c'),
                     str(ROOT / 'tests/host/security/secure_input_queue.c'),
                     str(ROOT / 'tests/host/proc/signal_legacy.c'), str(ROOT / 'src/kernel/lib/sha256.c'),
@@ -104,6 +106,9 @@ class LogonServiceTests(unittest.TestCase):
         self.assertIn(f'H10 logon service {name}: PASS', result.stdout)
         for marker in markers:
             self.assertIn(marker, result.stdout)
+
+    def test_real_welcome_tile(self):
+        self.run_scenario('welcome-tile', ('runtime Welcome tile: blank authenticated, protected prompts PASS',))
 
     def test_ready_image(self):
         self.run_scenario('ready', ('H10 ready boot:', 'H10 ready session:', 'H10 Welcome:', 'H10 logon-screen power:'))

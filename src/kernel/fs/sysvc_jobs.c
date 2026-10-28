@@ -16,7 +16,9 @@
  * are consumed as privileged configuration at the next start; the rule table
  * makes them SYSTEM maintenance only (fs/security_policy.c seals them).
  * Administrators change them through SETTING, which validates the text and
- * rewrites the file as SYSTEM, like BOOT_CONFIG.
+ * rewrites the file as SYSTEM, like BOOT_CONFIG. sec-k08 adds clock.cfg (the
+ * time zone service's store, read at boot: lead decision S2-5) and the
+ * machine power buttons power.cfg (lead decision U4-6).
  * SPDX-License-Identifier: GPL-2.0-only */
 #include <ciuki/abi.h> /* before the C library headers (FS_HOST): its macros win */
 #include "sysvc.h"
@@ -116,6 +118,35 @@ static bool retry_request(const char *t, size_t n)
     const char *p = t + id;
     return !memcmp(p, "\npci=", 5) && lower_hex(p + 5, 4) && p[9] == ':' && lower_hex(p + 10, 4) && p[14] == '\n';
 }
+/* ---- sec-k08: the machine power buttons (lead decision U4-6). Exactly
+ * the power_button= and power_lid= lines of apps/desktop/power_policy.c,
+ * each at most once, every line ending in LF, nothing else. */
+static bool line_is(const char *t, size_t n, const char *key, const char *const *names, unsigned count)
+{
+    size_t k = strlen(key);
+    if (n <= k || memcmp(t, key, k)) return false;
+    for (unsigned i = 0; i < count; i++)
+        if (n - k == strlen(names[i]) && !memcmp(t + k, names[i], n - k)) return true;
+    return false;
+}
+static bool power_buttons(const char *t, size_t n)
+{
+    static const char *const button[] = {"shutdown", "standby"}, *const lid[] = {"none", "standby", "shutdown"};
+    bool seen_button = false, seen_lid = false;
+    size_t at = 0;
+    if (!n || n > 127) return false;
+    while (at < n) {
+        size_t end = at;
+        while (end < n && t[end] != '\n') end++;
+        if (end == n) return false;
+        if (!seen_button && line_is(t + at, end - at, "power_button=", button, 2)) seen_button = true;
+        else if (!seen_lid && line_is(t + at, end - at, "power_lid=", lid, 3)) seen_lid = true;
+        else return false;
+        at = end + 1;
+    }
+    return true;
+}
+/* ---- end sec-k08 ---- */
 int sysvc_setting_set(struct security_subject *s, unsigned setting, const char *text, size_t length)
 {
     const struct ciuki_credential *c = s ? security_subject_credential(s) : 0;
@@ -135,6 +166,18 @@ int sysvc_setting_set(struct security_subject *s, unsigned setting, const char *
     case CIUKI_SYSTEM_SETTING_ACCEL_RETRY:
         if (!retry_request(text, length)) return -EINVAL;
         path = SYSVC_ACCEL_RETRY; keep = 47;
+        break;
+    /* sec-k08 (S2-5): clock.cfg, read at boot before any process; the
+     * whole record must parse and select a rule, as tz_load requires. */
+    case CIUKI_SYSTEM_SETTING_CLOCK: {
+        struct tzr_config clock; struct tzr rule;
+        if (length > 511 || !tzr_config_parse(text, length, &clock) || !tzr_config_rule(&clock, &rule)) return -EINVAL;
+        path = SYSVC_CLOCK; keep = 511;
+        break;
+    }
+    case CIUKI_SYSTEM_SETTING_POWER:   /* sec-k08 (U4-6) */
+        if (!power_buttons(text, length)) return -EINVAL;
+        path = SYSVC_POWER; keep = 127;
         break;
     default: return -EINVAL;
     }

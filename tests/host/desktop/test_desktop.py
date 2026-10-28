@@ -656,6 +656,9 @@ class DesktopTests(unittest.TestCase):
     def test_dosbox_save_quota(self):
         self.dosbox_loading_replay((18, 19), False)
 
+    def test_dosbox_network_shortcut(self):
+        self.dosbox_loading_replay((38, 39, 40, 41), False)
+
     def dosbox_loading_replay(self, scenarios, event_cases):
         parent = ROOT / "build/host"
         parent.mkdir(parents=True, exist_ok=True)
@@ -675,11 +678,14 @@ class DesktopTests(unittest.TestCase):
                 result = subprocess.run([str(binary), str(scenario)], capture_output=True, text=True,
                                         timeout=30, env=dict(os.environ, ASAN_OPTIONS="detect_leaks=0"))
                 self.assertEqual(result.returncode, 0, f"scenario {scenario}: {result.stderr}")
-                if scenario >= 33: self.assertIn("PASS fx-dosfull scenario=%d " % scenario, result.stdout)
+                if 33 <= scenario <= 37: self.assertIn("PASS fx-dosfull scenario=%d " % scenario, result.stdout)
                 expected = ("PASS G17 DOS program lifecycle" if 23 <= scenario <= 26 else
                             "PASS fx-23 slow CREATE" if scenario == 27 else
                             "PASS fx-23 close during CREATE" if scenario == 28 else "PASS dosbox loading replay")
                 self.assertIn(expected, result.stdout, f"scenario {scenario}")
+                if scenario in (31, 32):
+                    record = "dosbox: program returned vm=1 generation=9 early=%d" % (scenario == 32)
+                    self.assertEqual(result.stderr.count(record), 1, result.stderr)
                 if scenario==0: print(result.stdout.strip())
             for events in ((1, 2) if event_cases else ()):
                 for scenario in (0, 1, 3, 5, 8):

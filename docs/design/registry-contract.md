@@ -2,6 +2,14 @@
 
 Contract recorded and self-reviewed before implementation on 2026-10-13.
 
+> **Superseded in part by user security** (sec-user-06 reconciliation, 2026-10-28). The machine roots (System, Programs) and the
+> Win32 machine hive are written only by administrators through the SYSTEM registry broker; per-user
+> state binds to the profile and native libreg uses the broker transport (A1-9)
+> ([registry and per-profile state](user-security-contract.md#62-registry-and-per-profile-state)). Registry Checker backup,
+> restore and repair are broker operations ([sec-sysvc2 amendment](user-security-kernel.md#system-jobs-sealed-boot-settings-and-registry-checker-sec-sysvc2-amendment-2026-10-28)).
+> Runtime: sectest `machine-registry` (su-04-roles, acc-accounts item 14); self-test
+> `security.registry_backup` (S2-6).
+
 Research and repository comparison:
 
 - [Microsoft registry structure](https://learn.microsoft.com/en-us/windows/win32/sysinfo/structure-of-the-registry)

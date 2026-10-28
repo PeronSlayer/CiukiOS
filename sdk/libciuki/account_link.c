@@ -56,6 +56,10 @@ int __ciuki_account_rpc(uint32_t op, const void *in, uint32_t n, void *out, uint
         wr32(h, 0x31435343u); wr32(h + 4, 1); wr32(h + 8, 64); wr32(h + 12, CIUKI_SECURITY_SERVICE_ACCOUNTS);
         wr32(h + 16, op); wr32(h + 20, 1); wr32(h + 24, id); wr32(h + 32, r.endpoint_generation);
         wr32(h + 36, take); wr32(h + 52, n); wr32(h + 56, at);
+        if (n == 312) {
+            wr32(h + 40, rd32((const uint8_t *)in + 40));
+            wr32(h + 44, rd32((const uint8_t *)in + 44));
+        }
         if (take) memcpy(h + 64, (const uint8_t *)in + at, take);
         m.length = 64 + take;
         while (ciuki_channel_send(fd, &m, 1) < 0) {
