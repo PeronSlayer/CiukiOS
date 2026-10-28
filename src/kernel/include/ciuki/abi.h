@@ -1148,6 +1148,12 @@ _Static_assert(sizeof(struct ciuki_net_state) == 96, "network state ABI");
 #define CIUKI_NET_MEDIA_AUTO 1u
 #define CIUKI_NET_MEDIA_10 2u
 #define CIUKI_NET_MEDIA_100 4u
+/* Windows 9x Frame_Type values; SNAP extends its Ethernet-only table. */
+#define CIUKI_IPX_FRAME_RAW 0u
+#define CIUKI_IPX_FRAME_LLC 1u
+#define CIUKI_IPX_FRAME_II 2u
+#define CIUKI_IPX_FRAME_SNAP 3u
+#define CIUKI_IPX_FRAME_AUTO 4u
 struct ciuki_net_config {
     uint32_t enabled;
     uint32_t dhcp;
@@ -1191,7 +1197,8 @@ struct ciuki_net_control {
     uint64_t rx_errors;
     uint64_t tx_errors;
     uint32_t generation;
-    uint32_t reserved[3];
+    uint32_t ipx_frame_type; /* observation; writes use SYSTEM SETTING */
+    uint32_t reserved[2];
 };
 _Static_assert(sizeof(struct ciuki_net_config) == 232, "network configuration ABI");
 _Static_assert(sizeof(struct ciuki_net_control) == 400, "network control ABI");
@@ -2533,6 +2540,7 @@ _Static_assert(sizeof(struct ciuki_system_job) == 32, "system job ABI");
 #define CIUKI_SYSTEM_SETTING_HWPROFILES 1u
 #define CIUKI_SYSTEM_SETTING_PERFORMANCE 2u
 #define CIUKI_SYSTEM_SETTING_ACCEL_RETRY 3u
+#define CIUKI_SYSTEM_SETTING_IPX_FRAME 6u  /* f6-27; 4 and 5 are sec-k08 CLOCK and POWER */
 #define CIUKI_SYSTEM_SETTING_MAX 24575u
 struct ciuki_system_setting {
     uint32_t version; /* 0 */
@@ -4166,9 +4174,11 @@ _Static_assert(sizeof(struct ciuki_w32_shared) == 24, "ciuki_w32_shared frozen s
 /* F6 approved extension, 2026-10-20; public integers are SDK-owned. */
 #define AF_UNSPEC 0
 #define AF_INET 2
+#define AF_IPX 6
 #define SOCK_STREAM 1
 #define SOCK_DGRAM 2
 #define SOCK_RAW 3
+#define SOCK_SEQPACKET 5
 #define SOCK_NONBLOCK 2048
 #define SOCK_CLOEXEC 524288
 #define IPPROTO_IP 0
@@ -4176,6 +4186,19 @@ _Static_assert(sizeof(struct ciuki_w32_shared) == 24, "ciuki_w32_shared frozen s
 #define IP_TTL 2
 #define IPPROTO_TCP 6
 #define IPPROTO_UDP 17
+#define NSPROTO_IPX 1000
+#define NSPROTO_SPX 1256
+#define IPX_PTYPE 0x4000
+#define IPX_FILTERPTYPE 0x4001
+#define IPX_DSTYPE 0x4002
+#define IPX_STOPFILTERPTYPE 0x4003
+#define IPX_MAXSIZE 0x4006
+#define IPX_ADDRESS 0x4007
+#define IPX_GETNETINFO 0x4008
+#define IPX_GETNETINFO_NORIP 0x4009
+#define IPX_MAX_ADAPTER_NUM 0x400d
+#define IPX_RECEIVE_BROADCAST 0x400f
+#define IPX_IMMEDIATESPXACK 0x4010
 #define SHUT_RD 0
 #define SHUT_WR 1
 #define SHUT_RDWR 2
@@ -4192,6 +4215,7 @@ _Static_assert(sizeof(struct ciuki_w32_shared) == 24, "ciuki_w32_shared frozen s
 #define SO_RCVTIMEO 20
 #define SO_SNDTIMEO 21
 #define SO_RX_BYTES 22
+#define SO_LINGER 13
 #define TCP_NODELAY 1
 #define POLLIN 1
 #define POLLOUT 4
@@ -4293,6 +4317,35 @@ struct ciuki_sockaddr_in {
     uint16_t port;
     uint32_t address;
     uint8_t zero[8];
+};
+/* Native 16-byte carrier; Winsock SOCKADDR_IPX omits reserved. */
+struct ciuki_sockaddr_ipx {
+    uint16_t family;
+    uint8_t network[4];
+    uint8_t node[6];
+    uint16_t socket;
+    uint16_t reserved;
+};
+struct ciuki_ipx_address_data {
+    int32_t adapternum;
+    uint8_t netnum[4];
+    uint8_t nodenum[6];
+    uint8_t wan;
+    uint8_t status;
+    int32_t maxpkt;
+    uint32_t linkspeed;
+};
+struct ciuki_ipx_netnum_data {
+    uint8_t netnum[4];
+    uint16_t hopcount;
+    uint16_t netdelay;
+    int32_t cardnum;
+    uint8_t router[6];
+    uint16_t reserved;
+};
+struct ciuki_socket_linger {
+    int32_t on;
+    int32_t seconds;
 };
 struct ciuki_socket_io {
     uint32_t size;

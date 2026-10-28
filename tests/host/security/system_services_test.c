@@ -1,3 +1,4 @@
+#include <ciuki/ipx_config.h>
 /* H16 (sec-sysvc): the SYSTEM services of call 99 on the production kernel
  * path: native syscalls, fd table, POSIX namespace, legacy VFS tables, the
  * managed-volume policy and OWNER profile records on the real FAT/VFS. The
@@ -559,7 +560,7 @@ static void test_settings(void)
     /* Boot inputs are sealed by name: every direct writer is refused (the
      * administrator too), everyone may read them; ordinary settings stay
      * administrator-writable. */
-    static const char *const sealed[]={"/System/HWPROF.CFG","/System/Settings/performance.cfg","/System/Settings/hwprofiles.cfg",
+    static const char *const sealed[]={"/System/Settings/ipx.cfg","/System/HWPROF.CFG","/System/Settings/performance.cfg","/System/Settings/hwprofiles.cfg",
         "/System/Settings/accel-retry.cfg","/System/Settings/accel.cfg","/System/Settings/ACCEL-S3SAVAGE-5333-8C2E.CFG",
         "/System/Settings/accel-i810.cfg","/System/Settings/trident.cfg","/System/Settings/nv2d0110.cfg"};
     for(unsigned i=0;i<sizeof(sealed)/sizeof(*sealed);i++) {
@@ -581,6 +582,22 @@ static void test_settings(void)
         CHECK(setting(refused[i],CIUKI_SYSTEM_SETTING_HWPROFILES,hw,sizeof(hw)-1)==-EPERM);
         CHECK(setting(refused[i],CIUKI_SYSTEM_SETTING_ACCEL_RETRY,retry,sizeof(retry)-1)==-EPERM);
     }
+    CHECK(net_ipx_frame_type()==CIUKI_IPX_FRAME_AUTO);
+    for(unsigned i=0;i<4;i++) CHECK(setting(refused[i],CIUKI_SYSTEM_SETTING_IPX_FRAME,"frame_type=0\n",13)==-EPERM);
+    CHECK(net_ipx_frame_type()==CIUKI_IPX_FRAME_AUTO);
+    for(unsigned i=0;i<5;i++) {
+        char frame[14]="frame_type=0\n"; frame[11]=(char)('0'+i);
+        CHECK(!setting(&admin,CIUKI_SYSTEM_SETTING_IPX_FRAME,frame,13));
+        CHECK(net_ipx_frame_type()==i);
+        CHECK(!kernel_read("C:/System/Settings/ipx.cfg",text,sizeof(text),&n) && n==13 && !memcmp(text,frame,13));
+    }
+    CHECK(setting(&admin,CIUKI_SYSTEM_SETTING_IPX_FRAME,"frame_type=5\n",13)==-EINVAL);
+    CHECK(setting(&admin,CIUKI_SYSTEM_SETTING_IPX_FRAME,"frame_type=1",12)==-EINVAL);
+    CHECK(setting(&admin,CIUKI_SYSTEM_SETTING_IPX_FRAME,"frame_type=1\nX",14)==-EINVAL);
+    CHECK(net_ipx_config_lock());
+    CHECK(setting(&admin,CIUKI_SYSTEM_SETTING_IPX_FRAME,"frame_type=1\n",13)==-EBUSY);
+    CHECK(!net_ipx_config_lock());net_ipx_config_unlock();
+    CHECK(net_ipx_frame_type()==CIUKI_IPX_FRAME_AUTO);
     CHECK(!kernel_read("C:/System/Settings/performance.cfg",text,sizeof(text),&n) && n==17);
     CHECK(!setting(&admin,CIUKI_SYSTEM_SETTING_PERFORMANCE,perf,sizeof(perf)-1));
     CHECK(!kernel_read("C:/System/Settings/performance.cfg",text,sizeof(text),&n) && n==sizeof(perf)-1 && !memcmp(text,perf,n));

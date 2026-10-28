@@ -20,6 +20,8 @@
 #include <assert.h>
 #include <unistd.h>
 #include "control.h"
+static int ciuki_system_setting_set(unsigned setting,const char *text,size_t bytes)
+{ assert(setting==CIUKI_SYSTEM_SETTING_IPX_FRAME && bytes==13 && !memcmp(text,"frame_type=",11)); return 0; }
 static atomic_int hold;
 static unsigned dns_calls,connects,closed;
 static int mode,dns_fail,control_error;

@@ -121,7 +121,8 @@ def main():
                 'src/kernel/lib/fmt.c', 'src/kernel/lib/sha256.c',
                 'src/kernel/vm/virtual_vga.c', 'src/kernel/vm/virtual_vga_bios.c',
                 'src/kernel/vm/vga_x86.c', 'src/kernel/vm/vga_presenter.c',
-                'src/kernel/net/bridge.c', 'src/kernel/vm/dosvm_ipx.c', 'src/kernel/vm/dosvm_ne2000.c',
+                'src/kernel/net/ipx_config.c', 'src/kernel/net/bridge.c',
+                'src/kernel/vm/dosvm_ipx.c', 'src/kernel/vm/dosvm_ne2000.c',
                 *vm_audio, pool],
                ['-D_POSIX_C_SOURCE=200809L', '-Wno-pointer-to-int-cast',
                 '-pthread', '-Wl,-u,pool_fixture_start'], text=vm_source)

@@ -19,6 +19,13 @@ static int mode(struct netif *d,bool enabled)
 #ifndef PORT_TEST_MAIN
 #define PORT_TEST_MAIN main
 #endif
+static void port_idle_host_input(void *arg,const uint8_t *p,unsigned n,uint64_t now)
+{ (void)arg;(void)p;(void)n;(void)now;CHECK(false); }
+static void port_idle_host_tick(void *arg,bool up,uint64_t now)
+{
+    (void)now;CHECK(!up);struct net_bridge_port *p=arg;
+    p->bridge.host_input=NULL;p->bridge.host_tick=NULL;
+}
 int PORT_TEST_MAIN(void)
 {
     setvbuf(stdout,NULL,_IOLBF,0);
@@ -81,8 +88,9 @@ int PORT_TEST_MAIN(void)
     CHECK(!net_bridge_port_close(&port) && !port.registered && !bridge_tap.fn && port.closing);
     d->link=NET_LINK_UP;
     CHECK(!net_bridge_port_open(&port,&pool,d,1,id,0,0,mode)); CHECK(!port.closing);
-    d->generation++; net_bridge_port_carrier(&port); CHECK(!port.bridge.link);
-    CHECK(!net_bridge_port_close(&port));
+    d->generation++;
+    port.bridge.host_arg=&port;port.bridge.host_input=port_idle_host_input;port.bridge.host_tick=port_idle_host_tick;
+    CHECK(!net_bridge_port_close(&port) && !port.bridge.link && !port.bridge.host_input);
     CHECK(!net_bridge_port_open(&port,&pool,d,1,id,0,0,mode));
     CHECK(!net_bridge_enable(&port.bridge,key,0,mac));
     mode_error=-5; net_bridge_disable(&port.bridge,key);

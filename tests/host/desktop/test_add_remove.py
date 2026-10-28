@@ -135,7 +135,8 @@ int main(void){
                                     '-c',str(ROOT/f'src/kernel/audio/{unit}.c'),'-o',obj],check=True,env=env)
                 sources=['tests/host/dosvm_test.c','tests/host/dosvm_uaddr_model.c',
                          'src/kernel/lib/fmt.c','src/kernel/lib/sha256.c',
-                         'src/kernel/net/bridge.c','src/kernel/vm/dosvm_ipx.c','src/kernel/vm/dosvm_ne2000.c']
+                         'src/kernel/net/ipx_config.c','src/kernel/net/bridge.c',
+                         'src/kernel/vm/dosvm_ipx.c','src/kernel/vm/dosvm_ne2000.c']
                 sources+=['src/kernel/vm/'+name+'.c' for name in ('virtual_vga','virtual_vga_bios','vga_x86','vga_presenter')]
                 binary=folder/('dosvm-'+profile)
                 subprocess.run(['clang','-std=c17',*flags,'-g','-Wall','-Wextra','-Werror','-Wno-pointer-to-int-cast',

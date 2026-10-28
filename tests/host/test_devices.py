@@ -151,7 +151,7 @@ class DeviceTests(unittest.TestCase):
             frames=folder / 'frames';frames.mkdir()
             subprocess.run([binary,frames],check=True,env=env)
             actual={p.stem:hashlib.sha256(p.read_bytes()).hexdigest() for p in sorted(frames.glob('*.xrgb'))}
-            self.assertEqual(len(actual),8)
+            self.assertEqual(len(actual),9)
             pins=ROOT / 'tests/host/desktop/network-settings-goldens.json'
             capture=load('network_settings_png',ROOT / 'tests/host/desktop/test_desktop.py')
             review=ROOT / 'build/host/f2-100';review.mkdir(exist_ok=True,parents=True)

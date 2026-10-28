@@ -91,6 +91,7 @@ class DosIdentityTests(unittest.TestCase):
                         '-fsanitize=address,undefined', '-ffunction-sections', '-fdata-sections', '-Wl,--gc-sections',
                         '-I', str(ROOT / 'src/kernel/include'), '-I', str(out),
                         str(ROOT / 'tests/host/dosvm_test.c'), str(ROOT / 'tests/host/dosvm_uaddr_model.c'),
+                        str(ROOT / 'src/kernel/net/ipx_config.c'),
                         str(ROOT / 'src/kernel/net/bridge.c'), str(ROOT / 'src/kernel/vm/dosvm_ipx.c'),
                         str(ROOT / 'src/kernel/vm/dosvm_ne2000.c'), str(ROOT / 'src/kernel/lib/fmt.c'),
                         str(ROOT / 'src/kernel/lib/sha256.c'), str(ROOT / 'src/kernel/vm/virtual_vga.c'),

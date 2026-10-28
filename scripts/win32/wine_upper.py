@@ -34,7 +34,9 @@ MODULES = ('comctl32', 'comdlg32', 'shell32', 'shlwapi', 'ole32', 'combase',
            # In-process pieces Wine 10.0 split out of OLE32 (structured
            # storage) and SHLWAPI (streams, registry, thread helpers); both
            # are eager imports of those modules.
-           'coml2', 'shcore')
+           'coml2', 'shcore',
+           # f6-26: DirectPlay 2/3/4, legacy exports and LAN provider.
+           'dplayx', 'dplay', 'dpwsockx')
 PATCHES = ('0001-in-process-rpc-only.patch', '0002-disable-rpcss-activation.patch',
            '0003-setupdi-unsupported.patch', '0004-single-msvcrt-crt.patch',
            '0005-builtin-region-base.patch',
@@ -45,7 +47,9 @@ PATCHES = ('0001-in-process-rpc-only.patch', '0002-disable-rpcss-activation.patc
            '0007-kernelbase-retarget.patch', '0008-kernelbase-compile-in.patch',
            '0009-shell32-wine-private-calls.patch',
            # f5-20C, found by the H1 DllMain run: MSVCRT's C locale code page.
-           '0010-msvcrt-sbcs-code-page.patch')
+           '0010-msvcrt-sbcs-code-page.patch',
+           '0011-directplay-lan.patch', '0012-directplay-lobby.patch',
+           '0013-directplay-enumeration.patch', '0014-directplay-ipx.patch', '0015-directplay-lobby-lifetime.patch')
 CFLAGS = '-O2 -g0 -march=pentiumpro -mno-sse -mno-sse2 -mno-mmx -fno-ident'
 LDFLAGS = '--no-default-config -Wl,-timestamp:0'
 # Fixed CiukiOS builtin-region bases, packed in MODULES order with 64 KiB
@@ -251,6 +255,12 @@ NOT_REUSED = {'imm32.dll': 'The CiukiOS IMM32 W21 placeholder is smaller (3,072 
               '20,480 SizeOfImage versus 102,400) with the same no-IME behaviour; the Wine '
               'build also needs twelve WIN32U system-call exports that only Wine and '
               'Windows 10 provide.'}
+# Build candidates stay out of the image until the lead can execute their
+# DllMains and qualify the runtime paths. H0 binding is insufficient.
+PENDING_QUALIFICATION = {
+    name + '.dll': 'f6-26: H0 binds; H1 execution is blocked by sandbox SIGSYS; '
+                   'DirectPlay end-to-end and Windows 98 interoperability gates remain'
+    for name in ('dplayx', 'dplay', 'dpwsockx')}
 # Reused PEs that join the image's builtin store once their recorded host
 # evidence passes (record 'load': H0 binding and H1 DllMain attach/detach on
 # the PE with this exact hash; qualified_by_evidence). f5-20D (the cached
@@ -260,7 +270,8 @@ NOT_REUSED = {'imm32.dll': 'The CiukiOS IMM32 W21 placeholder is smaller (3,072 
 # loader and is the gate for its use. Removing a name keeps its PE out of the
 # image. IMM32 is measured only (NOT_REUSED).
 QUALIFIED = {m + '.dll': 'f5-20D: staged on the recorded H0 binding and H1 DllMain evidence'
-             for m in MODULES if m + '.dll' not in NOT_REUSED}
+             for m in MODULES if m + '.dll' not in NOT_REUSED
+             and m + '.dll' not in PENDING_QUALIFICATION}
 CORE = ('ntdll.dll', 'kernel32.dll', 'user32.dll', 'gdi32.dll', 'advapi32.dll')
 # Windows 98 home DLLs searched in the pinned Wine specs for a KERNELBASE name.
 HOMES = ('kernel32', 'advapi32', 'user32', 'gdi32', 'version', 'shlwapi')
@@ -866,13 +877,14 @@ def record(output, sdk, runs):
                            'resource_entries': resource_entries((output / 'pe' / n).read_bytes())}
                        for n, r in sorted(build_record['dlls'].items())},
               'not_reused': NOT_REUSED, 'rules': RULES,
+              'pending_qualification': PENDING_QUALIFICATION,
               'baseline': baseline_of(old),
               'imports': current['imports'], 'w21_bound': current['w21_bound'],
               'decisions': assemble_decisions(old['decisions'], rows, current),
               'core_pe_sha256': current['core_pe_sha256'],
               'msvcrt': msvcrt_measure(output, sdk, surface),
               'fit': fit(build_record['dlls'], NOT_REUSED),
-              'status': 'built twice identically with patches 0001-0010; re-audited against the '
+              'status': 'built twice identically with the recorded patches; re-audited against the '
                         'core; unqualified until record-evidence qualifies the PEs whose H0 binding '
                         'and H1 DllMain evidence passes (T1 rejects the others)'}
     # Evidence of earlier PEs is not carried over: rerun the load and
@@ -924,7 +936,7 @@ def record_evidence(output):
             if not qualified_by_evidence(data, name):
                 data['dlls'][name]['qualified'] = False
     staged = sorted(n for n, r in data['dlls'].items() if r['qualified'])
-    data['status'] = (f'built twice identically with patches 0001-0010; re-audited against the core; '
+    data['status'] = (f'built twice identically with the recorded patches; re-audited against the core; '
                       f'{len(staged)} reused PEs qualified by the recorded H0 binding and H1 DllMain '
                       'evidence and staged in the image builtin store (f5-20D); the guest case '
                       'w32-upper-dlls-qemu-t23 is the gate for their use; the others are rejected by T1')
@@ -1217,6 +1229,8 @@ def validate(data, patches=ROOT / 'third_party/wine/patches'):
         raise ValueError('recipe filters differ from the patch list')
     if set(data['dlls']) != {m + '.dll' for m in MODULES}:
         raise ValueError('built module set differs from the recipe')
+    if data.get('pending_qualification') != PENDING_QUALIFICATION:
+        raise ValueError('pending qualification differs from the reviewed candidates')
     low, high = data['recipe']['base_region']
     spans = sorted((r['base'], r['base'] + r['size_of_image'], n) for n, r in data['dlls'].items())
     for (start, end, name), following in zip(spans, spans[1:] + [(high, high, '')]):
@@ -1392,10 +1406,14 @@ def render(data):
     for name in [m + '.dll' for m in data['modules']]:
         r = data['dlls'][name]
         use = ('measured, not reused' if name in data['not_reused'] else
-               'reused, qualified (staged builtin)' if r['qualified'] else 'reused (unqualified)')
+               'reused, qualified (staged builtin)' if r['qualified'] else
+               'build candidate, pending H1' if name in data.get('pending_qualification', {}) else
+               'reused (unqualified)')
         out.append(f"| {name} | `{r['base']:#010x}` | {r['file_bytes']:,} | {r['size_of_image']:,} | "
                    f"{r['memory']['shared_seed_pages']} | {r['memory']['private_cow_commitment_pages']} | "
                    f"{r['resource_entries']:,} | `{r['sha256'][:16]}` | {use} |")
+    for name, reason in sorted(data.get('pending_qualification', {}).items()):
+        out += ['', f'`{name}`: {reason}.']
     out += ['', '| Patch (applied in order) | SHA-256 (prefix) |', '| --- | --- |']
     out += [f'| `{name}` | `{digest[:16]}` |' for name, digest in data['recipe']['patches'].items()]
     for name, f in sorted(data['recipe']['filters'].items()):
@@ -1433,8 +1451,14 @@ def render(data):
                 '| DLL | H0 binding | H0 DllMain attach/detach (observed) | H1 outcome | '
                 'H1 DllMain attach TRUE | H1 detach | Kernel records ENOSYS | w32srv requests |',
                 '| --- | --- | ---: | --- | ---: | ---: | ---: | ---: |']
-        for name in sorted(load['h1']['dlls']):
-            h0, h1 = load['h0']['dlls'][name], load['h1']['dlls'][name]
+        for name in sorted(set(load['h0']['dlls']) | set(load['h1']['dlls'])):
+            h0 = load['h0']['dlls'].get(name, {})
+            h1 = load['h1']['dlls'].get(name)
+            if h1 is None:
+                out.append(f"| {name} | {'bound' if h0.get('bound') else 'refused'} | "
+                           f"{h0.get('dllmain_attach_observed', 0)}/{h0.get('dllmain_detach_observed', 0)} | "
+                           'not executed (sandbox SIGSYS) | - | - | - | - |')
+                continue
             res = dict(re.findall(r'(\w+)=(\d+)', h1.get('resources', '')))
             out.append(f"| {name} | {'bound' if h0['bound'] else 'refused'} | "
                        f"{h0['dllmain_attach_observed']}/{h0['dllmain_detach_observed']} | {h1['outcome']} | "
