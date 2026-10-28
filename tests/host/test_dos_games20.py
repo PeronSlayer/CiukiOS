@@ -49,6 +49,13 @@ def catalog_root(folder):
         if source.startswith('third_party/'):
             dest = folder / source; dest.parent.mkdir(parents=True, exist_ok=True)
             dest.write_bytes((ROOT / source).read_bytes())
+    # The fixtures exercise a pending candidate: heretic as before its lead pin.
+    data = json.loads((folder / games.PINS).read_text())
+    for pin in data['titles']:
+        if pin['id'] == 'heretic':pin.update(status='lead-pins', sha256='lead-pins', size=None)
+    (folder / games.PINS).write_text(json.dumps(data, indent=2) + '\n')
+    path = folder / 'third_party/games/heretic-shareware/UPSTREAM.json'; upstream = json.loads(path.read_text())
+    upstream.update(status='lead-pins', sha256='lead-pins', size=None); path.write_text(json.dumps(upstream))
     return folder
 
 
