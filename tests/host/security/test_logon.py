@@ -15,7 +15,10 @@ import os
 from pathlib import Path
 import subprocess
 import unittest
-from test_accounts import AccountTests as _Accounts
+try:  # imported as a package by discover -t . and as a script directory otherwise
+    from .test_accounts import AccountTests as _Accounts
+except ImportError:
+    from test_accounts import AccountTests as _Accounts
 
 ROOT = Path(__file__).resolve().parents[3]
 OUT = ROOT / 'build/host/security/logon'

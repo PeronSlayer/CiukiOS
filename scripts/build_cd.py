@@ -741,7 +741,13 @@ def build(image, out_dir, setup_elf, config_path=COMPONENTS, limit_sectors=CD_LI
         ready_only = {provisioning["seed"].casefold(), provisioning["state"].casefold()}
         files = stage_payloads(image, start, [p for p in payloads if p["path"] != "/system/BOOT.CFG"
                                               and p["path"].casefold() not in ready_only], stage, epoch)
-        require(not [p for p in files if p.casefold().startswith("/system/security/")],
+        # sec-k06 keeps the machine registry hives in the SYSTEM broker's tree
+        # /System/Security/Registry/Machine: machine configuration that Setup
+        # installs, like the default hives of a Windows Setup medium, not
+        # account state.
+        machine_registry = "/system/security/registry/machine/"
+        require(not [p for p in files if p.casefold().startswith("/system/security/")
+                     and not p.casefold().startswith(machine_registry)],
                 "the Setup CD must not carry account state below /System/Security")
         # CD-only files: the placeholder Setup program and the Setup boot options.
         disk_cfg = (stage / "system/BOOT.CFG.disk")
