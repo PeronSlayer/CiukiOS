@@ -3980,7 +3980,12 @@ uint32_t reserved[4];
 #define CIUKI_SYSTEM_SETTING_HWPROFILES 1u
 #define CIUKI_SYSTEM_SETTING_PERFORMANCE 2u
 #define CIUKI_SYSTEM_SETTING_ACCEL_RETRY 3u
-#define CIUKI_SYSTEM_SETTING_IPX_FRAME 4u
+#define CIUKI_SYSTEM_SETTING_IPX_FRAME 6u
+```
+
+f6-27; 4 and 5 are sec-k08 CLOCK and POWER
+
+```c
 #define CIUKI_SYSTEM_SETTING_MAX 24575u
 struct ciuki_system_setting {
     uint32_t version;
