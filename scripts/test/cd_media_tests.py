@@ -342,7 +342,12 @@ class EligibilityTests(unittest.TestCase):
         for candidate in (ROOT / "build/f0/build-manifest.json", ROOT / "build/f0-main/build-manifest.json"):
             if candidate.is_file():
                 manifest = json.loads(candidate.read_text())
-                paths = [p["path"] for p in manifest["payloads"]] + ["/Programs/setup", "/system/RELEASE.JSON"]
+                # sec-user-02: build_cd.py leaves the ready image's account seed and
+                # bootstrap.state off the Setup medium; eligibility never sees them.
+                provisioning = manifest.get("provisioning") or {}
+                ready_only = {provisioning[k].casefold() for k in ("seed", "state") if provisioning.get(k)}
+                paths = [p["path"] for p in manifest["payloads"] if p["path"].casefold() not in ready_only]
+                paths += ["/Programs/setup", "/system/RELEASE.JSON"]
                 games = [p["name"] for p in manifest.get("games", {}).get("packages", [])]
                 cd.eligibility(self.config, paths, games)
                 self.assertFalse(any("DMFAQ66" in p.upper() for p in paths))
