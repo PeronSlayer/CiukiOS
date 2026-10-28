@@ -2378,23 +2378,26 @@
     "comctl32.dll": "8d7eb0beb67752e31f5ff2bc5d51cebd0e1da19d496a029dcefec0909143d1e3",
     "comdlg32.dll": "859b99b4b82f4aa5bfe8cd8586c1d7743fc4c92131777990aef2561cbce79c8c",
     "crtdll.dll": "1c56dd2bb2f3de7bc972924b8beaa6dad647c77bc09f5a6a915006344aeb36b4",
+    "crypt32.dll": "377a1b780e7c891fba34e488d0b656dd33a523de3cfb13901b4088641aabda41",
+    "cryptui.dll": "996f15355945b294699868f5b0a7e4d7a55258df5674b4c98e87765cf6d0797d",
     "ddraw.dll": "b4e8bf8d14349b096260b9f20beb87d0d0808f16d98b261d1d6dbec69303aa2b",
+    "dhcpcsvc.dll": "f42e674ee021c0d360f256623990665c48d9d510d692dcaf6bc845f5a64b00f3",
     "dinput.dll": "001412e12e9566363236fa9848d35f62ffbe5ddb6f6c3434936cb71e8221a520",
     "dinput8.dll": "8599cc4834c32db00aa7ecb5aae4061fdd47a7194f35868f0d3e3249e320df0f",
     "dplayx.dll": "5ba9965df79b392af4606b94956ae6fdbab4e7e4284898b4e5a813d61e1ea98b",
     "dsetup.dll": "9274f53f6d5ca4922f3e262629afa2f14406520fcacd08f20aa9c39824e58c20",
     "dsetup32.dll": "91f69e3ec7a682500427c439dc8192f5581b28b95deddf1376431b094eb23b58",
     "dsound.dll": "855fa6414ce50d66d31b09f88484627690d289e11fbaa90cc917afa19addffd8",
-    "gdi32.dll": "5da9d509e9d453bab5756f906b498acc06fa5cbe2f93537dbe964c806d58520d",
-    "gdiplus.dll": "3ed094b7673e3bc0814591e29113d7a92971e8c5958410fea9038154d7b5527f",
+    "gdi32.dll": "df69b322915eaf16ac903c83146e60dbfc487b61d03211da4d327334f4d0b528",
+    "gdiplus.dll": "5f961e2f87e15de514ee0c5db40801b9124a7e216e4fdc47c029ed2f0d781466",
     "iccvid.dll": "2b8494328a214547337ba4a4820c75f17b5f33dfe4c7497c005a73fb0534cd56",
     "imaadp32.acm": "1e8e83eaaeb948317d7366ee9d4f300cbfb188b2473b2e7a86339c22d8868b90",
     "imm32.dll": "bfc0303ec9f37891e39d7bc340e3e5551035b1dc1758310b2482f1f2dd8200c6",
-    "iphlpapi.dll": "8cbacc90aa854c0db8cbd0e7fe7d5291e1cd7f7956b39f9a900234af36390f3b",
-    "kernel32.dll": "fc83e58241fcb0f33ccbfa37bbb0b41b88fd93daa78408b5b09f0129140b6e37",
+    "iphlpapi.dll": "4614c68b1cd1a95eb9846016673eb469b9b7a989046e34a6f87b1102ab9715a0",
+    "kernel32.dll": "494a01740ed580db5efb8035a51f49788fd0f79873a99dc7d05b5cf2a4a8d492",
     "lz32.dll": "1e7e8dd8a9e4a57646395f0fbc20977bd2e4888e7137f6fe97d6b8beeb1b2dcb",
-    "mciavi32.dll": "700277bb6a13f25b8ec75c5eb60675667c779a3e39142443cca3abc91b613cdc",
-    "mlang.dll": "e3d117fc469a7d84512e8e7b6dd8925ba8b340682076652a427fe305c4e56e91",
+    "mciavi32.dll": "b0ccc944414e25fa46f7f70c4dadac67de70355c86a2de923635bbf09fb53dcf",
+    "mlang.dll": "0b75a542f1db282979f0017d169f9d8b1fb09084d879c15eaa4997fcec024350",
     "mpr.dll": "6f9bf6248a70caeb0e6d40f7b2377546bfeca48fe1c5d0c91f9f700fdc81123b",
     "msacm32.dll": "b5853213cd319d646f238d9fc23f03bca0d3c0923041a85f585f62c4fca7dd75",
     "msadp32.acm": "04bc81ed9a3fbfe69f4032ee9002fb2dd7269310fae9e5c92c955ee4aeae3eb8",
@@ -2404,19 +2407,19 @@
     "ntdll.dll": "939cc90b0e98290b90b559614f286a192575add468588f16bb8c64afad0e8b8f",
     "ole32.dll": "f41cd7a4e60118f32d455140bc25d073006dc62f31d5e076b1102f08338ea532",
     "opengl32.dll": "32c7995d7589a9603cc2daab07b9a41f4fc0450fb091e95ee42041736c2f067c",
-    "secur32.dll": "aafff2cfb3a566e7ead499cf7206295fbe058a2d8f8ab711dfd33670b003be69",
-    "shdocvw.dll": "ce9853ecec3d7672418d2be3182df3da6ceb3332e117d665886f762d834fcf7d",
+    "secur32.dll": "324083806c123a06187215f6fe94dcfaa01016e9b74d92a8a4aec5966db22bde",
+    "shdocvw.dll": "99909a32a8e79cf2b76834551c7ec5f59e051453dca67a29237808949275872e",
     "shell32.dll": "0eb583699e3f5395c011a306f0f9cbce1ea3e4e12dca7e87d8ca870e9f7ca765",
-    "urlmon.dll": "7cf171c73ea1db4d4e81d82271b001f0483fad54717f078901899f5170cd9cc3",
+    "urlmon.dll": "e20409e44712b7d825b54b052fd6da8de15e7c6c9ff928b6deb744966359e2cb",
     "user32.dll": "92a67c383579846b83668d311708138ba8a27d687a68c8edefe832b4ed698869",
-    "uxtheme.dll": "a98dff78d8ea63a30b6aba8520b4c3dd37f7ec04fdbd705c40f9345c04f8d107",
+    "uxtheme.dll": "9ef3e053c86402e3b7f94e0fa10c55b0a84e0b0d53e679a86e9540776cbe554d",
     "version.dll": "2178a19894de306582014714c1dcf5e058d3553838ed3e6393551f9e6b1d6996",
-    "windowscodecs.dll": "dba4f13327018b67569964fcaff08895863ab94ddb53984d0a5f9aec25cac82d",
-    "winmm.dll": "64825d520494706103ae5677ae93a132210bffb49d777c05d05e4bed7882a1bf",
+    "windowscodecs.dll": "8315cbae3bd79ab09a3746750b01103a02d8fb24efb628f3cbcfce35b85a713c",
+    "winmm.dll": "92c9f383ee6b6e9ba56e6b3b6508c1d951c8d43b481bedcf074cbba56e1d93a2",
     "winspool.drv": "5c0acac9dba5f495f335ea2f406d2b5875d48742dcb611b5f3a3f7a3ec42a8b0",
-    "wintrust.dll": "a09ce69f755507a0db0bd7d4a0ee51991c54b0dabab564f824077185d5d5c808",
-    "ws2_32.dll": "321503999b100447eb357fedcd1080efbd64fdbb58cc1a13e3784686d376bf3d",
-    "wsock32.dll": "1629bcec1901679bc891b1415fe8fd616567df6207dfff67aa53a886ff5cb092"
+    "wintrust.dll": "b3a462b8bf480e56c1c73fecb63b938f7bf67e1c67983b73a54741e45f9bac7d",
+    "ws2_32.dll": "da0798c19d92b54075e39ac4bd540a01f5ede7468f54ac775ead6a99623349e0",
+    "wsock32.dll": "ff1d5973dbb24083eef56fdf7072976a5245d927d594bce8af5e633d579d0c57"
   },
   "decisions": [
     {
@@ -21935,7 +21938,7 @@
     {
       "action": "w21-unresolved-forwarder",
       "audit": "f5-14b",
-      "f5_20c": "closed: lazy forwarder to an absent DLL (decided)",
+      "f5_20c": "closed: lazy forwarder to an absent DLL (decided) -> wininet.dll!InternetCrackUrlW",
       "importer": "shlwapi.dll",
       "kind": "forwarder",
       "linked": "shlwapi.dll",
@@ -23272,6 +23275,20 @@
       "action": "core-implement",
       "audit": "f5-20b",
       "f5_20b": "implemented outside the decision table",
+      "importer": "oledlg.dll",
+      "kind": "import",
+      "linked": "user32.dll",
+      "name": "GetPropW",
+      "owner": "user32.dll",
+      "provider": "user32.dll",
+      "retarget": null,
+      "rule": "core-api-f5-20b",
+      "symbol": "GetPropW"
+    },
+    {
+      "action": "core-implement",
+      "audit": "f5-20b",
+      "f5_20b": "implemented outside the decision table",
       "importer": "shell32.dll",
       "kind": "import",
       "linked": "user32.dll",
@@ -23440,6 +23457,20 @@
       "action": "core-implement",
       "audit": "f5-20b",
       "f5_20b": "implemented outside the decision table",
+      "importer": "wininet.dll",
+      "kind": "import",
+      "linked": "user32.dll",
+      "name": "GetWindowLongW",
+      "owner": "user32.dll",
+      "provider": "user32.dll",
+      "retarget": null,
+      "rule": "core-api-f5-20b",
+      "symbol": "GetWindowLongW"
+    },
+    {
+      "action": "core-implement",
+      "audit": "f5-20b",
+      "f5_20b": "implemented outside the decision table",
       "importer": "comctl32.dll",
       "kind": "import",
       "linked": "user32.dll",
@@ -23561,6 +23592,20 @@
       "retarget": null,
       "rule": "core-api-f5-20b",
       "symbol": "#95"
+    },
+    {
+      "action": "core-implement",
+      "audit": "f5-20b",
+      "f5_20b": "implemented outside the decision table",
+      "importer": "wininet.dll",
+      "kind": "import",
+      "linked": "user32.dll",
+      "name": "GetWindowTextW",
+      "owner": "user32.dll",
+      "provider": "user32.dll",
+      "retarget": null,
+      "rule": "core-api-f5-20b",
+      "symbol": "GetWindowTextW"
     },
     {
       "action": "core-implement",
@@ -23986,6 +24031,20 @@
       "action": "core-implement",
       "audit": "f5-20b",
       "f5_20b": "implemented outside the decision table",
+      "importer": "oledlg.dll",
+      "kind": "import",
+      "linked": "user32.dll",
+      "name": "PostMessageW",
+      "owner": "user32.dll",
+      "provider": "user32.dll",
+      "retarget": null,
+      "rule": "core-api-f5-20b",
+      "symbol": "PostMessageW"
+    },
+    {
+      "action": "core-implement",
+      "audit": "f5-20b",
+      "f5_20b": "implemented outside the decision table",
       "importer": "riched20.dll",
       "kind": "import",
       "linked": "user32.dll",
@@ -24280,6 +24339,20 @@
       "action": "core-implement",
       "audit": "f5-20b",
       "f5_20b": "implemented outside the decision table",
+      "importer": "oledlg.dll",
+      "kind": "import",
+      "linked": "user32.dll",
+      "name": "RegisterWindowMessageW",
+      "owner": "user32.dll",
+      "provider": "user32.dll",
+      "retarget": null,
+      "rule": "core-api-f5-20b",
+      "symbol": "RegisterWindowMessageW"
+    },
+    {
+      "action": "core-implement",
+      "audit": "f5-20b",
+      "f5_20b": "implemented outside the decision table",
       "importer": "shlwapi.dll",
       "kind": "forwarder",
       "linked": "shlwapi.dll",
@@ -24323,6 +24396,20 @@
       "audit": "f5-20b",
       "f5_20b": "implemented outside the decision table",
       "importer": "ole32.dll",
+      "kind": "import",
+      "linked": "user32.dll",
+      "name": "RemovePropW",
+      "owner": "user32.dll",
+      "provider": "user32.dll",
+      "retarget": null,
+      "rule": "core-api-f5-20b",
+      "symbol": "RemovePropW"
+    },
+    {
+      "action": "core-implement",
+      "audit": "f5-20b",
+      "f5_20b": "implemented outside the decision table",
+      "importer": "oledlg.dll",
       "kind": "import",
       "linked": "user32.dll",
       "name": "RemovePropW",
@@ -24462,6 +24549,20 @@
       "action": "core-implement",
       "audit": "f5-20b",
       "f5_20b": "implemented outside the decision table",
+      "importer": "oledlg.dll",
+      "kind": "import",
+      "linked": "user32.dll",
+      "name": "SendMessageW",
+      "owner": "user32.dll",
+      "provider": "user32.dll",
+      "retarget": null,
+      "rule": "core-api-f5-20b",
+      "symbol": "SendMessageW"
+    },
+    {
+      "action": "core-implement",
+      "audit": "f5-20b",
+      "f5_20b": "implemented outside the decision table",
       "importer": "riched20.dll",
       "kind": "import",
       "linked": "user32.dll",
@@ -24513,6 +24614,20 @@
       "retarget": null,
       "rule": "core-api-f5-20b",
       "symbol": "#136"
+    },
+    {
+      "action": "core-implement",
+      "audit": "f5-20b",
+      "f5_20b": "implemented outside the decision table",
+      "importer": "wininet.dll",
+      "kind": "import",
+      "linked": "user32.dll",
+      "name": "SendMessageW",
+      "owner": "user32.dll",
+      "provider": "user32.dll",
+      "retarget": null,
+      "rule": "core-api-f5-20b",
+      "symbol": "SendMessageW"
     },
     {
       "action": "core-implement",
@@ -24575,6 +24690,20 @@
       "audit": "f5-20b",
       "f5_20b": "implemented outside the decision table",
       "importer": "ole32.dll",
+      "kind": "import",
+      "linked": "user32.dll",
+      "name": "SetPropW",
+      "owner": "user32.dll",
+      "provider": "user32.dll",
+      "retarget": null,
+      "rule": "core-api-f5-20b",
+      "symbol": "SetPropW"
+    },
+    {
+      "action": "core-implement",
+      "audit": "f5-20b",
+      "f5_20b": "implemented outside the decision table",
+      "importer": "oledlg.dll",
       "kind": "import",
       "linked": "user32.dll",
       "name": "SetPropW",
@@ -24756,6 +24885,20 @@
       "action": "core-implement",
       "audit": "f5-20b",
       "f5_20b": "implemented outside the decision table",
+      "importer": "wininet.dll",
+      "kind": "import",
+      "linked": "user32.dll",
+      "name": "SetWindowLongW",
+      "owner": "user32.dll",
+      "provider": "user32.dll",
+      "retarget": null,
+      "rule": "core-api-f5-20b",
+      "symbol": "SetWindowLongW"
+    },
+    {
+      "action": "core-implement",
+      "audit": "f5-20b",
+      "f5_20b": "implemented outside the decision table",
       "importer": "comctl32.dll",
       "kind": "import",
       "linked": "user32.dll",
@@ -24771,6 +24914,20 @@
       "audit": "f5-20b",
       "f5_20b": "implemented outside the decision table",
       "importer": "comdlg32.dll",
+      "kind": "import",
+      "linked": "user32.dll",
+      "name": "SetWindowTextW",
+      "owner": "user32.dll",
+      "provider": "user32.dll",
+      "retarget": null,
+      "rule": "core-api-f5-20b",
+      "symbol": "SetWindowTextW"
+    },
+    {
+      "action": "core-implement",
+      "audit": "f5-20b",
+      "f5_20b": "implemented outside the decision table",
+      "importer": "oledlg.dll",
       "kind": "import",
       "linked": "user32.dll",
       "name": "SetWindowTextW",
@@ -24835,6 +24992,20 @@
       "retarget": null,
       "rule": "core-api-f5-20b",
       "symbol": "#143"
+    },
+    {
+      "action": "core-implement",
+      "audit": "f5-20b",
+      "f5_20b": "implemented outside the decision table",
+      "importer": "wininet.dll",
+      "kind": "import",
+      "linked": "user32.dll",
+      "name": "SetWindowTextW",
+      "owner": "user32.dll",
+      "provider": "user32.dll",
+      "retarget": null,
+      "rule": "core-api-f5-20b",
+      "symbol": "SetWindowTextW"
     },
     {
       "action": "core-implement",
@@ -25651,19 +25822,6 @@
       "symbol": "#464"
     },
     {
-      "action": "w21-unresolved-forwarder",
-      "audit": "f5-20c",
-      "importer": "shlwapi.dll",
-      "kind": "forwarder",
-      "linked": "shlwapi.dll",
-      "name": "InternetCrackUrlW",
-      "owner": "wininet.dll",
-      "provider": "wininet.dll",
-      "retarget": null,
-      "rule": "absent-forwarder-dll",
-      "symbol": "#480"
-    },
-    {
       "action": "core-w21-stub",
       "audit": "f5-20c",
       "f5_20c": "census W21 stub (FALSE/NULL/zero + 120)",
@@ -25776,6 +25934,258 @@
       "symbol": "ImmReleaseContext"
     },
     {
+      "action": "core-w21-stub",
+      "audit": "f5-20c",
+      "f5_20c": "W21 typed failure",
+      "importer": "wininet.dll",
+      "kind": "import",
+      "linked": "kernel32.dll",
+      "name": "SetThreadDescription",
+      "owner": "kernel32.dll",
+      "provider": "kernel32.dll",
+      "retarget": null,
+      "rule": "core-census-w21",
+      "symbol": "SetThreadDescription"
+    },
+    {
+      "action": "core-w21-stub",
+      "audit": "f5-20c",
+      "f5_20c": "W21 typed failure (SEC_E_SECPKG_NOT_FOUND)",
+      "importer": "wininet.dll",
+      "kind": "delay-import",
+      "linked": "secur32.dll",
+      "name": "AcquireCredentialsHandleW",
+      "owner": "secur32.dll",
+      "provider": "secur32.dll",
+      "retarget": null,
+      "rule": "core-census-w21",
+      "symbol": "AcquireCredentialsHandleW"
+    },
+    {
+      "action": "core-w21-stub",
+      "audit": "f5-20c",
+      "f5_20c": "W21 typed failure (SEC_E_UNSUPPORTED_FUNCTION)",
+      "importer": "wininet.dll",
+      "kind": "delay-import",
+      "linked": "secur32.dll",
+      "name": "DecryptMessage",
+      "owner": "secur32.dll",
+      "provider": "secur32.dll",
+      "retarget": null,
+      "rule": "core-census-w21",
+      "symbol": "DecryptMessage"
+    },
+    {
+      "action": "core-w21-stub",
+      "audit": "f5-20c",
+      "f5_20c": "W21 typed failure (SEC_E_UNSUPPORTED_FUNCTION)",
+      "importer": "wininet.dll",
+      "kind": "delay-import",
+      "linked": "secur32.dll",
+      "name": "DeleteSecurityContext",
+      "owner": "secur32.dll",
+      "provider": "secur32.dll",
+      "retarget": null,
+      "rule": "core-census-w21",
+      "symbol": "DeleteSecurityContext"
+    },
+    {
+      "action": "core-w21-stub",
+      "audit": "f5-20c",
+      "f5_20c": "W21 typed failure (SEC_E_UNSUPPORTED_FUNCTION)",
+      "importer": "wininet.dll",
+      "kind": "delay-import",
+      "linked": "secur32.dll",
+      "name": "EncryptMessage",
+      "owner": "secur32.dll",
+      "provider": "secur32.dll",
+      "retarget": null,
+      "rule": "core-census-w21",
+      "symbol": "EncryptMessage"
+    },
+    {
+      "action": "core-w21-stub",
+      "audit": "f5-20c",
+      "f5_20c": "W21 typed failure (SEC_E_UNSUPPORTED_FUNCTION)",
+      "importer": "wininet.dll",
+      "kind": "delay-import",
+      "linked": "secur32.dll",
+      "name": "FreeContextBuffer",
+      "owner": "secur32.dll",
+      "provider": "secur32.dll",
+      "retarget": null,
+      "rule": "core-census-w21",
+      "symbol": "FreeContextBuffer"
+    },
+    {
+      "action": "core-w21-stub",
+      "audit": "f5-20c",
+      "f5_20c": "W21 typed failure (SEC_E_UNSUPPORTED_FUNCTION)",
+      "importer": "wininet.dll",
+      "kind": "delay-import",
+      "linked": "secur32.dll",
+      "name": "FreeCredentialsHandle",
+      "owner": "secur32.dll",
+      "provider": "secur32.dll",
+      "retarget": null,
+      "rule": "core-census-w21",
+      "symbol": "FreeCredentialsHandle"
+    },
+    {
+      "action": "core-w21-stub",
+      "audit": "f5-20c",
+      "f5_20c": "W21 typed failure (SEC_E_UNSUPPORTED_FUNCTION)",
+      "importer": "wininet.dll",
+      "kind": "delay-import",
+      "linked": "secur32.dll",
+      "name": "InitializeSecurityContextW",
+      "owner": "secur32.dll",
+      "provider": "secur32.dll",
+      "retarget": null,
+      "rule": "core-census-w21",
+      "symbol": "InitializeSecurityContextW"
+    },
+    {
+      "action": "core-w21-stub",
+      "audit": "f5-20c",
+      "f5_20c": "W21 typed failure (SEC_E_SECPKG_NOT_FOUND)",
+      "importer": "wininet.dll",
+      "kind": "delay-import",
+      "linked": "secur32.dll",
+      "name": "QueryContextAttributesW",
+      "owner": "secur32.dll",
+      "provider": "secur32.dll",
+      "retarget": null,
+      "rule": "core-census-w21",
+      "symbol": "QueryContextAttributesW"
+    },
+    {
+      "action": "core-w21-stub",
+      "audit": "f5-20c",
+      "f5_20c": "W21 typed failure (SEC_E_SECPKG_NOT_FOUND)",
+      "importer": "wininet.dll",
+      "kind": "delay-import",
+      "linked": "secur32.dll",
+      "name": "QuerySecurityPackageInfoW",
+      "owner": "secur32.dll",
+      "provider": "secur32.dll",
+      "retarget": null,
+      "rule": "core-census-w21",
+      "symbol": "QuerySecurityPackageInfoW"
+    },
+    {
+      "action": "core-w21-stub",
+      "audit": "f5-20c",
+      "f5_20c": "W21 typed failure (NULL)",
+      "importer": "wininet.dll",
+      "kind": "delay-import",
+      "linked": "crypt32.dll",
+      "name": "CertCreateCertificateContext",
+      "owner": "crypt32.dll",
+      "provider": "crypt32.dll",
+      "retarget": null,
+      "rule": "core-census-w21",
+      "symbol": "CertCreateCertificateContext"
+    },
+    {
+      "action": "core-w21-stub",
+      "audit": "f5-20c",
+      "f5_20c": "W21 typed failure (NULL)",
+      "importer": "wininet.dll",
+      "kind": "delay-import",
+      "linked": "crypt32.dll",
+      "name": "CertDuplicateCertificateChain",
+      "owner": "crypt32.dll",
+      "provider": "crypt32.dll",
+      "retarget": null,
+      "rule": "core-census-w21",
+      "symbol": "CertDuplicateCertificateChain"
+    },
+    {
+      "action": "core-w21-stub",
+      "audit": "f5-20c",
+      "f5_20c": "W21 typed failure (FALSE)",
+      "importer": "wininet.dll",
+      "kind": "delay-import",
+      "linked": "crypt32.dll",
+      "name": "CertFreeCertificateChain",
+      "owner": "crypt32.dll",
+      "provider": "crypt32.dll",
+      "retarget": null,
+      "rule": "core-census-w21",
+      "symbol": "CertFreeCertificateChain"
+    },
+    {
+      "action": "core-w21-stub",
+      "audit": "f5-20c",
+      "f5_20c": "W21 typed failure (FALSE)",
+      "importer": "wininet.dll",
+      "kind": "delay-import",
+      "linked": "crypt32.dll",
+      "name": "CertFreeCertificateContext",
+      "owner": "crypt32.dll",
+      "provider": "crypt32.dll",
+      "retarget": null,
+      "rule": "core-census-w21",
+      "symbol": "CertFreeCertificateContext"
+    },
+    {
+      "action": "core-w21-stub",
+      "audit": "f5-20c",
+      "f5_20c": "W21 typed failure (FALSE)",
+      "importer": "wininet.dll",
+      "kind": "delay-import",
+      "linked": "crypt32.dll",
+      "name": "CertNameToStrA",
+      "owner": "crypt32.dll",
+      "provider": "crypt32.dll",
+      "retarget": null,
+      "rule": "core-census-w21",
+      "symbol": "CertNameToStrA"
+    },
+    {
+      "action": "core-w21-stub",
+      "audit": "f5-20c",
+      "f5_20c": "W21 typed failure (FALSE)",
+      "importer": "wininet.dll",
+      "kind": "delay-import",
+      "linked": "cryptui.dll",
+      "name": "CryptUIDlgViewCertificateW",
+      "owner": "cryptui.dll",
+      "provider": "cryptui.dll",
+      "retarget": null,
+      "rule": "core-census-w21",
+      "symbol": "CryptUIDlgViewCertificateW"
+    },
+    {
+      "action": "core-w21-stub",
+      "audit": "f5-20c",
+      "f5_20c": "W21 typed failure (ERROR_NOT_SUPPORTED)",
+      "importer": "wininet.dll",
+      "kind": "delay-import",
+      "linked": "dhcpcsvc.dll",
+      "name": "DhcpRequestParams",
+      "owner": "dhcpcsvc.dll",
+      "provider": "dhcpcsvc.dll",
+      "retarget": null,
+      "rule": "core-census-w21",
+      "symbol": "DhcpRequestParams"
+    },
+    {
+      "action": "core-w21-stub",
+      "audit": "f5-20c",
+      "f5_20c": "W21 typed failure (ERROR_NOT_SUPPORTED)",
+      "importer": "wininet.dll",
+      "kind": "delay-import",
+      "linked": "iphlpapi.dll",
+      "name": "GetAdaptersAddresses",
+      "owner": "iphlpapi.dll",
+      "provider": "iphlpapi.dll",
+      "retarget": null,
+      "rule": "core-census-w21",
+      "symbol": "GetAdaptersAddresses"
+    },
+    {
       "action": "core-implement",
       "audit": "f5-20c",
       "f5_20c": "implemented by f5-20C (lead decision 2026-10-20)",
@@ -25864,6 +26274,20 @@
       "audit": "f5-20c",
       "f5_20c": "implemented by f5-20C (lead decision 2026-10-20)",
       "importer": "ole32.dll",
+      "kind": "import",
+      "linked": "kernel32.dll",
+      "name": "IsBadReadPtr",
+      "owner": "kernel32.dll",
+      "provider": "kernel32.dll",
+      "retarget": null,
+      "rule": "core-api-f5-20c",
+      "symbol": "IsBadReadPtr"
+    },
+    {
+      "action": "core-implement",
+      "audit": "f5-20c",
+      "f5_20c": "implemented by f5-20C (lead decision 2026-10-20)",
+      "importer": "wininet.dll",
       "kind": "import",
       "linked": "kernel32.dll",
       "name": "IsBadReadPtr",
@@ -26084,6 +26508,21 @@
       "sha256": "83d80452bdb4c017ab938cb9d737ebe136b4e82d99b11bcb7615162c22cadee8",
       "size_of_image": 659456
     },
+    "oledlg.dll": {
+      "base": 1956642816,
+      "file_bytes": 196608,
+      "license": "LGPL-2.1-or-later",
+      "memory": {
+        "private_cow_commitment_pages": 2,
+        "reserved_image_pages": 48,
+        "shared_seed_pages": 48,
+        "startup_committed_pages_model": 50
+      },
+      "qualified": false,
+      "resource_entries": 199,
+      "sha256": "4ea51ccd43084b663556235711ee96a168909f6f1f16e5d17856d3663b55f72e",
+      "size_of_image": 196608
+    },
     "riched20.dll": {
       "base": 1954152448,
       "file_bytes": 405504,
@@ -26188,13 +26627,28 @@
       "resource_entries": 83,
       "sha256": "f0519aad6c7fca0a66b28f7da043bb58a0ff09afee0f4b3c6c94752779a00c12",
       "size_of_image": 352256
+    },
+    "wininet.dll": {
+      "base": 1956839424,
+      "file_bytes": 430080,
+      "license": "LGPL-2.1-or-later",
+      "memory": {
+        "private_cow_commitment_pages": 2,
+        "reserved_image_pages": 105,
+        "shared_seed_pages": 105,
+        "startup_committed_pages_model": 107
+      },
+      "qualified": false,
+      "resource_entries": 201,
+      "sha256": "50a55e749b5e723d39efb084f582949fec7af078b4f675e12b3868f268716190",
+      "size_of_image": 430080
     }
   },
   "fit": {
-    "file_bytes": 9637888,
+    "file_bytes": 10264576,
     "installer_budget_bytes": 14680064,
     "model": "Cold section-store header/raw seed page union; writable COW commitment promises counted separately, not resident pages. Excludes DllMain heaps, page tables, metadata and other modules; not guest RSS or a whole-system 128 MiB fit result.",
-    "private_cow_commitment_pages": 82,
+    "private_cow_commitment_pages": 86,
     "reused_dlls": [
       "advpack.dll",
       "cabinet.dll",
@@ -26208,20 +26662,22 @@
       "msvcrt.dll",
       "ole32.dll",
       "oleaut32.dll",
+      "oledlg.dll",
       "riched20.dll",
       "riched32.dll",
       "rpcrt4.dll",
       "setupapi.dll",
       "shcore.dll",
       "shell32.dll",
-      "shlwapi.dll"
+      "shlwapi.dll",
+      "wininet.dll"
     ],
     "seed_bytes_within_budget": true,
-    "shared_seed_pages": 2353,
+    "shared_seed_pages": 2506,
     "shell32_size_of_image": 3293184,
-    "size_of_image": 9781248,
+    "size_of_image": 10407936,
     "size_of_image_within_budget": true,
-    "startup_committed_pages_model": 2435
+    "startup_committed_pages_model": 2592
   },
   "identical_runs": 2,
   "imports": {
@@ -26793,6 +27249,43 @@
         }
       }
     },
+    "oledlg.dll": {
+      "eager_missing": 0,
+      "forwarders": 0,
+      "forwarders_unresolved": [],
+      "imports": {
+        "advapi32.dll": {
+          "missing": [],
+          "present": 3,
+          "required": 3
+        },
+        "comdlg32.dll": {
+          "missing": [],
+          "present": 1,
+          "required": 1
+        },
+        "kernel32.dll": {
+          "missing": [],
+          "present": 21,
+          "required": 21
+        },
+        "msvcrt.dll": {
+          "missing": [],
+          "present": 19,
+          "required": 19
+        },
+        "ole32.dll": {
+          "missing": [],
+          "present": 7,
+          "required": 7
+        },
+        "user32.dll": {
+          "missing": [],
+          "present": 28,
+          "required": 28
+        }
+      }
+    },
     "riched20.dll": {
       "eager_missing": 0,
       "forwarders": 0,
@@ -27100,8 +27593,7 @@
       "forwarders": 217,
       "forwarders_unresolved": [
         "userenv.ExpandEnvironmentStringsForUserA",
-        "userenv.ExpandEnvironmentStringsForUserW",
-        "wininet.InternetCrackUrlW"
+        "userenv.ExpandEnvironmentStringsForUserW"
       ],
       "imports": {
         "advapi32.dll": {
@@ -27183,6 +27675,78 @@
           "missing": [],
           "present": 1,
           "required": 1
+        }
+      }
+    },
+    "wininet.dll": {
+      "eager_missing": 0,
+      "forwarders": 0,
+      "forwarders_unresolved": [],
+      "imports": {
+        "advapi32.dll": {
+          "missing": [],
+          "present": 7,
+          "required": 7
+        },
+        "crypt32.dll (delayed)": {
+          "missing": [],
+          "present": 5,
+          "required": 5
+        },
+        "cryptui.dll (delayed)": {
+          "missing": [],
+          "present": 1,
+          "required": 1
+        },
+        "dhcpcsvc.dll (delayed)": {
+          "missing": [],
+          "present": 1,
+          "required": 1
+        },
+        "iphlpapi.dll (delayed)": {
+          "missing": [],
+          "present": 1,
+          "required": 1
+        },
+        "kernel32.dll": {
+          "missing": [],
+          "present": 74,
+          "required": 74
+        },
+        "msvcrt.dll": {
+          "missing": [],
+          "present": 55,
+          "required": 55
+        },
+        "ntdll.dll": {
+          "missing": [],
+          "present": 3,
+          "required": 3
+        },
+        "secur32.dll (delayed)": {
+          "missing": [],
+          "present": 9,
+          "required": 9
+        },
+        "shell32.dll": {
+          "missing": [],
+          "present": 2,
+          "required": 2
+        },
+        "shlwapi.dll": {
+          "missing": [],
+          "present": 10,
+          "required": 10
+        },
+        "user32.dll": {
+          "missing": [],
+          "present": 12,
+          "required": 12
+        },
+        "ws2_32.dll": {
+          "missing": [],
+          "present": 23,
+          "required": 23
         }
       }
     }
@@ -28343,16 +28907,18 @@
     "shcore",
     "dplayx",
     "dplay",
-    "dpwsockx"
+    "dpwsockx",
+    "oledlg",
+    "wininet"
   ],
   "msvcrt": {
     "method": "Wine side: actual PE and section-store model. Newlib side: static CiukiOS SDK ELF with every covered surface function referenced, --gc-sections, minus an empty program; MSVCRT ABI glue (FILE/_iob layout, _errno, locale, SEH/C++ EH, startup) not included.",
     "newlib": {
-      "covered": 75,
+      "covered": 81,
       "linked_bytes_over_empty": {
         "bss": 40,
         "data": 420,
-        "text": 104438
+        "text": 104942
       },
       "missing": [
         "__iob_func",
@@ -28360,6 +28926,8 @@
         "_create_locale",
         "_findclose",
         "_free_locale",
+        "_ltow",
+        "_scprintf",
         "_snwprintf_l",
         "_wcslwr",
         "_wfindfirst",
@@ -28369,7 +28937,7 @@
         "_wopen",
         "wcscpy_s"
       ],
-      "sdk_libc_sha256": "bf5a953a2007065d4c0487e0947a5eb161ab6142cab57d8e9578cc974e61f12e",
+      "sdk_libc_sha256": "e319cd81c2eb79d4c84c1668b890bd73dadf0fdab10f60f4a766fe7c2d69c23d",
       "startup_pages_estimate": 27
     },
     "surface": [
@@ -28381,10 +28949,13 @@
       "_findclose",
       "_free_locale",
       "_fstat",
+      "_ltow",
       "_msize",
       "_read",
+      "_scprintf",
       "_snwprintf_l",
       "_strdup",
+      "_stricmp",
       "_strnicmp",
       "_vsnprintf",
       "_vsnwprintf",
@@ -28398,6 +28969,7 @@
       "_wgetenv",
       "_wopen",
       "atoi",
+      "atol",
       "bsearch",
       "calloc",
       "ceil",
@@ -28438,9 +29010,13 @@
       "strcspn",
       "strlen",
       "strncmp",
+      "strnlen",
       "strrchr",
+      "strtok",
       "strtol",
       "swscanf",
+      "system",
+      "time",
       "tolower",
       "toupper",
       "towlower",
@@ -28462,7 +29038,7 @@
       "wcstol",
       "wcstoul"
     ],
-    "surface_count": 88,
+    "surface_count": 96,
     "wine": {
       "exports": 1290,
       "file_bytes": 606208,
@@ -28473,7 +29049,7 @@
         "startup_committed_pages_model": 153
       },
       "size_of_image": 614400,
-      "surface_exported": 88
+      "surface_exported": 96
     }
   },
   "not_reused": {
@@ -28482,7 +29058,9 @@
   "pending_qualification": {
     "dplay.dll": "f6-26: H0 binds; H1 execution is blocked by sandbox SIGSYS; DirectPlay end-to-end and Windows 98 interoperability gates remain",
     "dplayx.dll": "f6-26: H0 binds; H1 execution is blocked by sandbox SIGSYS; DirectPlay end-to-end and Windows 98 interoperability gates remain",
-    "dpwsockx.dll": "f6-26: H0 binds; H1 execution is blocked by sandbox SIGSYS; DirectPlay end-to-end and Windows 98 interoperability gates remain"
+    "dpwsockx.dll": "f6-26: H0 binds; H1 execution is blocked by sandbox SIGSYS; DirectPlay end-to-end and Windows 98 interoperability gates remain",
+    "oledlg.dll": "fx-hlutils: import closure and H0/H1 qualification required",
+    "wininet.dll": "fx-hlutils: import closure and H0/H1 qualification required"
   },
   "recipe": {
     "base_region": [
@@ -28514,7 +29092,8 @@
       "0012-directplay-lobby.patch": "7a48280f6b928187c8dc74f8bb4ccf6856dec440a22cd67e23f46387cfd24383",
       "0013-directplay-enumeration.patch": "fa3d13ff507e75f0b7f549ff65cdd9ac251b486532f3eb569988b4655d4d8415",
       "0014-directplay-ipx.patch": "694344d687101098795630d37a30d60516525964e1788e891597d9e6877da7e1",
-      "0015-directplay-lobby-lifetime.patch": "28699775c3b60229d60d046dcedad1136675c325f0fc9a9a9bf4fcda6ad218c8"
+      "0015-directplay-lobby-lifetime.patch": "28699775c3b60229d60d046dcedad1136675c325f0fc9a9a9bf4fcda6ad218c8",
+      "0016-wininet-no-tls.patch": "5b23e05c89226401e3877b34dead46cb256669502e5a21a26f5215b65ad85ebb"
     },
     "strip": "llvm-objcopy --strip-all"
   },
@@ -28546,7 +29125,7 @@
     "wine-private": "Wine-private helper with no Windows 98 meaning; a Wine-side source patch removes the call path. No Wine-private export enters the core."
   },
   "schema": 2,
-  "status": "built twice identically with the recorded patches; re-audited against the core; 16 reused PEs qualified by the recorded H0 binding and H1 DllMain evidence and staged in the image builtin store (f5-20D); the guest case w32-upper-dlls-qemu-t23 is the gate for their use; the others are rejected by T1",
+  "status": "Two identical builds; eager imports close, including oledlg and wininet. The sixteen unchanged qualified PEs retain their exact-hash H0/H1 evidence; oledlg and wininet await H0/H1 qualification. DirectPlay candidates retain their previous pending gates.",
   "w21_bound": [
     {
       "importer": "combase.dll",
@@ -28637,6 +29216,186 @@
       "provider": "imm32.dll",
       "status": "census W21 stub (FALSE/NULL/zero + 120)",
       "symbol": "ImmSetCompositionWindow"
+    },
+    {
+      "importer": "comctl32.dll",
+      "kind": "delay-import",
+      "linked": "uxtheme.dll",
+      "name": "CloseThemeData",
+      "provider": "uxtheme.dll",
+      "status": "W21 typed failure (E_NOTIMPL)",
+      "symbol": "CloseThemeData"
+    },
+    {
+      "importer": "comctl32.dll",
+      "kind": "delay-import",
+      "linked": "uxtheme.dll",
+      "name": "DrawThemeBackground",
+      "provider": "uxtheme.dll",
+      "status": "W21 typed failure (E_NOTIMPL)",
+      "symbol": "DrawThemeBackground"
+    },
+    {
+      "importer": "comctl32.dll",
+      "kind": "delay-import",
+      "linked": "uxtheme.dll",
+      "name": "DrawThemeEdge",
+      "provider": "uxtheme.dll",
+      "status": "W21 typed failure (E_NOTIMPL)",
+      "symbol": "DrawThemeEdge"
+    },
+    {
+      "importer": "comctl32.dll",
+      "kind": "delay-import",
+      "linked": "uxtheme.dll",
+      "name": "DrawThemeParentBackground",
+      "provider": "uxtheme.dll",
+      "status": "W21 typed failure (E_NOTIMPL)",
+      "symbol": "DrawThemeParentBackground"
+    },
+    {
+      "importer": "comctl32.dll",
+      "kind": "delay-import",
+      "linked": "uxtheme.dll",
+      "name": "DrawThemeText",
+      "provider": "uxtheme.dll",
+      "status": "W21 typed failure (E_NOTIMPL)",
+      "symbol": "DrawThemeText"
+    },
+    {
+      "importer": "comctl32.dll",
+      "kind": "delay-import",
+      "linked": "uxtheme.dll",
+      "name": "DrawThemeTextEx",
+      "provider": "uxtheme.dll",
+      "status": "W21 typed failure (E_NOTIMPL)",
+      "symbol": "DrawThemeTextEx"
+    },
+    {
+      "importer": "comctl32.dll",
+      "kind": "delay-import",
+      "linked": "uxtheme.dll",
+      "name": "EnableThemeDialogTexture",
+      "provider": "uxtheme.dll",
+      "status": "W21 typed failure (E_NOTIMPL)",
+      "symbol": "EnableThemeDialogTexture"
+    },
+    {
+      "importer": "comctl32.dll",
+      "kind": "delay-import",
+      "linked": "uxtheme.dll",
+      "name": "GetThemeBackgroundContentRect",
+      "provider": "uxtheme.dll",
+      "status": "W21 typed failure (E_NOTIMPL)",
+      "symbol": "GetThemeBackgroundContentRect"
+    },
+    {
+      "importer": "comctl32.dll",
+      "kind": "delay-import",
+      "linked": "uxtheme.dll",
+      "name": "GetThemeBackgroundExtent",
+      "provider": "uxtheme.dll",
+      "status": "W21 typed failure (E_NOTIMPL)",
+      "symbol": "GetThemeBackgroundExtent"
+    },
+    {
+      "importer": "comctl32.dll",
+      "kind": "delay-import",
+      "linked": "uxtheme.dll",
+      "name": "GetThemeColor",
+      "provider": "uxtheme.dll",
+      "status": "W21 typed failure (E_NOTIMPL)",
+      "symbol": "GetThemeColor"
+    },
+    {
+      "importer": "comctl32.dll",
+      "kind": "delay-import",
+      "linked": "uxtheme.dll",
+      "name": "GetThemeFont",
+      "provider": "uxtheme.dll",
+      "status": "W21 typed failure (E_NOTIMPL)",
+      "symbol": "GetThemeFont"
+    },
+    {
+      "importer": "comctl32.dll",
+      "kind": "delay-import",
+      "linked": "uxtheme.dll",
+      "name": "GetThemeInt",
+      "provider": "uxtheme.dll",
+      "status": "W21 typed failure (E_NOTIMPL)",
+      "symbol": "GetThemeInt"
+    },
+    {
+      "importer": "comctl32.dll",
+      "kind": "delay-import",
+      "linked": "uxtheme.dll",
+      "name": "GetThemeMargins",
+      "provider": "uxtheme.dll",
+      "status": "W21 typed failure (E_NOTIMPL)",
+      "symbol": "GetThemeMargins"
+    },
+    {
+      "importer": "comctl32.dll",
+      "kind": "delay-import",
+      "linked": "uxtheme.dll",
+      "name": "GetThemePartSize",
+      "provider": "uxtheme.dll",
+      "status": "W21 typed failure (E_NOTIMPL)",
+      "symbol": "GetThemePartSize"
+    },
+    {
+      "importer": "comctl32.dll",
+      "kind": "delay-import",
+      "linked": "uxtheme.dll",
+      "name": "GetThemeTextExtent",
+      "provider": "uxtheme.dll",
+      "status": "W21 typed failure (E_NOTIMPL)",
+      "symbol": "GetThemeTextExtent"
+    },
+    {
+      "importer": "comctl32.dll",
+      "kind": "delay-import",
+      "linked": "uxtheme.dll",
+      "name": "GetWindowTheme",
+      "provider": "uxtheme.dll",
+      "status": "W21 typed failure (NULL)",
+      "symbol": "GetWindowTheme"
+    },
+    {
+      "importer": "comctl32.dll",
+      "kind": "delay-import",
+      "linked": "uxtheme.dll",
+      "name": "IsThemeBackgroundPartiallyTransparent",
+      "provider": "uxtheme.dll",
+      "status": "W21 typed failure (FALSE)",
+      "symbol": "IsThemeBackgroundPartiallyTransparent"
+    },
+    {
+      "importer": "comctl32.dll",
+      "kind": "delay-import",
+      "linked": "uxtheme.dll",
+      "name": "IsThemePartDefined",
+      "provider": "uxtheme.dll",
+      "status": "W21 typed failure (FALSE)",
+      "symbol": "IsThemePartDefined"
+    },
+    {
+      "importer": "comctl32.dll",
+      "kind": "delay-import",
+      "linked": "uxtheme.dll",
+      "name": "OpenThemeData",
+      "provider": "uxtheme.dll",
+      "status": "W21 typed failure (NULL)",
+      "symbol": "OpenThemeData"
+    },
+    {
+      "importer": "comctl32.dll",
+      "kind": "delay-import",
+      "linked": "uxtheme.dll",
+      "name": "OpenThemeDataForDpi",
+      "provider": "uxtheme.dll",
+      "status": "W21 typed failure (NULL)",
+      "symbol": "OpenThemeDataForDpi"
     },
     {
       "importer": "comdlg32.dll",
@@ -28783,6 +29542,33 @@
       "symbol": "FindActCtxSectionGuid"
     },
     {
+      "importer": "oleaut32.dll",
+      "kind": "delay-import",
+      "linked": "urlmon.dll",
+      "name": "CoInternetParseUrl",
+      "provider": "urlmon.dll",
+      "status": "W21 typed failure (E_NOTIMPL)",
+      "symbol": "CoInternetParseUrl"
+    },
+    {
+      "importer": "oleaut32.dll",
+      "kind": "delay-import",
+      "linked": "urlmon.dll",
+      "name": "CreateURLMoniker",
+      "provider": "urlmon.dll",
+      "status": "W21 typed failure (E_NOTIMPL)",
+      "symbol": "CreateURLMoniker"
+    },
+    {
+      "importer": "oleaut32.dll",
+      "kind": "delay-import",
+      "linked": "windowscodecs.dll",
+      "name": "WICConvertBitmapSource",
+      "provider": "windowscodecs.dll",
+      "status": "W21 typed failure (E_NOTIMPL)",
+      "symbol": "WICConvertBitmapSource"
+    },
+    {
       "importer": "riched20.dll",
       "kind": "import",
       "linked": "imm32.dll",
@@ -28853,6 +29639,177 @@
       "provider": "kernel32.dll",
       "status": "W21 typed failure",
       "symbol": "SetThreadDescription"
+    },
+    {
+      "importer": "rpcrt4.dll",
+      "kind": "delay-import",
+      "linked": "iphlpapi.dll",
+      "name": "GetAdaptersInfo",
+      "provider": "iphlpapi.dll",
+      "status": "W21 typed failure (ERROR_NOT_SUPPORTED)",
+      "symbol": "GetAdaptersInfo"
+    },
+    {
+      "importer": "rpcrt4.dll",
+      "kind": "delay-import",
+      "linked": "secur32.dll",
+      "name": "AcceptSecurityContext",
+      "provider": "secur32.dll",
+      "status": "W21 typed failure (SEC_E_UNSUPPORTED_FUNCTION)",
+      "symbol": "AcceptSecurityContext"
+    },
+    {
+      "importer": "rpcrt4.dll",
+      "kind": "delay-import",
+      "linked": "secur32.dll",
+      "name": "AcquireCredentialsHandleA",
+      "provider": "secur32.dll",
+      "status": "W21 typed failure (SEC_E_SECPKG_NOT_FOUND)",
+      "symbol": "AcquireCredentialsHandleA"
+    },
+    {
+      "importer": "rpcrt4.dll",
+      "kind": "delay-import",
+      "linked": "secur32.dll",
+      "name": "AcquireCredentialsHandleW",
+      "provider": "secur32.dll",
+      "status": "W21 typed failure (SEC_E_SECPKG_NOT_FOUND)",
+      "symbol": "AcquireCredentialsHandleW"
+    },
+    {
+      "importer": "rpcrt4.dll",
+      "kind": "delay-import",
+      "linked": "secur32.dll",
+      "name": "CompleteAuthToken",
+      "provider": "secur32.dll",
+      "status": "W21 typed failure (SEC_E_UNSUPPORTED_FUNCTION)",
+      "symbol": "CompleteAuthToken"
+    },
+    {
+      "importer": "rpcrt4.dll",
+      "kind": "delay-import",
+      "linked": "secur32.dll",
+      "name": "DecryptMessage",
+      "provider": "secur32.dll",
+      "status": "W21 typed failure (SEC_E_UNSUPPORTED_FUNCTION)",
+      "symbol": "DecryptMessage"
+    },
+    {
+      "importer": "rpcrt4.dll",
+      "kind": "delay-import",
+      "linked": "secur32.dll",
+      "name": "DeleteSecurityContext",
+      "provider": "secur32.dll",
+      "status": "W21 typed failure (SEC_E_UNSUPPORTED_FUNCTION)",
+      "symbol": "DeleteSecurityContext"
+    },
+    {
+      "importer": "rpcrt4.dll",
+      "kind": "delay-import",
+      "linked": "secur32.dll",
+      "name": "EncryptMessage",
+      "provider": "secur32.dll",
+      "status": "W21 typed failure (SEC_E_UNSUPPORTED_FUNCTION)",
+      "symbol": "EncryptMessage"
+    },
+    {
+      "importer": "rpcrt4.dll",
+      "kind": "delay-import",
+      "linked": "secur32.dll",
+      "name": "EnumerateSecurityPackagesA",
+      "provider": "secur32.dll",
+      "status": "W21 typed failure (SEC_E_UNSUPPORTED_FUNCTION)",
+      "symbol": "EnumerateSecurityPackagesA"
+    },
+    {
+      "importer": "rpcrt4.dll",
+      "kind": "delay-import",
+      "linked": "secur32.dll",
+      "name": "EnumerateSecurityPackagesW",
+      "provider": "secur32.dll",
+      "status": "W21 typed failure (SEC_E_UNSUPPORTED_FUNCTION)",
+      "symbol": "EnumerateSecurityPackagesW"
+    },
+    {
+      "importer": "rpcrt4.dll",
+      "kind": "delay-import",
+      "linked": "secur32.dll",
+      "name": "FreeContextBuffer",
+      "provider": "secur32.dll",
+      "status": "W21 typed failure (SEC_E_UNSUPPORTED_FUNCTION)",
+      "symbol": "FreeContextBuffer"
+    },
+    {
+      "importer": "rpcrt4.dll",
+      "kind": "delay-import",
+      "linked": "secur32.dll",
+      "name": "FreeCredentialsHandle",
+      "provider": "secur32.dll",
+      "status": "W21 typed failure (SEC_E_UNSUPPORTED_FUNCTION)",
+      "symbol": "FreeCredentialsHandle"
+    },
+    {
+      "importer": "rpcrt4.dll",
+      "kind": "delay-import",
+      "linked": "secur32.dll",
+      "name": "GetUserNameExW",
+      "provider": "secur32.dll",
+      "status": "W21 typed failure (FALSE)",
+      "symbol": "GetUserNameExW"
+    },
+    {
+      "importer": "rpcrt4.dll",
+      "kind": "delay-import",
+      "linked": "secur32.dll",
+      "name": "ImpersonateSecurityContext",
+      "provider": "secur32.dll",
+      "status": "W21 typed failure (SEC_E_UNSUPPORTED_FUNCTION)",
+      "symbol": "ImpersonateSecurityContext"
+    },
+    {
+      "importer": "rpcrt4.dll",
+      "kind": "delay-import",
+      "linked": "secur32.dll",
+      "name": "InitializeSecurityContextW",
+      "provider": "secur32.dll",
+      "status": "W21 typed failure (SEC_E_UNSUPPORTED_FUNCTION)",
+      "symbol": "InitializeSecurityContextW"
+    },
+    {
+      "importer": "rpcrt4.dll",
+      "kind": "delay-import",
+      "linked": "secur32.dll",
+      "name": "MakeSignature",
+      "provider": "secur32.dll",
+      "status": "W21 typed failure (SEC_E_UNSUPPORTED_FUNCTION)",
+      "symbol": "MakeSignature"
+    },
+    {
+      "importer": "rpcrt4.dll",
+      "kind": "delay-import",
+      "linked": "secur32.dll",
+      "name": "QueryContextAttributesA",
+      "provider": "secur32.dll",
+      "status": "W21 typed failure (SEC_E_UNSUPPORTED_FUNCTION)",
+      "symbol": "QueryContextAttributesA"
+    },
+    {
+      "importer": "rpcrt4.dll",
+      "kind": "delay-import",
+      "linked": "secur32.dll",
+      "name": "RevertSecurityContext",
+      "provider": "secur32.dll",
+      "status": "W21 typed failure (SEC_E_UNSUPPORTED_FUNCTION)",
+      "symbol": "RevertSecurityContext"
+    },
+    {
+      "importer": "rpcrt4.dll",
+      "kind": "delay-import",
+      "linked": "secur32.dll",
+      "name": "VerifySignature",
+      "provider": "secur32.dll",
+      "status": "W21 typed failure (SEC_E_UNSUPPORTED_FUNCTION)",
+      "symbol": "VerifySignature"
     },
     {
       "importer": "setupapi.dll",
@@ -28943,6 +29900,42 @@
       "provider": "advapi32.dll",
       "status": "W21 typed failure",
       "symbol": "StartServiceW"
+    },
+    {
+      "importer": "setupapi.dll",
+      "kind": "delay-import",
+      "linked": "wintrust.dll",
+      "name": "CryptCATAdminAcquireContext",
+      "provider": "wintrust.dll",
+      "status": "W21 typed failure (FALSE)",
+      "symbol": "CryptCATAdminAcquireContext"
+    },
+    {
+      "importer": "setupapi.dll",
+      "kind": "delay-import",
+      "linked": "wintrust.dll",
+      "name": "CryptCATAdminAddCatalog",
+      "provider": "wintrust.dll",
+      "status": "W21 typed failure (NULL)",
+      "symbol": "CryptCATAdminAddCatalog"
+    },
+    {
+      "importer": "setupapi.dll",
+      "kind": "delay-import",
+      "linked": "wintrust.dll",
+      "name": "CryptCATAdminReleaseCatalogContext",
+      "provider": "wintrust.dll",
+      "status": "W21 typed failure (FALSE)",
+      "symbol": "CryptCATAdminReleaseCatalogContext"
+    },
+    {
+      "importer": "setupapi.dll",
+      "kind": "delay-import",
+      "linked": "wintrust.dll",
+      "name": "CryptCATAdminReleaseContext",
+      "provider": "wintrust.dll",
+      "status": "W21 typed failure (FALSE)",
+      "symbol": "CryptCATAdminReleaseContext"
     },
     {
       "importer": "shell32.dll",
@@ -29062,6 +30055,78 @@
       "symbol": "Wow64RevertWow64FsRedirection"
     },
     {
+      "importer": "shell32.dll",
+      "kind": "delay-import",
+      "linked": "shdocvw.dll",
+      "name": "#218",
+      "provider": "shdocvw.dll",
+      "status": "W21 typed failure (E_NOTIMPL)",
+      "symbol": "#218"
+    },
+    {
+      "importer": "shell32.dll",
+      "kind": "delay-import",
+      "linked": "gdiplus.dll",
+      "name": "GdipCreateFromHDC",
+      "provider": "gdiplus.dll",
+      "status": "W21 typed failure (GpStatus NotImplemented)",
+      "symbol": "GdipCreateFromHDC"
+    },
+    {
+      "importer": "shell32.dll",
+      "kind": "delay-import",
+      "linked": "gdiplus.dll",
+      "name": "GdipDeleteGraphics",
+      "provider": "gdiplus.dll",
+      "status": "W21 typed failure (GpStatus NotImplemented)",
+      "symbol": "GdipDeleteGraphics"
+    },
+    {
+      "importer": "shell32.dll",
+      "kind": "delay-import",
+      "linked": "gdiplus.dll",
+      "name": "GdipDisposeImage",
+      "provider": "gdiplus.dll",
+      "status": "W21 typed failure (GpStatus NotImplemented)",
+      "symbol": "GdipDisposeImage"
+    },
+    {
+      "importer": "shell32.dll",
+      "kind": "delay-import",
+      "linked": "gdiplus.dll",
+      "name": "GdipDrawImageRectRectI",
+      "provider": "gdiplus.dll",
+      "status": "W21 typed failure (GpStatus NotImplemented)",
+      "symbol": "GdipDrawImageRectRectI"
+    },
+    {
+      "importer": "shell32.dll",
+      "kind": "delay-import",
+      "linked": "gdiplus.dll",
+      "name": "GdipGetImageDimension",
+      "provider": "gdiplus.dll",
+      "status": "W21 typed failure (GpStatus NotImplemented)",
+      "symbol": "GdipGetImageDimension"
+    },
+    {
+      "importer": "shell32.dll",
+      "kind": "delay-import",
+      "linked": "gdiplus.dll",
+      "name": "GdipGetImageThumbnail",
+      "provider": "gdiplus.dll",
+      "status": "W21 typed failure (GpStatus NotImplemented)",
+      "symbol": "GdipGetImageThumbnail"
+    },
+    {
+      "importer": "shell32.dll",
+      "kind": "delay-import",
+      "linked": "gdiplus.dll",
+      "name": "GdipLoadImageFromFile",
+      "provider": "gdiplus.dll",
+      "status": "W21 typed failure (GpStatus NotImplemented)",
+      "symbol": "GdipLoadImageFromFile"
+    },
+    {
       "importer": "shlwapi.dll",
       "kind": "delay-import",
       "linked": "mpr.dll",
@@ -29078,6 +30143,195 @@
       "provider": "mpr.dll",
       "status": "census W21 stub (LSTATUS 120)",
       "symbol": "WNetRestoreConnectionW"
+    },
+    {
+      "importer": "shlwapi.dll",
+      "kind": "delay-import",
+      "linked": "mlang.dll",
+      "name": "ConvertINetUnicodeToMultiByte",
+      "provider": "mlang.dll",
+      "status": "W21 typed failure (E_FAIL)",
+      "symbol": "ConvertINetUnicodeToMultiByte"
+    },
+    {
+      "importer": "shlwapi.dll",
+      "kind": "delay-import",
+      "linked": "urlmon.dll",
+      "name": "CreateFormatEnumerator",
+      "provider": "urlmon.dll",
+      "status": "W21 typed failure (E_NOTIMPL)",
+      "symbol": "CreateFormatEnumerator"
+    },
+    {
+      "importer": "shlwapi.dll",
+      "kind": "delay-import",
+      "linked": "urlmon.dll",
+      "name": "RegisterFormatEnumerator",
+      "provider": "urlmon.dll",
+      "status": "W21 typed failure (E_NOTIMPL)",
+      "symbol": "RegisterFormatEnumerator"
+    },
+    {
+      "importer": "wininet.dll",
+      "kind": "import",
+      "linked": "kernel32.dll",
+      "name": "SetThreadDescription",
+      "provider": "kernel32.dll",
+      "status": "W21 typed failure",
+      "symbol": "SetThreadDescription"
+    },
+    {
+      "importer": "wininet.dll",
+      "kind": "delay-import",
+      "linked": "secur32.dll",
+      "name": "AcquireCredentialsHandleW",
+      "provider": "secur32.dll",
+      "status": "W21 typed failure (SEC_E_SECPKG_NOT_FOUND)",
+      "symbol": "AcquireCredentialsHandleW"
+    },
+    {
+      "importer": "wininet.dll",
+      "kind": "delay-import",
+      "linked": "secur32.dll",
+      "name": "DecryptMessage",
+      "provider": "secur32.dll",
+      "status": "W21 typed failure (SEC_E_UNSUPPORTED_FUNCTION)",
+      "symbol": "DecryptMessage"
+    },
+    {
+      "importer": "wininet.dll",
+      "kind": "delay-import",
+      "linked": "secur32.dll",
+      "name": "DeleteSecurityContext",
+      "provider": "secur32.dll",
+      "status": "W21 typed failure (SEC_E_UNSUPPORTED_FUNCTION)",
+      "symbol": "DeleteSecurityContext"
+    },
+    {
+      "importer": "wininet.dll",
+      "kind": "delay-import",
+      "linked": "secur32.dll",
+      "name": "EncryptMessage",
+      "provider": "secur32.dll",
+      "status": "W21 typed failure (SEC_E_UNSUPPORTED_FUNCTION)",
+      "symbol": "EncryptMessage"
+    },
+    {
+      "importer": "wininet.dll",
+      "kind": "delay-import",
+      "linked": "secur32.dll",
+      "name": "FreeContextBuffer",
+      "provider": "secur32.dll",
+      "status": "W21 typed failure (SEC_E_UNSUPPORTED_FUNCTION)",
+      "symbol": "FreeContextBuffer"
+    },
+    {
+      "importer": "wininet.dll",
+      "kind": "delay-import",
+      "linked": "secur32.dll",
+      "name": "FreeCredentialsHandle",
+      "provider": "secur32.dll",
+      "status": "W21 typed failure (SEC_E_UNSUPPORTED_FUNCTION)",
+      "symbol": "FreeCredentialsHandle"
+    },
+    {
+      "importer": "wininet.dll",
+      "kind": "delay-import",
+      "linked": "secur32.dll",
+      "name": "InitializeSecurityContextW",
+      "provider": "secur32.dll",
+      "status": "W21 typed failure (SEC_E_UNSUPPORTED_FUNCTION)",
+      "symbol": "InitializeSecurityContextW"
+    },
+    {
+      "importer": "wininet.dll",
+      "kind": "delay-import",
+      "linked": "secur32.dll",
+      "name": "QueryContextAttributesW",
+      "provider": "secur32.dll",
+      "status": "W21 typed failure (SEC_E_SECPKG_NOT_FOUND)",
+      "symbol": "QueryContextAttributesW"
+    },
+    {
+      "importer": "wininet.dll",
+      "kind": "delay-import",
+      "linked": "secur32.dll",
+      "name": "QuerySecurityPackageInfoW",
+      "provider": "secur32.dll",
+      "status": "W21 typed failure (SEC_E_SECPKG_NOT_FOUND)",
+      "symbol": "QuerySecurityPackageInfoW"
+    },
+    {
+      "importer": "wininet.dll",
+      "kind": "delay-import",
+      "linked": "crypt32.dll",
+      "name": "CertCreateCertificateContext",
+      "provider": "crypt32.dll",
+      "status": "W21 typed failure (NULL)",
+      "symbol": "CertCreateCertificateContext"
+    },
+    {
+      "importer": "wininet.dll",
+      "kind": "delay-import",
+      "linked": "crypt32.dll",
+      "name": "CertDuplicateCertificateChain",
+      "provider": "crypt32.dll",
+      "status": "W21 typed failure (NULL)",
+      "symbol": "CertDuplicateCertificateChain"
+    },
+    {
+      "importer": "wininet.dll",
+      "kind": "delay-import",
+      "linked": "crypt32.dll",
+      "name": "CertFreeCertificateChain",
+      "provider": "crypt32.dll",
+      "status": "W21 typed failure (FALSE)",
+      "symbol": "CertFreeCertificateChain"
+    },
+    {
+      "importer": "wininet.dll",
+      "kind": "delay-import",
+      "linked": "crypt32.dll",
+      "name": "CertFreeCertificateContext",
+      "provider": "crypt32.dll",
+      "status": "W21 typed failure (FALSE)",
+      "symbol": "CertFreeCertificateContext"
+    },
+    {
+      "importer": "wininet.dll",
+      "kind": "delay-import",
+      "linked": "crypt32.dll",
+      "name": "CertNameToStrA",
+      "provider": "crypt32.dll",
+      "status": "W21 typed failure (FALSE)",
+      "symbol": "CertNameToStrA"
+    },
+    {
+      "importer": "wininet.dll",
+      "kind": "delay-import",
+      "linked": "cryptui.dll",
+      "name": "CryptUIDlgViewCertificateW",
+      "provider": "cryptui.dll",
+      "status": "W21 typed failure (FALSE)",
+      "symbol": "CryptUIDlgViewCertificateW"
+    },
+    {
+      "importer": "wininet.dll",
+      "kind": "delay-import",
+      "linked": "dhcpcsvc.dll",
+      "name": "DhcpRequestParams",
+      "provider": "dhcpcsvc.dll",
+      "status": "W21 typed failure (ERROR_NOT_SUPPORTED)",
+      "symbol": "DhcpRequestParams"
+    },
+    {
+      "importer": "wininet.dll",
+      "kind": "delay-import",
+      "linked": "iphlpapi.dll",
+      "name": "GetAdaptersAddresses",
+      "provider": "iphlpapi.dll",
+      "status": "W21 typed failure (ERROR_NOT_SUPPORTED)",
+      "symbol": "GetAdaptersAddresses"
     }
   ],
   "wine_commit": "b073859675060c9211fcbccfd90e4e87520dc2c2"

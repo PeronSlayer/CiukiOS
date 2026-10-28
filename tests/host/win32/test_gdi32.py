@@ -140,6 +140,7 @@ class Gdi32Tests(unittest.TestCase):
         self.assertIn('PASS',p.stdout)
         return p.stdout
 
+    def test_sierra_utility_paths_and_metafiles(self): self.execute('utility-paths')
     def test_object_lifetime_delete_dc_saved_states_process_exit_and_oom(self): self.execute('lifetime')
     def test_independent_region_boolean_grid_serialization_winding_and_ellipse(self): self.execute('regions')
     def test_dc_mapping_state_visible_regions_clipping_and_pixel_apis(self): self.execute('state')

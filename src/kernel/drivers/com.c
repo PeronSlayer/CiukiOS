@@ -451,7 +451,7 @@ int com_vm_line_errors(unsigned i, uint32_t g)
     if (e>=0) p->status.errors=0;
     irq_restore(f); return e;
 }
-static bool program(struct com_port *p)
+static bool program(struct com_port *p, bool reset_fifos)
 {
     unsigned divisor=p->resource.clock/(16*p->line.baud);
     p->lcr=(uint8_t)((p->lcr&0x40) | (p->line.data_bits-5) | (p->line.stop_bits==2 ? 4 : 0));
@@ -462,8 +462,8 @@ static bool program(struct com_port *p)
     bool ok=rd(p,0)==(divisor&255) && rd(p,1)==(divisor>>8);
     p->fcr=p->status.fifo_depth>1 ? (uint8_t)(1 | p->line.rx_trigger<<6) : 0;
     if (p->status.chip==CIUKI_COM_16750 && p->status.fifo_depth==64) p->fcr|=0x20;
-    wr(p,2,p->fcr|6); wr(p,3,p->lcr);
-    if (p->status.fifo_depth==1) {
+    wr(p,2,p->fcr | (reset_fifos ? 6 : 0)); wr(p,3,p->lcr);
+    if (reset_fifos && p->status.fifo_depth==1) {
         /* An 8250/16450 has no FIFO reset command. Discard stale input
          * before the new generation enables RX; never carry an old byte. */
         for (unsigned n=0;n<64 && (rd(p,5)&1);n++) (void)rd(p,0);
@@ -499,7 +499,7 @@ int com_lease_open(unsigned i, unsigned owner, uint32_t id, uint32_t *generation
     p->status.generation=++open_generation; p->status.flags|=CIUKI_COM_OPEN;
     p->owner=owner; p->owner_id=id;
     p->line=default_line(); p->lcr=0; p->ier=13; p->mcr=0x0b;
-    if (!program(p)) {
+    if (!program(p,true)) {
         p->queues=0; p->status.generation=0; p->status.flags&=~CIUKI_COM_OPEN; p->owner=p->owner_id=0;
         irq_restore(f); desktop_buffer_free(queues,2*CIUKI_COM_QUEUE,MM_IO_REQUEST); return -EIO;
     }
@@ -578,7 +578,7 @@ int com_wait(unsigned i, uint32_t g, bool write, unsigned timeout, bool (*cancel
 int com_control(unsigned i, uint32_t g, uint32_t op, void *record, unsigned bytes, bool writable)
 {
     unsigned size=op==COM_GET_LINE || op==COM_SET_LINE ? sizeof(struct ciuki_com_line) :
-        op==COM_GET_STATUS ? sizeof(struct ciuki_com_status) : op==COM_SET_MODEM ? sizeof(struct ciuki_com_modem) :
+        op==COM_GET_STATUS || op==COM_CLEAR_ERRORS ? sizeof(struct ciuki_com_status) : op==COM_SET_MODEM ? sizeof(struct ciuki_com_modem) :
         op==COM_GET_OWNER ? sizeof(struct ciuki_com_owner) : op==COM_SET_MOUSE ? sizeof(struct ciuki_com_mouse) : 0;
     if (!size) return -ENOTTY;
     if (!record || size!=bytes) return -EINVAL;
@@ -601,16 +601,17 @@ int com_control(unsigned i, uint32_t g, uint32_t op, void *record, unsigned byte
                 p->line.baud=1200; p->line.data_bits=m->protocol==CIUKI_SERIAL_MOUSE_SYSTEMS ? 8 : 7;
                 p->line.stop_bits=m->protocol==CIUKI_SERIAL_MOUSE_SYSTEMS ? 2 : 1;
             }
-            if (!program(p)) e=-EIO;
+            if (!program(p,true)) e=-EIO;
             else { p->mouse.protocol=(uint8_t)m->protocol;
                 p->owner=m->protocol ? CIUKI_COM_OWNER_MOUSE : CIUKI_COM_OWNER_NATIVE; }
         }
     }
     else if (p->mouse.protocol && (op==COM_SET_LINE || op==COM_SET_MODEM)) e=-EBUSY;
-    else if (op==COM_GET_STATUS) {
+    else if (op==COM_GET_STATUS || op==COM_CLEAR_ERRORS) {
         if (((struct ciuki_com_status *)record)->reserved) e=-EINVAL;
         else { p->status.modem=(p->status.modem&15)|rd(p,6);
-            *(struct ciuki_com_status *)record=p->status; }
+            *(struct ciuki_com_status *)record=p->status;
+            if(op==COM_CLEAR_ERRORS) p->status.errors=0; }
     } else if (op==COM_GET_LINE) {
         if (((struct ciuki_com_line *)record)->reserved) e=-EINVAL;
         else *(struct ciuki_com_line *)record=p->line;
@@ -628,7 +629,7 @@ int com_control(unsigned i, uint32_t g, uint32_t op, void *record, unsigned byte
             l->data_bits<5 || l->data_bits>8 || l->stop_bits<1 || l->stop_bits>2 || l->parity>4 ||
             l->rx_trigger>3 || l->read_timeout_ms>60000 || l->write_timeout_ms>60000 || l->reserved) e=-EINVAL;
         else if (p->status.tx_queued || !(rd(p,5)&0x40) || p->status.rx_queued || (rd(p,5)&1)) e=-EBUSY;
-        else { p->line=*l; if (!program(p)) e=-EIO; }
+        else { p->line=*l; if (!program(p,false)) e=-EIO; }
     }
     irq_restore(f); return e;
 }

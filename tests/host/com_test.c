@@ -21,6 +21,7 @@ static void irq_restore(uint32_t f) { flags=f; }
 struct ciuki_boot_info g_boot;
 static bool logger_present, fail_work, fail_alloc, cancel_wait;
 static unsigned logger_calls, reads, writes, allocations;
+static unsigned fifo_reset_writes;
 volatile uint64_t g_ticks;
 static unsigned serial_buttons, serial_packets;
 void input_serial_event(uint16_t t,uint16_t c,int32_t value,gen_t g,uint64_t tick)
@@ -104,6 +105,7 @@ static void outb(uint16_t port, uint8_t b)
     if (m->absent) return;
     if (r==2) {
         if (m->regs[3]==0xbf && m->chip==CIUKI_COM_16650) { m->efr=b; return; }
+        if(b&6) fifo_reset_writes++;
         if (b&2) { m->head=m->used=0; m->error=0; }
         if (m->chip==CIUKI_COM_16750 && !(m->regs[3]&0x80) && !m->clone64) b=(b&~0x20)|(m->fcr&0x20);
         m->fcr=b&~6u; return;
@@ -183,15 +185,15 @@ static struct uaddr user_memory;
 static struct file_description *user_description;
 static uint8_t user_bytes[4096];
 static unsigned user_pins;
-static bool user_fault, user_signal;
+static bool user_fault, user_signal, user_read_only;
 struct process *proc_current(void) { return &user_process; }
 struct proc_thread *proc_thread_for(const struct task *t) { (void)t; return &user_thread; }
 bool proc_signal_caught(struct proc_thread *t) { assert(t==&user_thread); return user_signal; }
 struct file_description *file_fd(const struct process *p,int32_t fd) { assert(p==&user_process); return fd==5 ? user_description : 0; }
 int ua_pin(struct uaddr *u,struct ua_pin *pin,uint32_t base,uint32_t bytes,bool write)
 {
-    assert(u==&user_memory); (void)pin; (void)write;
-    if (user_fault || base<0x1000 || base>0x2000 || bytes>0x2000-base) return -EFAULT;
+    assert(u==&user_memory); (void)pin;
+    if (user_fault || (write && user_read_only) || base<0x1000 || base>0x2000 || bytes>0x2000-base) return -EFAULT;
     user_pins++; return 0;
 }
 void ua_unpin(struct uaddr *u,struct ua_pin *pin) { assert(u==&user_memory && user_pins); (void)pin; user_pins--; }
@@ -202,7 +204,7 @@ int copy_from_user(void *dst,uint32_t src,uint32_t bytes)
 }
 int copy_to_user(uint32_t dst,const void *src,uint32_t bytes)
 {
-    if (user_fault || dst<0x1000 || dst>0x2000 || bytes>0x2000-dst) return -EFAULT;
+    if (user_fault || user_read_only || dst<0x1000 || dst>0x2000 || bytes>0x2000-dst) return -EFAULT;
     memcpy(user_bytes+dst-0x1000,src,bytes); return 0;
 }
 static void user_retain(struct proc_object *o) { ((struct file_description *)o)->references++; }
@@ -311,11 +313,13 @@ static void faults_and_abi(void)
     l=default_line(); assert(com_control(1,g,COM_SET_LINE,&l,sizeof(l),false)==-EACCES);
     assert(com_control(1,g,COM_SET_LINE,&l,sizeof(l)-1,true)==-EINVAL);
     l.version=2; assert(com_control(1,g,COM_SET_LINE,&l,sizeof(l),true)==-EINVAL); l.version=1;
+    unsigned before_config=fifo_reset_writes;
     for (unsigned parity=0;parity<=4;parity++) for (unsigned bits=5;bits<=8;bits++) {
         l.parity=parity; l.data_bits=bits; l.stop_bits=2;
         assert(!com_control(1,g,COM_SET_LINE,&l,sizeof(l),true));
         unsigned expected=bits-5 | 4 | (parity ? 8 | ((parity-1)<<4) : 0);
         assert(models[0].regs[3]==expected);
+        assert(fifo_reset_writes==before_config);
     }
     struct ciuki_com_modem modem={1,sizeof(modem),CIUKI_COM_DTR|CIUKI_COM_BREAK,0};
     assert(!com_control(1,g,COM_SET_MODEM,&modem,sizeof(modem),true));
@@ -323,6 +327,9 @@ static void faults_and_abi(void)
     models[0].modem=0x93; interrupt(3);
     struct ciuki_com_status s={.version=1,.size=sizeof(s)};
     assert(!com_control(1,g,COM_GET_STATUS,&s,sizeof(s),false) && s.modem==0x93);
+    ports[1].status.errors=14;
+    assert(!com_control(1,g,COM_CLEAR_ERRORS,&s,sizeof(s),false) && s.errors==14);
+    assert(!com_control(1,g,COM_GET_STATUS,&s,sizeof(s),false) && !s.errors);
     assert(com_control(1,g,0,0,0,true)==-ENOTTY);
     uint8_t c=1; assert(com_transfer(1,g,&c,1,true)==1);
     assert(com_control(1,g,COM_SET_LINE,&l,sizeof(l),true)==-EBUSY); interrupt(3);
@@ -442,6 +449,12 @@ static void native(void)
     struct ciuki_com_status s={.version=1,.size=sizeof(s)}; memcpy(user_bytes,&s,sizeof(s));
     assert(!com_devctl(&user_process,5,COM_GET_STATUS,0x1000,sizeof(s)));
     memcpy(&s,user_bytes,sizeof(s)); assert(s.transmitted==1024 && s.generation==d.com_generation);
+    ports[1].status.errors=14;s=(struct ciuki_com_status){.version=1,.size=sizeof(s)};
+    memcpy(user_bytes,&s,sizeof(s));user_read_only=true;
+    assert(com_devctl(&user_process,5,COM_CLEAR_ERRORS,0x1000,sizeof(s))==-EFAULT && ports[1].status.errors==14);
+    user_read_only=false;
+    assert(!com_devctl(&user_process,5,COM_CLEAR_ERRORS,0x1000,sizeof(s)) && !ports[1].status.errors);
+    memcpy(&s,user_bytes,sizeof(s));assert(s.errors==14 && !user_pins);
     struct ciuki_com_owner owner={1,sizeof(owner),0,0,0,0}; memcpy(user_bytes,&owner,sizeof(owner));
     assert(!com_devctl(&user_process,5,COM_GET_OWNER,0x1000,sizeof(owner)));
     memcpy(&owner,user_bytes,sizeof(owner)); assert(owner.kind==CIUKI_COM_OWNER_NATIVE && owner.id==42 && owner.generation==d.com_generation);

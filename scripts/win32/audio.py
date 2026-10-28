@@ -36,7 +36,7 @@ def build(out,base,flags):
     result=[]
     # f5-12B: MCI core, string parser and the waveaudio/sequencer devices
     # live in winmm; avivideo is mciavi32.dll (build_mci_avi), loaded on use.
-    for dll,units in [('winmm.dll',['files','mix','runtime','wave','timers','misc','mmio','playsound','midi','synth','mci','mcistr','mcitime','mciwave','mciseq','mcicd']),('dsound.dll',['dsound','mix'])]:
+    for dll,units in [('winmm.dll',['files','mix','runtime','wave','timers','misc','joystick','mmio','playsound','midi','synth','mci','mcistr','mcitime','mciwave','mciseq','mcicd']),('dsound.dll',['dsound','mix'])]:
         objects=[];exports={};public=set()
         for unit in units:
             obj=out/f'audio-{unit}.obj'

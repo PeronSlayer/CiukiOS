@@ -214,7 +214,7 @@ static int store_test(void) {
     struct w32_file manifest;
     CHECK(w32_ciuki_store(&loader,&manifest));
     /* Includes ciukishell, OpenGL, G26 Winsock 2 and G15B HTML Help. */
-    CHECK(loader.builtin_count==46);
+    CHECK(loader.builtin_count==49); /* fx-hlutils optional WinINet providers */
     struct w32_module *main;
     CHECK(!w32_ciuki_start(&loader,&host.peb,"/builtin-import.exe","","C:\\","\0\0",&main));
     struct w32_module *core=w32_ldr_module(&loader,"ntdll.dll");

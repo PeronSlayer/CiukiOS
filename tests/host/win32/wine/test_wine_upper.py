@@ -207,7 +207,8 @@ class CoreAmendmentTests(unittest.TestCase):
 
     def test_absent_dll_stubs_cover_every_decided_entry(self):
         decided = {(d['provider'], d['name']) for d in RECORD['decisions']
-                   if d['audit'] == 'f5-14b' and d['action'] == 'w21-stub-dll'}
+                   if d['action'] in ('w21-stub-dll','core-w21-stub')
+                   and d['provider'] in upper_dlls.ABSENT_DELAYED}
         table = {(dll, name) for dll, names in upper_dlls.ABSENT_DELAYED.items() for name in names}
         self.assertEqual(decided, table)
         for dll, names in upper_dlls.ABSENT_DELAYED.items():
@@ -305,7 +306,8 @@ class StagingTests(unittest.TestCase):
             self.assertEqual(rows[0]['replaces_census_placeholder_sha256'], placeholder['sha256'])
 
     def test_directplay_candidates_are_not_staged_without_h1(self):
-        self.assertEqual(set(wu.PENDING_QUALIFICATION), {'dplay.dll', 'dplayx.dll', 'dpwsockx.dll'})
+        self.assertEqual(set(wu.PENDING_QUALIFICATION), {'dplay.dll', 'dplayx.dll', 'dpwsockx.dll',
+                                                       'oledlg.dll', 'wininet.dll'})
         self.assertEqual(RECORD['pending_qualification'], wu.PENDING_QUALIFICATION)
         for name in wu.PENDING_QUALIFICATION:
             self.assertIn(name, RECORD['dlls'])

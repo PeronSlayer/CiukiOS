@@ -36,7 +36,7 @@ MODULES = ('comctl32', 'comdlg32', 'shell32', 'shlwapi', 'ole32', 'combase',
            # are eager imports of those modules.
            'coml2', 'shcore',
            # f6-26: DirectPlay 2/3/4, legacy exports and LAN provider.
-           'dplayx', 'dplay', 'dpwsockx')
+           'dplayx', 'dplay', 'dpwsockx', 'oledlg', 'wininet')
 PATCHES = ('0001-in-process-rpc-only.patch', '0002-disable-rpcss-activation.patch',
            '0003-setupdi-unsupported.patch', '0004-single-msvcrt-crt.patch',
            '0005-builtin-region-base.patch',
@@ -49,7 +49,7 @@ PATCHES = ('0001-in-process-rpc-only.patch', '0002-disable-rpcss-activation.patc
            # f5-20C, found by the H1 DllMain run: MSVCRT's C locale code page.
            '0010-msvcrt-sbcs-code-page.patch',
            '0011-directplay-lan.patch', '0012-directplay-lobby.patch',
-           '0013-directplay-enumeration.patch', '0014-directplay-ipx.patch', '0015-directplay-lobby-lifetime.patch')
+           '0013-directplay-enumeration.patch', '0014-directplay-ipx.patch', '0015-directplay-lobby-lifetime.patch', '0016-wininet-no-tls.patch')
 CFLAGS = '-O2 -g0 -march=pentiumpro -mno-sse -mno-sse2 -mno-mmx -fno-ident'
 LDFLAGS = '--no-default-config -Wl,-timestamp:0'
 # Fixed CiukiOS builtin-region bases, packed in MODULES order with 64 KiB
@@ -261,6 +261,8 @@ PENDING_QUALIFICATION = {
     name + '.dll': 'f6-26: H0 binds; H1 execution is blocked by sandbox SIGSYS; '
                    'DirectPlay end-to-end and Windows 98 interoperability gates remain'
     for name in ('dplayx', 'dplay', 'dpwsockx')}
+PENDING_QUALIFICATION.update({name + '.dll': 'fx-hlutils: import closure and H0/H1 qualification required'
+                              for name in ('oledlg', 'wininet')})
 # Reused PEs that join the image's builtin store once their recorded host
 # evidence passes (record 'load': H0 binding and H1 DllMain attach/detach on
 # the PE with this exact hash; qualified_by_evidence). f5-20D (the cached
@@ -542,6 +544,16 @@ def core_stub_status(core):
     status = {}
     store = json.loads((core / 'builtin-store.json').read_text())
     hashes = {d['name'].lower(): d['sha256'] for d in store['dlls']}
+    absent=core / upper_dlls.STUB_INVENTORY
+    if absent.is_file():
+        inventory=json.loads(absent.read_text())
+        stub_dlls={d['name'] for d in store['dlls'] if d.get('origin')==upper_dlls.STUB_ORIGIN
+                   and (core / d['name']).is_file() and d['sha256']==sha(core / d['name'])}
+        for dll,entries in inventory['exports'].items():
+            if dll not in stub_dlls:
+                continue
+            for row in entries:
+                status[(dll,row['symbol'])]='W21 typed failure ('+row['failure']+')'
     census_manifest = core / 'generated/stubs.json'
     if census_manifest.is_file():
         reused = {m + '.dll' for m in MODULES} - set(NOT_REUSED)

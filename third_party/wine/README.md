@@ -101,3 +101,12 @@ patches in `patches/`, the complete recipe and helpers in `scripts/win32/`,
 the pin and `config/wine-upper.json`) must accompany any published copy of the
 image, as described in SOURCE-OFFER.txt. The users may replace any of the PEs
 by rebuilding them with that source (`make upper`).
+
+### fx-hlutils
+
+The upper recipe also builds Wine 10.0 oledlg.dll and wininet.dll. Patch
+0016 selects the existing MSVCRT and refuses TLS with the WinINet security
+channel error while retaining ordinary HTTP/FTP through CiukiOS ws2_32.
+Both new DLLs remain subject to the import and H0/H1 qualification gates;
+consult config/wine-upper.json for the measured state. Their sources and
+modifications accompany the existing LGPL corresponding-source offer.

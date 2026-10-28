@@ -137,3 +137,19 @@ these patches and the three added PE builds under LGPL-2.1-or-later.
     cleanup, allocation failure preservation, and a notification worker whose
     owned handles and reservation end with the child or launch cancellation.
     The worker retains no lobby-object pointer.
+
+## fx-hlutils: OLE dialogs and WinINet
+
+`0016-wininet-no-tls.patch` applies to Wine 10.0 at the pinned commit. It
+links oledlg and wininet to the same reused MSVCRT as the existing upper
+DLLs, avoiding an unintended UCRT dependency. Until a Schannel provider is
+available, NETCON_secure_connect returns
+ERROR_INTERNET_SECURITY_CHANNEL_ERROR before entering security delay imports.
+Plain HTTP and FTP retain Wine's ws2_32 calls, resolved to CiukiOS Winsock.
+This is an LGPL-2.1-or-later source modification, supplied with the recipe.
+The new PEs require the same import closure and H0/H1 evidence as the others.
+
+The same patch makes WinINet's optional legacy MPR password-cache helpers
+return ERROR_NOT_SUPPORTED and refuses non-Basic HTTP authentication with
+ERROR_INTERNET_LOGIN_FAILURE before SSPI delay imports. Credentials entered
+for a request can still use Wine's in-process Basic authentication path.

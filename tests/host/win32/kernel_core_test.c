@@ -136,6 +136,21 @@ uint32_t w32_file_call(struct proc_thread *t,struct ciuki_w32_file_args *a){(voi
 uint32_t w32_render3d_call(struct proc_thread *t,struct ciuki_w32_render3d_args *a) __attribute__((weak));
 uint32_t w32_render3d_call(struct proc_thread *t,struct ciuki_w32_render3d_args *a){(void)t;(void)a;return W32_STATUS_NOT_IMPLEMENTED;}
 void task_yield(void){if(on_schedule)schedule();}
+static unsigned joystick_calls;
+int joystick_control(struct ciuki_joystick_control *) __attribute__((weak));
+int joystick_hid_query(uint32_t,void *) __attribute__((weak));
+int joystick_control(struct ciuki_joystick_control *q) {
+    joystick_calls++;q->device=257;q->attached=1;q->generation=7;q->axes=3;return 0;
+}
+int joystick_hid_query(uint32_t operation,void *p) {
+    if(operation==INPUT_HID_GET_CAPS) {
+        struct ciuki_hid_caps *c=p;
+        c->classes=c->device==257 ? CIUKI_HID_JOYSTICK : CIUKI_HID_KEYBOARD;
+        c->attached=1;c->axes=3;return 0;
+    }
+    struct ciuki_hid_state *state=p;state->attached=1;state->buttons=3;
+    memset(state->keyboard,255,sizeof(state->keyboard));return 0;
+}
 #include "../../../src/kernel/proc/win32/system.c"
 #include "../../../src/kernel/proc/win32/snapshot.c"
 #include "../../../src/kernel/proc/win32/syscall.c"
@@ -382,6 +397,22 @@ static void test_advpack_process_flags(struct proc_thread *parent)
 {
     struct ciuki_w32_vm scratch={.bytes=4096,.flags=W32_MEM_RESERVE|W32_MEM_COMMIT,.protect=W32_PAGE_READWRITE};
     CHECK(!w32_vm_alloc(parent->process->memory,&scratch));
+    struct ciuki_joystick_control jq={.version=1,.size=sizeof(jq),.operation=CIUKI_JOY_NEXT};
+    CHECK(!ua_write(parent->process->memory,scratch.address,&jq,sizeof(jq)));
+    struct ciuki_w32_system_args ja={.header={1,sizeof(ja),W32_SYSTEM,0},.action=W32_S_JOYSTICK,
+        .low=scratch.address,.extra=sizeof(jq)};
+    CHECK(!w32_record_validate(&ja,sizeof(ja),true));
+    CHECK(!w32_system_call(parent,&ja) && !ja.error && ja.result && joystick_calls==1);
+    jq.operation=CIUKI_JOY_CALIBRATE;CHECK(!ua_write(parent->process->memory,scratch.address,&jq,sizeof(jq)));
+    ja.result=ja.error=0;CHECK(!w32_system_call(parent,&ja) && ja.error==87 && joystick_calls==1);
+    struct ciuki_hid_state js={.version=1,.size=sizeof(js),.device=257,.generation=7};
+    ja.value=2;ja.extra=sizeof(js);ja.error=ja.result=0;
+    CHECK(!ua_write(parent->process->memory,scratch.address,&js,sizeof(js)));
+    CHECK(!w32_system_call(parent,&ja) && !ja.error && ja.result);
+    CHECK(!ua_read(parent->process->memory,&js,scratch.address,sizeof(js)) && js.buttons==3);
+    for(unsigned i=0;i<sizeof(js.keyboard);i++) CHECK(!js.keyboard[i]);
+    js.device=1;CHECK(!ua_write(parent->process->memory,scratch.address,&js,sizeof(js)));
+    ja.result=ja.error=0;CHECK(!w32_system_call(parent,&ja) && ja.error==5);
     CHECK(!ua_write(parent->process->memory,scratch.address,"C:\\fixture.exe",15));
     const char command[]="\"C:\\fixture.exe\" /from-inf",env[]="A=B\0\0";
     CHECK(!ua_write(parent->process->memory,scratch.address+256,command,sizeof(command)));

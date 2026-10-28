@@ -216,6 +216,14 @@ int main(void) {
     host=gethostbyname("remote.example");CHECK(host&&*(uint32_t *)host->addresses[0]==0x04030201&&dns_queries==1);
     CHECK(!gethostbyname("absent.example")&&WSAGetLastError()==11001);
     struct ws_addrinfo *info=0; CHECK(getaddrinfo("127.0.0.1","80",0,&info)==0&&info&&info->family==AF_INET&&((struct ciuki_sockaddr_in *)info->address)->port==htons(80));freeaddrinfo(info);
+    const WCHAR wide_host[]={'1','2','7','.','0','.','0','.','1',0},wide_service[]={'8','0',0};
+    CHECK(!GetAddrInfoW(wide_host,wide_service,0,&info) && info && info->family==AF_INET);
+    char numeric[16],service_name[32];
+    CHECK(inet_ntop(AF_INET,&((struct ciuki_sockaddr_in *)info->address)->address,numeric,sizeof(numeric))==numeric && !strcmp(numeric,"127.0.0.1"));
+    CHECK(!getnameinfo(info->address,16,numeric,sizeof(numeric),service_name,sizeof(service_name),2|8) && !strcmp(service_name,"80"));
+    CHECK(getnameinfo(info->address,16,numeric,2,0,0,2)==10014);
+    CHECK(!inet_ntop(23,&((struct ciuki_sockaddr_in *)info->address)->address,numeric,sizeof(numeric)) && WSAGetLastError()==10047);
+    FreeAddrInfoW(info);
     CHECK(getaddrinfo("127.0.0.1","65536",0,&info)==10109&&!info);
     CHECK(((struct ws_protoent *)getprotobyname("TCP"))->protocol==IPPROTO_TCP);
     CHECK(((struct ws_servent *)getservbyname("domain","udp"))->port==(int16_t)htons(53));

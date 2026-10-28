@@ -3,6 +3,10 @@
 #include <ciuki/w32_core.h>
 #include <ciuki/w32_objects.h>
 #include <ciuki/security.h>
+#include <ciuki/security_device.h>
+extern int joystick_control(struct ciuki_joystick_control *) __attribute__((weak));
+extern int joystick_hid_query(uint32_t, void *) __attribute__((weak));
+extern int joystick_settings_select(struct process *) __attribute__((weak));
 #include <ciuki/systime.h>
 #pragma weak timezone_call
 #include <ciuki/power_source.h>
@@ -22,7 +26,41 @@ static void priority_apply(struct proc_thread *t) {
 }
 uint32_t w32_system_call(struct proc_thread *t,
                          struct ciuki_w32_system_args *a) {
-  if (a->action == W32_S_LAUNCH_IDLE) {
+  if (a->action == W32_S_JOYSTICK) {
+    struct ciuki_joystick_control q;
+    if(!security_process_live(t->process) ||
+       (!security_device_session(t->process) && !security_device_system(t->process))) a->error=5;
+    else if(a->value==1 || a->value==2) {
+      union {struct ciuki_hid_caps caps;struct ciuki_hid_state state;} u;
+      unsigned size=a->value==1 ? sizeof(u.caps) : sizeof(u.state);
+      if(a->extra!=size || copy_from_user(&u,a->low,size)) a->error=998;
+      else if(u.caps.version!=CIUKI_HID_VERSION || u.caps.size!=size) a->error=87;
+      else {
+        struct ciuki_hid_caps c={.version=CIUKI_HID_VERSION,.size=sizeof(c),
+            .device=u.caps.device,.generation=u.caps.generation};
+        int e=joystick_hid_query ? joystick_hid_query(INPUT_HID_GET_CAPS,&c) : -ENODEV;
+        if(!e && !(c.classes&CIUKI_HID_JOYSTICK)) e=-EACCES;
+        if(!e && a->value==1) u.caps=c;
+        else if(!e) {
+          e=joystick_hid_query(INPUT_HID_GET_STATE,&u.state);
+          memset(u.state.keyboard,0,sizeof(u.state.keyboard));u.state.consumers=0;
+        }
+        if(e) a->error=e==-EACCES || e==-EPERM ? 5 : 1167;
+        else if(copy_to_user(a->low,&u,size)) a->error=998;
+        else a->result=1;
+      }
+    }
+    else if(a->extra!=sizeof(q) || copy_from_user(&q,a->low,sizeof(q))) a->error=998;
+    else if(q.version!=CIUKI_JOYSTICK_VERSION || q.size!=sizeof(q) ||
+        (q.operation!=CIUKI_JOY_QUERY && q.operation!=CIUKI_JOY_NEXT)) a->error=87;
+    else {
+      int e=joystick_settings_select ? joystick_settings_select(t->process) : 0;
+      if(!e) e=joystick_control ? joystick_control(&q) : -ENODEV;
+      if(e) a->error=e==-ENODEV ? 1167 : e==-EACCES || e==-EPERM ? 5 : 87;
+      else if(copy_to_user(a->low,&q,sizeof(q))) a->error=998;
+      else a->result=1;
+    }
+  } else if (a->action == W32_S_LAUNCH_IDLE) {
     if (t->process->w32) t->process->w32->launch_feedback_until = 0;
     a->result = 1;
   } else if (a->action == W32_S_LAUNCH_FEEDBACK) {
