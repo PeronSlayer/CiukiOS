@@ -107,8 +107,13 @@ class IdentityFacadeTests(unittest.TestCase):
         for header in ('audio.h', 'display.h', 'font.h', 'registry.h', 'devices.h'):
             (work / 'include/ciuki' / header).write_bytes((ROOT / 'sdk/sysroot-overlay/include/ciuki' / header).read_bytes())
         program = OUT / 'mixer-preferences'
+        # Match the private libreg symbols embedded by master_storage.c.
+        transport = work / 'transport.o'
+        subprocess.run(['clang', '-std=c17', '-O1', '-g', *WARN, *SAN,
+                        '-include', str(ROOT / 'apps/desktop/master_registry.h'),
+                        '-c', str(ROOT / 'sdk/libreg/transport.c'), '-o', str(transport)], check=True)
         sources = ['apps/desktop/master_storage.c', 'tests/host/security/identity_preferences_test.c']
-        self.compile([ROOT / s for s in sources], program,
+        self.compile([*[ROOT / s for s in sources], transport], program,
                      ['-D_POSIX_C_SOURCE=200809L', '-Wno-macro-redefined', '-I' + str(work / 'include'),
                       '-I' + str(ROOT / 'src/kernel/include'), '-pthread'])
         (work / 'run').mkdir()

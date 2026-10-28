@@ -12,12 +12,6 @@
 #include <stdlib.h>
 #include <string.h>
 #include <sys/stat.h>
-#include "../../../sdk/libreg/transport.h"
-/* The host store has no remote (broker) roots: the libreg transport entry
- * points are unreachable here, as in the desktop's own host harnesses. */
-int reg_remote_load(struct reg_remote *r, struct rt **t) { (void)r; (void)t; errno = EOPNOTSUPP; return -1; }
-int reg_remote_commit(struct reg_remote *r, struct rt *t, uint64_t g) { (void)r; (void)t; (void)g; errno = EOPNOTSUPP; return -1; }
-void reg_remote_close(struct reg_remote *r) { (void)r; }
 #define CHECK(x) do { checks++; if (!(x)) { fprintf(stderr, "%s:%d: %s\n", __FILE__, __LINE__, #x); abort(); } } while (0)
 static unsigned checks;
 static struct ciuki_mixer_master applied_master;

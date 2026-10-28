@@ -30,15 +30,10 @@ class VolumeResolutionTests(unittest.TestCase):
             subprocess.run([*flags, '-Wno-macro-redefined', '-D__CIUKIOS__', '-I'+str(inc),
                             '-I'+str(ROOT / 'src/kernel/include'), '-c',
                             str(ROOT / 'apps/desktop/master_storage.c'), '-o', str(master)], check=True, env=env)
-            # The store's reg_load/reg_commit reference libreg's broker transport
-            # since sec-k06; a host build has no remote roots, so they are refused.
-            stub = work / 'remote.c'
-            stub.write_text('#include <errno.h>\n#include <stdint.h>\nstruct reg_remote;struct rt;\n'
-                            'int reg_remote_load(struct reg_remote *r,struct rt **t){(void)r;(void)t;errno=EOPNOTSUPP;return -1;}\n'
-                            'int reg_remote_commit(struct reg_remote *r,struct rt *t,uint64_t g){(void)r;(void)t;(void)g;errno=EOPNOTSUPP;return -1;}\n'
-                            'void reg_remote_close(struct reg_remote *r){(void)r;}\n')
-            transport = work / 'remote.o'
-            subprocess.run([*flags, '-c', str(stub), '-o', str(transport)], check=True, env=env)
+            # The master store embeds a private libreg instance.
+            transport = work / 'transport.o'
+            subprocess.run([*flags, '-include', str(ROOT / 'apps/desktop/master_registry.h'),
+                            '-c', str(ROOT / 'sdk/libreg/transport.c'), '-o', str(transport)], check=True, env=env)
             sources = ['src/kernel/fs/'+n+'.c' for n in
                        ('fs_port', 'blkreq', 'cache', 'partition', 'path', 'fat', 'vfs', 'fs_ro', 'iso9660', 'ntfs_fs', 'ntfs_ro', 'mount')]
             sources += ['src/kernel/core/bootlog.c', 'src/kernel/drivers/blkpart.c',
