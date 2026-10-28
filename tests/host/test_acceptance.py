@@ -627,6 +627,24 @@ class SuiteTests(unittest.TestCase):
         cls.suite = runner.load_suite('acc-t23')
         cls.raw = json.loads((ROOT / 'tests/suites/acc-t23.json').read_text())
 
+    def test_runtime_session_startup_and_first_win32_predicates(self):
+        case = next(c for c in self.raw['cases'] if c['id'] == 'acc-desktop-cd')
+        acceptance.validate_case(case)
+        assertions = {a['name']: a for a in case['assertions']}
+        records = {
+            'boot-logon-session': '[user 35] [logon] session 1 running uid=1000 start_ms=1224',
+            'boot-startup-snapshot': '[console] startup: snapshot ready entries=2',
+            'boot-first-win32': '[win32] start pid=52 exe=C:\\WINDOWS\\CDPLAYER.EXE pe=00000000:00010000 shims=',
+        }
+        for name, line in records.items():
+            pattern = assertions[name]['pattern'].replace('<<boot_win32>>', '52')
+            self.assertIsNotNone(re.search(pattern, line), name)
+        self.assertIsNone(re.search(assertions['boot-startup-snapshot']['pattern'], '[console] startup: snapshot failed: 32'))
+        steps = {s.get('name'): s for s in case['steps']}
+        self.assertEqual(steps['b1-session-startup']['since'], 'boot')
+        self.assertEqual(steps['b1-win32-command']['actions'][0]['text'], r'C:\WINDOWS\CDPLAYER.EXE')
+        self.assertEqual(steps['b1-win32-window']['actions'], [{'keys': 'alt+f4'}])
+
     def test_the_owner_list_in_order(self):
         self.assertTrue(self.suite['acceptance'])
         self.assertNotIn('prerequisites', self.raw)

@@ -50,14 +50,16 @@ static void list(struct lui *u)
 {
     uint8_t reply[16+144*LUI_ACCOUNTS]; size_t used=0; int frame=0;
     int e=u->host->call(u->host->ctx,LGN_SERVICE_AUTH,LGN_AUTH_LIST,NULL,0,reply,sizeof(reply),&used,&frame);
-    uint32_t count=0;
-    if (!e && !frame && used>=16) rd(reply+4,&count);
-    if (e || frame || used<16 || count>LUI_ACCOUNTS || used!=16+144*(size_t)count) { u->list_valid=0; u->count=0; u->dirty=1; return; }
+    uint32_t count=0,version=0;
+    if (!e && !frame && used>=16) { rd(reply,&version); rd(reply+4,&count); }
+    if (e || frame || used<16 || version!=1 || count>LUI_ACCOUNTS || used!=16+144*(size_t)count) { u->list_valid=0; u->count=0; u->dirty=1; return; }
     u->count=0;
     for (uint32_t i=0;i<count;i++) {
         const uint8_t *r=reply+16+144*i;
         uint32_t uid; rd(r,&uid);
         if (!memchr(r+16,0,32) || !lgn_name_syntax((const char *)r+16)) continue;
+        uint32_t flags=0; rd(r+8,&flags);
+        u->accounts[u->count].blank_logon=!!(flags & 4u); /* AUTH LIST hint, never unlock authority */
         u->accounts[u->count].uid=uid; memcpy(u->accounts[u->count].name,r+16,32); u->count++;
     }
     u->list_valid=1; u->dirty=1;
@@ -317,7 +319,10 @@ static void activate(struct lui *u, const struct lui_item *it)
     if (!it) return;
     switch (it->action) {
     case LUI_TILE:
-        u->selected=it->index; u->view=LUI_VIEW_PASSWORD; u->focus=0; wipe_secret(u); u->status[0]=0; break;
+        if (it->index<0 || (unsigned)it->index>=u->count) break;
+        u->selected=it->index; u->view=LUI_VIEW_PASSWORD; u->focus=0; wipe_secret(u); u->status[0]=0;
+        if (u->accounts[u->selected].blank_logon && u->state.mode==LGN_MODE_WELCOME) submit(u);
+        break;
     case LUI_FIELD_NAME: case LUI_FIELD_PASSWORD: break;
     case LUI_OK: submit(u); break;
     case LUI_BACK:

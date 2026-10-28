@@ -51,7 +51,7 @@ struct lui {
     struct lgn_state state;
     int state_valid, visible, dirty, view, focus, selected, busy;
     uint64_t next_query, retry_until, last_generation;
-    struct { uint32_t uid; char name[32]; } accounts[LUI_ACCOUNTS];
+    struct { uint32_t uid; int blank_logon; char name[32]; } accounts[LUI_ACCOUNTS];
     unsigned count;
     int list_valid;
     char name[32], password[64], status[160];

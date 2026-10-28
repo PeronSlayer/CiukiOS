@@ -24,7 +24,7 @@
    },
    "gate": "boot",
    "timeout": 2400,
-   "title": "Normal boot to the desktop at 1024x768 without an error notice; generated CDs (standard, volume sequence 0, Joliet) mount as D:, list their files, AutoPlay reacts, eject unmounts; the empty drive as D:",
+   "title": "Normal logon, StartUp snapshot and first Win32 launch at 1024x768 without an error notice; generated CDs (standard, volume sequence 0, Joliet) mount as D:, list their files, AutoPlay reacts, eject unmounts; the empty drive as D:",
    "devices": {
     "optical": "empty"
    },
@@ -70,6 +70,46 @@
      "check": "boot",
      "settle": 20,
      "note": "notices that arrive after the first desktop frame still belong to the boot"
+    },
+    {
+     "name": "b1-session-startup",
+     "check": "boot",
+     "since": "boot",
+     "timeout": 30,
+     "wait": [
+      "^\\[user \\d+\\] \\[logon\\] session 1 running uid=\\d+ start_ms=\\d+$",
+      "^(?:\\[console\\]|\\[user \\d+\\]) startup: snapshot ready entries=\\d+$"
+     ]
+    },
+    {
+     "name": "b1-win32-run",
+     "check": "boot",
+     "actions": [{"keys": "meta_l+r"}],
+     "screen_settle": {"changed": true, "stable": 1.5, "timeout": 30}
+    },
+    {
+     "name": "b1-win32-command",
+     "check": "boot",
+     "actions": [{"text": "C:\\WINDOWS\\CDPLAYER.EXE"}, {"keys": "ret"}]
+    },
+    {
+     "name": "b1-win32-start",
+     "check": "boot",
+     "timeout": 60,
+     "wait": "^\\[win32\\] start pid=(?P<boot_win32>\\d+) exe=\\S*[Cc][Dd][Pp][Ll][Aa][Yy][Ee][Rr]\\.[Ee][Xx][Ee] "
+    },
+    {
+     "name": "b1-win32-window",
+     "check": "boot",
+     "timeout": 60,
+     "wait": "^\\[user \\d+\\] \\[desktop\\] focus pid=<<boot_win32>> window=\\d+ titled=1 internal=0 app=\\S+$",
+     "actions": [{"keys": "alt+f4"}]
+    },
+    {
+     "name": "b1-win32-closed",
+     "check": "boot",
+     "timeout": 30,
+     "wait": "^\\[user \\d+\\] \\[desktop\\] focus pid=0 window=0 titled=0 internal=-1 app=desktop$"
     },
     {
      "name": "cd-std-insert",
@@ -261,6 +301,30 @@
     }
    ],
    "assertions": [
+    {
+     "name": "boot-logon-session",
+     "check": "boot",
+     "from": "b1-loader",
+     "to": "b1-session-startup",
+     "min": 1,
+     "pattern": "^\\[user \\d+\\] \\[logon\\] session 1 running uid=\\d+ start_ms=\\d+$"
+    },
+    {
+     "name": "boot-startup-snapshot",
+     "check": "boot",
+     "from": "b1-loader",
+     "to": "b1-session-startup",
+     "min": 1,
+     "pattern": "^(?:\\[console\\]|\\[user \\d+\\]) startup: snapshot ready entries=\\d+$"
+    },
+    {
+     "name": "boot-first-win32",
+     "check": "boot",
+     "from": "b1-win32-command",
+     "to": "b1-win32-start",
+     "min": 1,
+     "pattern": "^\\[win32\\] start pid=<<boot_win32>> exe=\\S*[Cc][Dd][Pp][Ll][Aa][Yy][Ee][Rr]\\.[Ee][Xx][Ee] "
+    },
     {
      "name": "boot-1024x768",
      "check": "boot",

@@ -23,6 +23,7 @@
 #include "server.h"
 #include "fake.h"
 #include "logon.h"
+#include "../../../apps/logon/ui.h"
 #include "wire.h"
 
 void secure_test_native(bool firmware, gen_t generation);
@@ -413,6 +414,51 @@ static void active(void)
 }
 static void welcome(void) { RUN_UNTIL(!logon.session.phase && logon.mode == LGN_MODE_WELCOME, 4000); CHECK(gate_trusted()); }
 
+#ifdef CIUKI_RUNTIME_UI
+/* sec-runtime1: the production Welcome UI and both real service peers. */
+static uint64_t runtime_ui_now(void *p){(void)p;return g_ticks;}
+static int runtime_ui_call(void *p,unsigned service,uint32_t op,const void *body,size_t n,void *reply,size_t cap,size_t *used,int *status)
+{
+    (void)p;CHECK(service==LGN_SERVICE_AUTH||service==LGN_SERVICE_LOGON);
+    *status=call(service==LGN_SERVICE_AUTH?&ui_auth:&ui_logon,op,0,body,n,reply,cap,used);return 0;
+}
+static void runtime_tile_click(struct lui *u)
+{
+    static uint32_t pixels[LUI_W*LUI_H];struct du_canvas c={pixels,LUI_W,LUI_H,{0,0,LUI_W,LUI_H}};
+    lui_paint(u,&c);int found=0,x=0,y=0;
+    for(unsigned i=0;i<u->item_count;i++)if(u->items[i].action==LUI_TILE&&u->items[i].index==0){
+        x=u->items[i].box.x+2;y=u->items[i].box.y+2;found=1;break;
+    }
+    CHECK(found);struct ciuki_input_event e={.type=CIUKI_INPUT_MOTION,.value=x,.value2=y};lui_input(u,&e);
+    e=(struct ciuki_input_event){.type=CIUKI_INPUT_BUTTON,.code=CIUKI_BUTTON_LEFT,.value=1};lui_input(u,&e);
+    e.value=0;lui_input(u,&e);
+}
+static void runtime_logoff(void)
+{
+    struct lgn_state st=attention();(void)ui_state(LGN_CMD_LOGOFF,st.session,st.console,NULL);
+    CHECK(desk_event(LGN_NOTICE_QUERY).action==LGN_ACT_LOGOFF);
+    (void)desk_event(LGN_NOTICE_LOGOFF);desktop_exit();welcome();
+}
+static void scenario_welcome_tile(void)
+{
+    boot(1);active();runtime_logoff();
+    static const struct lui_host host={NULL,runtime_ui_now,runtime_ui_call,NULL};struct lui u;
+    lui_init(&u,&host,NULL,0);lui_tick(&u);
+    CHECK(u.view==LUI_VIEW_LIST&&u.count==1&&u.accounts[0].uid==1000&&u.accounts[0].blank_logon);
+    uint32_t previous=logon.session.id;readied[0]=readied[1]=0;runtime_tile_click(&u);
+    RUN_UNTIL(logon.session.phase==LGN_ACTIVE&&logon.mode==LGN_MODE_HIDDEN,4000);desk_connect();
+    CHECK(logon.session.id>previous&&logon.session.blank&&desktop_credential()->uid==1000&&!u.password[0]);
+    lui_wipe(&u);runtime_logoff();
+    /* A protected fixture record: the list must stop advertising the hint. */
+    CHECK(!acct_set_password(&acct_srv.service,&acct_srv.service.db.records[2],"password1"));
+    lui_init(&u,&host,NULL,0);lui_tick(&u);
+    CHECK(u.count==1&&!u.accounts[0].blank_logon);runtime_tile_click(&u);
+    CHECK(u.view==LUI_VIEW_PASSWORD&&!logon.session.phase);lui_wipe(&u);
+    puts("runtime Welcome tile: blank authenticated, protected prompts PASS");
+}
+
+#endif
+
 /* ---- scenarios ------------------------------------------------------------ */
 static void scenario_ready(void)
 {
@@ -683,6 +729,10 @@ int main(int argc, char **argv)
     desktop_resource.state = RS_ACTIVE;
     secure_test_native(false, 9);
     fake_init(&fake);
+#ifdef CIUKI_RUNTIME_UI
+    if (!strcmp(argv[1], "welcome-tile")) scenario_welcome_tile();
+    else
+#endif
     if (!strcmp(argv[1], "ready")) scenario_ready();
     else if (!strcmp(argv[1], "setup")) scenario_setup();
     else if (!strcmp(argv[1], "safe")) scenario_safe();

@@ -13,6 +13,8 @@
 #define ACCT_ENABLED 1u
 #define ACCT_BUILTIN 2u
 #define ACCT_PASSWORD_SET 4u
+/* AUTH LIST hint only; authentication remains authoritative. */
+#define ACCT_PUBLIC_BLANK_LOGON 4u
 #define ACCT_READY_BLANK 8u
 #define ACCT_CHANGE_REQUIRED 16u
 #define ACCT_ADMIN 3u
@@ -232,6 +234,7 @@ int acct_work(struct acct_service *, struct acct_response *);
 #define ACCT_ROLE_UI 2u
 #define ACCT_ROLE_ACCOUNT 3u
 #define ACCT_ROLE_OWNER 4u
+#define ACCT_ROLE_REGISTRY 5u
 #define ACCT_ROLE_DESKTOP 6u
 #define ACCT_ROLE_W32SRV 7u
 #define ACCT_ENDPOINT_AUTH 1u

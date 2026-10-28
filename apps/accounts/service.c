@@ -194,6 +194,8 @@ static void snapshot(const struct acct_db *d, const struct acct_subject *subject
             !(subject->service==ACCT_ENDPOINT_AUTH && subject->safe_mode && r->uid == 500 && (r->flags & ACCT_PASSWORD_SET))) continue;
         struct acct_public *p = &out->records[out->count++];
         p->uid = r->uid; p->flags = (r->flags & ACCT_ENABLED) | (r->groups == ACCT_ADMIN ? 2u : 0u); p->groups = r->groups;
+        if (subject->service==ACCT_ENDPOINT_AUTH && (r->flags & ACCT_READY_BLANK))
+            p->flags |= ACCT_PUBLIC_BLANK_LOGON;
         memcpy(p->name, r->name, 32); memcpy(p->picture, r->picture, 96);
     }
 }
@@ -369,6 +371,9 @@ static int profile(struct acct_service *s, struct acct_job *job, struct acct_res
 {
     struct acct_request *q=&job->request; int i=q->uid?find_uid(&s->db,q->uid):find_name(&s->db,q->name);
     int trusted=job->subject.role==ACCT_ROLE_LOGON || job->subject.role==ACCT_ROLE_ACCOUNT;
+    /* The sealed SYSTEM broker resolves the private hive of its retained
+     * caller. uid 0 by itself remains untrusted, as for all account APIs. */
+    if (job->subject.role==ACCT_ROLE_REGISTRY && !job->subject.uid && !job->subject.session_id) trusted=1;
     /* Deny a foreign selector before disclosing whether that mapping exists. */
     if(!admin(&job->subject) && !trusted && (q->uid?q->uid!=job->subject.uid:
         (i<0 || s->db.records[i].uid!=job->subject.uid))) return -EACCES;
