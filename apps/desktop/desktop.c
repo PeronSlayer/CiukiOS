@@ -1896,6 +1896,11 @@ static int accel_notice(struct desktop *d)
             if (!accel_notice_state.ready_ns) accel_notice_state.ready_ns=d->now_ns ? d->now_ns : 1;
             if (d->now_ns-accel_notice_state.ready_ns<3000000000ull) return 0;
         }
+        /* No driver claims the adapter (QEMU/Bochs standard VGA, unknown
+         * cards): the linear framebuffer is the normal display, as Windows
+         * 98's Standard Display Adapter is, so no card; Device Manager and
+         * the boot log still report it. Driver failures keep the card. */
+        if (!ready && !strcmp(v->reason,"no_driver")) return 1;
         char text[160];
         accel_notice_text(text,sizeof(text),ready,used,v->reason,v->driver_display_name);
         desk_shell_notify(d,"Graphics",text,DU_DLG_ICON_INFO,SH_NOTIFY_DETAILS);
