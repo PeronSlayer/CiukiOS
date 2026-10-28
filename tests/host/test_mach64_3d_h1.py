@@ -24,9 +24,9 @@ def build():
     gl = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(gl)
     asan = bool(os.environ.get('CIUKI_DISPLAY_ASAN'))
-    lib = gl.host(sanitize=asan)
+    lib = gl.host_tinygl(sanitize=asan)
     units = [ROOT / 'sdk/win32/gdi32' / n for n in gdi32.SOURCES if n not in ('compiler.c', 'compiler.S')]
-    units += [ROOT / 'sdk/win32/services/bytes.c', ROOT / 'tests/host/win32/gdi32/support.c',
+    units += [ROOT / 'sdk/win32/services/bytes.c', ROOT / 'tests/host/win32/gdi32/support.c', ROOT / 'tests/host/win32/no_environment.c',
               *(HERE / n for n in ('engine.c', 'census.c', 'amendment.c', 'review.c', 'amendment2.c',
                                    'transport.c', 'fixture.c', 'quake3.c', 'raster.c', 'raster_reference.c'))]
     units += list((ROOT / 'sdk/win32/opengl32').glob('*.c')) + [ROOT / 'sdk/libgl/software/renderer.c']
@@ -36,7 +36,7 @@ def build():
                'mach64/mach64_3d.c', 'mach64/engine.c')]
     units += [ROOT / 'tests/host/mach64_3d_model.c', ROOT / 'src/kernel/lib/fmt.c']
     sanitizer = 'address,undefined' if asan else 'undefined'
-    flags = ['-std=c17', '-D_GNU_SOURCE', '-DW32_HOST_MODEL', '-O2', '-g', '-ffp-contract=off', '-Wall', '-Wextra',
+    flags = ['-std=c17', '-D_GNU_SOURCE', '-DW32_HOST_MODEL', '-DGL_KERNEL_FAMILY_MACH64', '-O2', '-g', '-ffp-contract=off', '-Wall', '-Wextra',
              '-Werror', '-Wno-unused-function', '-fno-vectorize', '-fno-slp-vectorize',
              '-I' + str(ROOT / 'sdk/win32/include'), '-I' + str(ROOT / 'sdk/libgl/vendor/include'),
              '-I' + str(ROOT / 'src/kernel/include'), '-I' + str(ROOT / 'tests/host'), '-I' + str(OUT),
@@ -48,6 +48,10 @@ def build():
     units += [fixture, ROOT / 'src/probes/win32_gl/scenes.c']
     binary = OUT / 'engine'
     subprocess.run(['clang', *flags, *map(str, units), str(lib), '-lm', '-pthread', '-o', str(binary)], check=True)
+    # Match the shared GL harness: independent oracle definitions are renamed.
+    nm = subprocess.check_output(['nm', '--defined-only', str(binary)], text=True)
+    external = re.findall(r'^[0-9a-fA-F]+ [A-Z] (\S+)$', nm, re.M)
+    assert len(external) == len(set(external)), 'duplicate external Mach64 GL symbol'
     return binary
 
 

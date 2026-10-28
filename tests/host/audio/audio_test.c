@@ -73,7 +73,8 @@ bool ktime_elapsed_us(uint64_t start, uint32_t us) { return ktime_cycles() - sta
 uint64_t deadline_after_ms(uint32_t ms) { return g_ticks + ms; }
 bool deadline_passed(uint64_t deadline) { return (int64_t)(g_ticks - deadline) >= 0; }
 gen_t gen_alloc(void) { static gen_t next; return ++next; }
-uint32_t pmm_alloc_zone(int zone) { CHECK(zone == ZONE_DMA); return pmm_alloc(); }
+uint32_t pmm_alloc_zone(int zone)
+{ CHECK(zone == ZONE_DMA); return fail_alloc() ? 0 : host_alloc_run_zone(zone,1,1); }
 void task_yield(void) { task_sleep_ms(0); }
 /* fx-5: the production order rule of kmutex_lock_until (sync.h
  * kmutex_order_conflict over the task's held mutexes) and its unlock-order
@@ -200,27 +201,11 @@ void pic_mask(unsigned irq)
 { CHECK(irq==5); if (!second_pic_masked) { second_pic_masked=true; second_pic_masks++; } }
 void pic_unmask(unsigned irq)
 { CHECK(irq==5 && second_isa_handler); if (second_pic_masked) { second_pic_masked=false; second_pic_unmasks++; } }
-uint32_t pmm_alloc_contig(uint32_t pages)
-{
-    if (fail_alloc()) return 0;
-    for (unsigned at=1;at+pages<=HOST_PAGES;at++) {
-        unsigned i; for (i=0;i<pages&&!allocated[at+i];i++);
-        if (i!=pages) continue;
-        for (i=0;i<pages;i++) { allocated[at+i]=true; pages_used++; }
-        return at*PAGE_SIZE;
-    }
-    return 0;
-}
+uint32_t pmm_alloc_contig(uint32_t pages) { return host_alloc_contig(pages); }
 uint32_t pmm_alloc_dma_run(uint32_t pages,uint32_t alignment)
 {
     if (fail_alloc()) return 0;
-    for (unsigned at=alignment;at+pages<=4096;at+=alignment) {
-        unsigned i; for (i=0;i<pages&&!allocated[at+i];i++);
-        if (i!=pages) continue;
-        for (i=0;i<pages;i++) { allocated[at+i]=true; pages_used++; }
-        return at*PAGE_SIZE;
-    }
-    return 0;
+    return host_alloc_run_zone(ZONE_DMA,pages,alignment);
 }
 #include "../../../src/kernel/audio/stream.c"
 #include "../../../src/kernel/audio/mixer.c"
@@ -1541,6 +1526,30 @@ static void test_stream_syscalls(void)
     CHECK(!file_close(client,fd));
     puts("audio fds: copied EFAULT, short/EAGAIN/EINTR/partial/EIO, reset generation, dup/inheritance/final close and quota PASS");
 }
+uint32_t supervisor_desktop_pid(void) { return fake_desktop_pid; }
+static void test_security_mixer(void)
+{
+    audio_locks_init();audio.ready=false;audio.initialized=true;audio_settings_load(&vfs);
+    client->subject->credential=(struct ciuki_credential){.version=1,.size=64,.uid=1001,
+        .session_id=1,.flags=CIUKI_CRED_INTERACTIVE,.primary_gid=545,.group_count=1,.groups={545}};
+    fake_desktop_pid=client->pid;
+    int mixer=file_open(client,"/dev/mixer",O_RDONLY,0);CHECK(mixer>=0);
+    struct ciuki_mixer_master m={.version=1,.size=sizeof(m),.left=31,.right=42};
+    CHECK(ctl(mixer,MIXER_SET_MASTER,&m,sizeof(m))==-EACCES);
+    file_fd(client,mixer)->mixer_control=true;
+    unsigned sequence=saved_sequence;uint64_t writes=disk[0].writes;
+    CHECK(!ctl(mixer,MIXER_SET_MASTER,&m,sizeof(m)) && m.left==31 && m.right==42);
+    CHECK(m.save_state==CIUKI_MIXER_UNSAVED && m.save_error==-EOPNOTSUPP);
+    CHECK(master_session && !master_pending && saved_sequence==sequence && disk[0].writes==writes);
+    CHECK(!audio_settings_flush() && saved_sequence==sequence && disk[0].writes==writes);
+    client->subject->credential.uid=501;client->subject->credential.groups[0]=546;
+    m=(struct ciuki_mixer_master){.version=1,.size=sizeof(m),.left=40,.right=40};
+    CHECK(!ctl(mixer,MIXER_SET_MASTER,&m,sizeof(m)) && saved_sequence==sequence && disk[0].writes==writes);
+    fake_desktop_pid=0;m.save_state=m.save_error=0;
+    CHECK(ctl(mixer,MIXER_SET_MASTER,&m,sizeof(m))==-EACCES);
+    CHECK(!file_close(client,mixer));audio.initialized=false;
+    puts("H05 mixer: Standard/Guest designated control changes current mixer only, no machine writes/flush; ordinary fd and lost owner denied PASS");
+}
 static void test_persistence(void)
 {
     CHECK(!make_dir("/system"));
@@ -1789,6 +1798,7 @@ int main(int argc,char **argv)
     for(unsigned i=0;i<2;i++){CHECK(!fat_mount(&volumes[i],&cache,&disk[i].dev,0,disk[i].dev.capacity,true));CHECK(!vfs_attach(&vfs,i+2,&volumes[i]));}
     CHECK(!files_attach(&vfs,&space));client_thread=make_process(proc_supervisor(),&client);g_current=client_thread->task;g_current->state=T_RUNNING;
     client->cwd=space->root;px_retain(client->cwd);client->cwd_retain=px_retain;client->cwd_release=px_release;
+    if(getenv("CIUKI_AUDIO_SECURITY")) { test_security_mixer(); goto security_done; }
     test_ich_input();
     test_transient_transport();
     test_cmipci();
@@ -1796,13 +1806,14 @@ int main(int argc,char **argv)
     test_voice_engines();
     test_vm_creation_lead();
     test_vm_paging_replay();
-    test_codec();test_physical_codec();test_diagnostic_records();test_cs4297a_codec();test_ich3_bringup();test_codec_power_policy();test_controller_reset_models();test_boot_transport();test_bdl();test_cursor_handoff();test_formats();test_shutdown();test_shutdown_lock_order();test_codec_failure_release();test_idle_tail_drain();test_idle_tail_cursor_error();test_t23_cursor_replay();test_late_refill();test_exhausted_recovery();test_lead_hold_replay();test_publication_retry();test_recovery_failure_record();test_wide_failure_record();test_cheap_arithmetic();test_deferred_service_logs();test_fullscreen_refill_wait();test_service_budget();test_stream_syscalls();test_midi_syscalls();test_persistence();test_registry_master();test_thinkpad_ec();test_second_set();test_ymfpci();test_pipeline();
+    test_codec();test_physical_codec();test_diagnostic_records();test_cs4297a_codec();test_ich3_bringup();test_codec_power_policy();test_controller_reset_models();test_boot_transport();test_bdl();test_cursor_handoff();test_formats();test_shutdown();test_shutdown_lock_order();test_safe_mode_quiesce();test_codec_failure_release();test_idle_tail_drain();test_idle_tail_cursor_error();test_t23_cursor_replay();test_late_refill();test_exhausted_recovery();test_lead_hold_replay();test_publication_retry();test_recovery_failure_record();test_wide_failure_record();test_cheap_arithmetic();test_deferred_service_logs();test_fullscreen_refill_wait();test_service_budget();test_stream_syscalls();test_midi_syscalls();test_persistence();test_registry_master();test_thinkpad_ec();test_second_set();test_ymfpci();test_pipeline();
     test_maestro();
     test_refill_demand();
     test_producer_lead();
     test_ac97_qualification();
     test_emu10k1();
     test_emu10k1_public();
+security_done:
     all_closed();stop_collect(client);for(unsigned i=0;i<2;i++)CHECK(!vfs_detach(&vfs,i+2));vfs_destroy(&vfs);cache_destroy(&cache);
     for(unsigned i=0;i<2;i++){fake_reset(&disk[i]);fake_close(&disk[i]);}
     CHECK(!pages_used&&!audio.commitment_pages);printf("audio production: %u checks PASS\n",checks);free(ram);return 0;

@@ -28,6 +28,38 @@ extern void desk_access_flash_draw(struct desktop *, struct desk_box) __attribut
 extern void desk_access_magnifier_set(struct desktop *, int on) __attribute__((weak));
 extern int desk_access_magnifier_on(const struct desktop *) __attribute__((weak));
 #include <strings.h>
+#include "diag_record.h"
+
+/* fx-accept: one diagnostic line per notification balloon and message box
+ * the user is shown, also in quiet boots, so the acceptance suite and the
+ * T23 serial logs tell an error notification from an information one:
+ *   [desktop] notify icon=<none|info|warning|error|question> title="..." text="..."
+ *   [desktop] message icon=<...> title="..." text="..."
+ * Bytes outside printable ASCII become '.', a double quote becomes ', a line
+ * break becomes '|'; the line stays within debug_write's 240 bytes. */
+static void shell_notice_append(char *line, size_t *n, size_t cap, const char *text, size_t limit)
+{
+    size_t used = 0;
+    for (const unsigned char *p = (const unsigned char *)(text ? text : ""); *p && used < limit && *n + 1 < cap; p++, used++) {
+        unsigned char c = *p;
+        line[(*n)++] = c == '\n' ? '|' : c == '"' ? '\'' : (c >= 32 && c < 127) ? (char)c : '.';
+    }
+    line[*n] = 0;
+}
+static void shell_notice_record(const char *kind, int icon, const char *title, const char *text)
+{
+    static const char *const icons[] = { "none", "info", "warning", "error", "question" };
+    char line[232]; size_t n = 0;
+    int head = snprintf(line, sizeof(line), "[desktop] %s icon=%s title=\"", kind,
+                        icon >= 0 && icon < (int)(sizeof(icons) / sizeof(icons[0])) ? icons[icon] : "other");
+    if (head < 0 || (size_t)head >= sizeof(line)) return;
+    n = (size_t)head;
+    shell_notice_append(line, &n, sizeof(line), title, 48);
+    shell_notice_append(line, &n, sizeof(line), "\" text=\"", 8);
+    shell_notice_append(line, &n, sizeof(line) - 1, text, sizeof(line));
+    shell_notice_append(line, &n, sizeof(line), "\"", 1);
+    desk_diag_record(line, (int)n);
+}
 
 /* ---- theme hooks ------------------------------------------------------- */
 /* Every shell colour is a theme colour (desk_theme; DU_* are the same
@@ -230,6 +262,14 @@ static const uint32_t *large_icon(const char *name,int size)
 }
 const uint32_t *desk_shell_icon(const char *name, int size)
 {
+    /* fx-exeicons: an absolute path names a file's own icon (libdeskui
+     * fileicon.c); its type's icon stands in while the worker extracts it. */
+    if (name && name[0]=='/') {
+        const uint32_t *own=size==16 || size==22 || size==32 || size==48 ? du_file_icon(name,0,(unsigned)size) : NULL;
+        if (own) return own;
+        const char *slash=strrchr(name,'/');
+        name=du_icon_file(slash ? slash+1 : name,0,0);
+    }
     if(size>48) return large_icon(name,size);
     if (!name || size <= 0) return NULL;
     for (unsigned i = 0; i < icon_cache_count; i++)
@@ -307,24 +347,24 @@ static const struct program_info programs[] = {
     {"gfxdemo", "Graphics Demo", "video-display", "accessories", NULL},
     {"charmap", "Character Map", "accessories-character-map", "accessories", NULL},
     {"wordpad", "WordPad", "x-office-document", "accessories", NULL},
-    {"clock", "Clock", "appointment-new", "accessories", NULL},
+    {"clock", "Clock", "haiku-clock", "accessories", NULL},
     {"help", "CiukiOS Help", "help-browser", "accessories", NULL},
     {"mixer", "Volume Control", "audio-volume-high", "accessories", NULL},
-    {"serial", "Serial Terminal", "network-wired", "accessories", NULL},
-    {"mines", "Minesweeper", "face-smile", "games", NULL},
+    {"serial", "Serial Terminal", "haiku-serial", "accessories", NULL},
+    {"mines", "Minesweeper", "haiku-mines", "games", NULL},
     {"solitaire", "Solitaire", "applications-games", "games", NULL},
-    {"freecell", "FreeCell", "face-glasses", "games", NULL},
+    {"freecell", "FreeCell", "applications-games", "games", NULL},
     {"hearts", "Hearts", "emblem-favorite", "games", NULL},
     {"hwreport", "Hardware Report", "preferences-desktop-peripherals", "system-tools", NULL},
     {"scandisk", "ScanDisk", "drive-harddisk", "system-tools", NULL},
     {"msconfig", "System Configuration", "preferences-system", "system-tools", NULL},
-    {"logview", "Log Viewer", "x-office-spreadsheet", "system-tools", NULL},
+    {"logview", "Log Viewer", "haiku-log-viewer", "system-tools", NULL},
     {"clipbrd", "Clipboard Viewer", "edit-paste", "system-tools", NULL},
-    {"resmeter", "Resource Meter", "applications-system", "system-tools", NULL},
+    {"resmeter", "Resource Meter", "haiku-resource-meter", "system-tools", NULL},
     {"schedtask", "Scheduled Tasks", "x-office-calendar", "system-tools", NULL},
-    {"sysinfo", "System Information", "document-properties", "system-tools", NULL},
-    {"sysmon", "System Monitor", "network-transmit-receive", "system-tools", NULL},
-    {"regedit", "Registry Editor", "x-office-address-book", "accessories", NULL},
+    {"sysinfo", "System Information", "haiku-system-info", "system-tools", NULL},
+    {"sysmon", "System Monitor", "haiku-system-monitor", "system-tools", NULL},
+    {"regedit", "Registry Editor", "haiku-registry", "accessories", NULL},
     {"viewer", "Image Viewer", "image-x-generic", "accessories", NULL},
     {"hello", "Hello", "face-wink", "developer", NULL},
     {"ciukide", "CiukIDE", "applications-development", "developer", NULL},
@@ -386,13 +426,23 @@ static const char *client_icon(const struct desktop *d, int i)
     return "application-x-executable";
 }
 
+/* fx-exeicons: a Win32 window's own icon (DESK_V3_WINDOW_ICON: WM_SETICON,
+ * its class icon or its executable's), else its program's icon. */
+static const uint32_t *client_pixels(const struct desktop *d, int i, int size)
+{
+    const struct desk_client *c = &d->clients[i];
+    if (size == 16 && (c->v3_icon_mask & 1u)) return c->v3_icon16;
+    if (size == 32 && (c->v3_icon_mask & 2u)) return c->v3_icon32;
+    return desk_shell_icon(client_icon(d, i), size);
+}
+
 /* ---- menus ------------------------------------------------------------- */
 static void item(struct sh_menu *m, const char *label, const char *icon, int action, int arg, unsigned flags)
 {
     if (m->count >= SH_ITEMS) return;
     struct sh_item *it = &m->items[m->count++];
     snprintf(it->label, sizeof(it->label), "%s", label);
-    it->icon = icon; it->action = (uint8_t)action; it->arg = (int16_t)arg; it->flags = (uint8_t)flags;
+    it->icon = icon; it->file_icon = NULL; it->action = (uint8_t)action; it->arg = (int16_t)arg; it->flags = (uint8_t)flags;
 }
 static void separator(struct sh_menu *m) { item(m, "", NULL, SH_ACT_NONE, 0, SH_ITEM_SEPARATOR); }
 
@@ -480,6 +530,9 @@ static void custom_folder_items(struct desktop *d,struct sh_menu *m,int folder)
         item(m,e->label,e->folder>=0 ? "folder" : e->icon[0] ? du_icon_name(e->icon) : "application-x-executable",   /* program groups use the folder icon, as in Windows 98 */
              
              e->folder>=0 ? SH_ACT_SUBMENU : SH_ACT_SHELL_ITEM,e->folder>=0 ? SH_MENU_FOLDER_BASE+e->folder : (int)k,0);
+        /* fx-exeicons: a shortcut with an own icon (installer-created ones
+         * name the program's), resolved by the Start menu worker. */
+        if (e->folder<0 && e->own_icon && m->count && m->items[m->count-1].arg==(int16_t)k) m->items[m->count-1].file_icon=e->path;
     }
     if (extra || s->truncated) item(m,"More... Open Folder","folder",SH_ACT_FOLDER_EXPLORE,folder,0);
 }
@@ -549,7 +602,7 @@ static void build(struct desktop *d, struct sh_menu *m, int kind)
         char logoff_label[44];
         snprintf(logoff_label,sizeof(logoff_label),"Log Off%s%.31s...",d->sh.profile.name[0] ? " " : "",d->sh.profile.name);
         item(m,logoff_label,"system-log-out",SH_ACT_LOGOFF,0,0);
-        if (d->sh.profile.name[0] && (d->sh.users.flags&USERS_LOCK))
+        if (d->sh.profile.name[0] && ((d->sh.users.flags&USERS_LOCK) || d->logon_session)) /* sec-user-03 */
             item(m, "Lock", "system-lock-screen", SH_ACT_LOCK, 0, 0);
         item(m, "Shut Down...", "system-shutdown", SH_ACT_SHUTDOWN, 0, 0);
         break;
@@ -1200,11 +1253,11 @@ static void act(struct desktop *d, const struct sh_item *it)
         break;
     case SH_ACT_ICON_AUTO:
         d->sh.cfg.icon_auto_arrange=!d->sh.cfg.icon_auto_arrange;
-        if (d->sh.cfg.icon_auto_arrange) cfg_icons_arrange_at(&d->sh.cfg,d->width,d->height);
+        if (!d->safe_mode && d->sh.cfg.icon_auto_arrange) cfg_icons_arrange_at(&d->sh.cfg,d->width,d->height);
         d->sh.want_save=1; d->sh.icon_selected=-1; d->sh.icon_count=0; desk_shell_apply(d);
         break;
     case SH_ACT_ARRANGE: {
-        if (!it->arg) cfg_icons_arrange_at(&d->sh.cfg,d->width,d->height);
+        if (!it->arg) { if (!d->safe_mode) cfg_icons_arrange_at(&d->sh.cfg,d->width,d->height); }
         else {
             uint8_t occupied[512]={0};
             int cw=d->sh.icon_count ? d->sh.icons[0].box.w : 96;
@@ -1224,7 +1277,7 @@ static void act(struct desktop *d, const struct sh_item *it)
                 int slot=(col*rows+row)%cells;
                 while (occupied[slot/8] & (1u<<(slot%8))) slot=(slot+1)%cells;
                 occupied[slot/8]|=1u<<(slot%8);
-                cfg_icon_move_at(&d->sh.cfg,icon_position_name(d,k),d->width,d->height,8+(slot/rows)*cw,DESK_BAR+10+(slot%rows)*ch);
+                if (!d->safe_mode) cfg_icon_move_at(&d->sh.cfg,icon_position_name(d,k),d->width,d->height,8+(slot/rows)*cw,DESK_BAR+10+(slot%rows)*ch);
             }
         }
         d->sh.want_save=1;
@@ -1450,6 +1503,7 @@ static void draw_menu(struct desktop *d, const struct sh_menu *m, struct desk_bo
         if (hot) hot_row(&c, (struct du_rect){platinum ? x0 - 1 : x0, y, platinum ? w + 2 : w, h});
         const uint32_t *ic = it->action==SH_ACT_WIN32_LINK && d->v3_link_icon && it->arg>=0 && (unsigned)it->arg<d->v3_link_count ?
             d->v3_link_icon(d,d->v3_links[it->arg].source,(unsigned)m->icon) : NULL;
+        if (!ic && it->file_icon && (m->icon==16 || m->icon==22 || m->icon==32 || m->icon==48)) ic=du_file_icon_flags(it->file_icon,0,(unsigned)m->icon,0);
         if (!ic) ic=desk_shell_icon(it->icon,m->icon);
         if (ic) du_icon_blit(&c, x0 + 6, y + (h - m->icon) / 2, ic, m->icon, it->flags & SH_ITEM_DISABLED ? DU_ICON_DISABLED : DU_ICON_NORMAL);
         if (it->flags & SH_ITEM_CHECKED)
@@ -1785,7 +1839,7 @@ static void draw_taskbar(struct desktop *d, struct desk_box clip)
             (d->clients[i].minimized ? DESK_TASK_MINIMIZED : 0),d->lfb_bytes_per_pixel==2);
         if (button.w > 24) {
             int icon_size=desk_scale(16);
-            const uint32_t *ic = desk_shell_icon(client_icon(d, i), icon_size);
+            const uint32_t *ic = client_pixels(d, i, icon_size);
             int dy = active ? 1 : 0;
             if (ic) du_icon_blit(&bc, button.x + desk_scale(5) + dy, button.y + (button.h-icon_size)/2 + dy, ic, icon_size, d->clients[i].minimized ? DU_ICON_GHOST : DU_ICON_NORMAL);
             const char *title = d->clients[i].closing ? "Closing..." : d->clients[i].unresponsive ? "Not responding" : d->clients[i].title;
@@ -2040,9 +2094,16 @@ static void standby_service(struct desktop *d)
         return;
     case DESK_STANDBY_SUSPEND: {
         if (!broadcast_finished(d, PP_PBT_SUSPEND)) return;
+        /* sec-user-04 (contract 4.3): a LOGON session arms password-on-resume
+         * before the firmware sleeps: LOGON enters the trusted gate (RESUME)
+         * and Stand by waits, bounded, until it is up, so no application
+         * frame or input can follow the resume before authentication. A gate
+         * that cannot be raised refuses Stand by (locally, nothing slept). */
+        int arm=d->logon_session ? desk_session_arm_resume(d) : 1;
+        if (!arm) return;
         errno = 0;
         int prepared=0,paint_error=0;
-        if (d->sh.power_cfg.password && d->sh.profile.name[0] && !d->sh.user_gate) {
+        if (!d->logon_session && d->sh.power_cfg.password && d->sh.profile.name[0] && !d->sh.user_gate) {
             /* Firmware may wake scanout before returning to us. Conceal the
              * framebuffer before sleeping, after every program has agreed. */
             desk_logon_open(d,2); prepared=1;
@@ -2052,7 +2113,8 @@ static void standby_service(struct desktop *d)
             } /* DPMS already published black before suspending grants. */
         }
         int attempted=0,r;
-        if (paint_error) { errno=EAGAIN; r=-1; }
+        if (arm<0) { errno=-arm; r=-1; }   /* sec-user-04: the trusted gate could not be raised */
+        else if (paint_error) { errno=EAGAIN; r=-1; }
         else if (desk_session_busy(d) || d->sh.gate) { errno=EBUSY; r=-1; }
         else if (!d->power_standby) { errno=ENOSYS; r=-1; }
         else { attempted=1; r=d->power_standby(); }
@@ -2295,6 +2357,7 @@ void desk_shell_notify(struct desktop *d,const char *title,const char *text,int 
     int attention=icon==DU_DLG_ICON_WARNING || icon==DU_DLG_ICON_ERROR;
     if (n->active && n->balloon && !attention && action!=SH_NOTIFY_MEDIA && d->now_ns<n->expires) return;
     int repeat=n->active && n->action==SH_NOTIFY_VOLUME && action==SH_NOTIFY_VOLUME;
+    if (!repeat) shell_notice_record("notify",icon,title,text);
     if (n->active) damage(d,notification_outer(d));
     program_balloon_dismiss(d,0x403);
     n->slide=repeat ? n->slide : 20;
@@ -2408,7 +2471,7 @@ static void icons_layout(struct desktop *d)
             if (py<top) py=top;
         }
         d->sh.icons[k].box = (struct desk_box){px, py, desk_metric(AP_ICON_X,ICON_CELL_W), desk_metric(AP_ICON_Y,ICON_CELL_H)};
-        if (d->sh.cfg.icon_auto_arrange && cfg_icon_move_at(&d->sh.cfg,name,d->width,d->height,px,py)) d->sh.want_save=1;
+        if (!d->safe_mode && d->sh.cfg.icon_auto_arrange && cfg_icon_move_at(&d->sh.cfg,name,d->width,d->height,px,py)) d->sh.want_save=1;
         y += desk_metric(AP_ICON_Y,ICON_CELL_H);
     }
 }
@@ -2454,7 +2517,7 @@ static void icons_build(struct desktop *d)
     if (d->sh.folder && d->sh.folder->bin_full) d->sh.icons[2].icon = d->sh.cfg.recycle_icon ? "edit-delete" : "user-trash-full";   /* G2: the bin holds something */
     if (d->sh.folder) for (unsigned i=0;i<d->sh.folder->model.count;i++) {
         const struct fm_entry *e=&d->sh.folder->model.entries[i];
-        char path[FM_PATH]; if (fm_join(path,d->sh.profile.desktop[0] ? d->sh.profile.desktop : DESK_FOLDER,e->name)) return;
+        char path[FM_PATH]; if (fm_entry_path(&d->sh.folder->model,i,path)) return;   /* sec-user-05: physical in a merged view */
         const struct desk_catalog_entry *cat=desk_catalog_file(path);
         icon_add(d,e->name,e->meta.type==FM_DIR ? "files" : cat ? cat->name : "ciuknote",path,
             e->meta.type==FM_DIR ? "folder" : strlen(e->name)>4 && fm_same_path(e->name+strlen(e->name)-4,".lnk") ? "emblem-symbolic-link" : e->meta.exec ? du_icon_file(e->name,0,1) : cat ? cat->tango : du_icon_file(e->name,0,0), SH_ACT_LAUNCH,0);
@@ -2681,6 +2744,17 @@ static const uint8_t *label_halo_of(const struct desktop *d, int k, const char *
 }
 extern void desk_recovery_paint(struct desktop *, struct desk_box) __attribute__((weak));
 extern void desk_recovery_tick(struct desktop *) __attribute__((weak));
+/* fx-exeicons: a desktop item's own icon: a program, an icon file, a
+ * shortcut's IconLocation or target icon, a PIF, a read-only or system
+ * folder's desktop.ini icon (Windows 98 shows them on its desktop). */
+static const uint32_t *entry_file_icon(struct desktop *d, int k, int size)
+{
+    if (!icon_is_entry(d, k) || (size != 16 && size != 22 && size != 32 && size != 48)) return NULL;
+    const struct fm_entry *e = &d->sh.folder->model.entries[k - 3];
+    int dir = e->meta.type == FM_DIR;
+    if (dir ? !(e->meta.attributes & (CIUKI_ATTR_READONLY | CIUKI_ATTR_SYSTEM)) : !du_file_icon_candidate(e->name, 0)) return NULL;
+    return du_file_icon_flags(d->sh.icons[k].argument, e->meta.modified, (unsigned)size, DU_FILE_ICON_DEFAULT);
+}
 static void draw_icons(struct desktop *d, struct desk_box clip)
 {
     /* G14: Safe mode's corner labels under the icons; no icons at a command prompt. */
@@ -2700,8 +2774,13 @@ static void draw_icons(struct desktop *d, struct desk_box clip)
             unsigned link=(unsigned)strtoul(ic->argument,NULL,10);
             if (link<d->v3_link_count) custom=d->v3_link_icon(d,d->v3_links[link].source,32);
         }
+        const uint32_t *own=custom ? NULL : entry_file_icon(d,k,icon_size);
         if (custom) du_icon_blit(&c,ix+(icon_size-32)/2,iy+(icon_size-32)/2,custom,32,selected ? DU_ICON_SELECTED : DU_ICON_NORMAL);
-        else {
+        else if (own) {
+            du_icon_blit(&c,ix,iy,own,icon_size,selected ? DU_ICON_SELECTED : DU_ICON_NORMAL);
+            if (!strcmp(ic->icon,"emblem-symbolic-link"))   /* a shortcut keeps its arrow */
+                du_icon_blit(&c,ix+icon_size-16,iy+icon_size-16,desk_shell_icon("emblem-symbolic-link",16),16,DU_ICON_NORMAL);
+        } else {
             const char *target=!strcmp(ic->icon,"emblem-symbolic-link") ? shortcut_icon(d,ic->argument) : NULL;
             du_icon_blit(&c, ix, iy, desk_shell_icon(target ? target : ic->icon, icon_size), icon_size, selected ? DU_ICON_SELECTED : DU_ICON_NORMAL);
             if (target) du_icon_blit(&c,ix+icon_size-16,iy+icon_size-16,desk_shell_icon("emblem-symbolic-link",16),16,DU_ICON_NORMAL);
@@ -3245,7 +3324,7 @@ void desk_shell_drag_cancel(struct desktop *d)
 static void dnd_reposition(struct desktop *d)
 {
     struct sh_dnd *g = &d->sh.dnd;
-    if (d->sh.cfg.icon_auto_arrange) { d->sh.cfg.icon_auto_arrange=0; d->sh.want_save=1; }
+    if (!d->safe_mode && d->sh.cfg.icon_auto_arrange) { d->sh.cfg.icon_auto_arrange=0; d->sh.want_save=1; }
     int dx = g->menu ? g->menu_x - g->start_x : d->mouse_x - g->start_x, dy = g->menu ? g->menu_y - g->start_y : d->mouse_y - g->start_y;
     int saved = 1;
     for (int k = 0; k < d->sh.icon_count; k++) if (desk_shell_icon_marked(d, k)) {
@@ -3255,7 +3334,9 @@ static void dnd_reposition(struct desktop *d)
         if (b->x + b->w > (int)d->width) b->x = (int)d->width - b->w;
         if (b->y < DESK_BAR + 10) b->y = DESK_BAR + 10;
         if (b->y + b->h > (int)d->height - DESK_BAR) b->y = (int)d->height - DESK_BAR - b->h;
-        if (cfg_icon_move_at(&d->sh.cfg, icon_position_name(d, k),d->width,d->height, b->x, b->y)) d->sh.want_save = 1; else saved = 0;
+        if (!d->safe_mode) {
+            if (cfg_icon_move_at(&d->sh.cfg, icon_position_name(d, k),d->width,d->height, b->x, b->y)) d->sh.want_save = 1; else saved = 0;
+        }
         damage(d, *b);
     }
     d->sh.background_valid = 0;
@@ -3504,7 +3585,7 @@ static void draw_switcher(struct desktop *d, struct desk_box clip)
             du_fill(&c, cell, desk_mix(SH_HOT, SH_FACE, 60));
             du_outline(&c, cell, SH_HOT); du_outline(&c, (struct du_rect){cell.x + 1, cell.y + 1, 38, 38}, SH_HOT);
         }
-        du_icon_blit(&c, cell.x + 4, cell.y + 4, desk_shell_icon(client_icon(d, i), 32), 32,
+        du_icon_blit(&c, cell.x + 4, cell.y + 4, client_pixels(d, i, 32), 32,
                 d->clients[i].minimized ? DU_ICON_GHOST : DU_ICON_NORMAL);
     }
     if (d->sh.switch_pick >= 0 && d->sh.switch_pick < d->sh.switch_count) {
@@ -3818,7 +3899,7 @@ const uint32_t *desk_shell_window_icon(struct desktop *d, int index, int size)
 {
     if (index < 0 || index >= DESK_CLIENTS) return NULL;
     bind(d);
-    return desk_shell_icon(client_icon(d, index), size);
+    return client_pixels(d, index, size);
 }
 
 /* ---- built-in windows -------------------------------------------------- */
@@ -3973,6 +4054,7 @@ void desk_shell_confirm(struct desktop *d, const char *title, const char *text, 
     d->sh.message_kind = icon; d->sh.confirm = action;
     desk_sound(d,du_message_sound(icon));
     if (!d->shell) { d->sh.confirm = 0; desk_folder_cancelled(d); return; }
+    shell_notice_record("message",icon,title,text);
     desk_internal_open(d, DESK_INTERNAL_MESSAGE);
 }
 void desk_shell_bin_state(struct desktop *d, int full)
@@ -3996,6 +4078,7 @@ void desk_shell_message_class(struct desktop *d, const char *title, const char *
     d->sh.message_kind = error;
     desk_sound(d,du_message_sound(error));
     if (!d->shell) return;
+    shell_notice_record("message",error,title,text);
     desk_internal_open(d, DESK_INTERNAL_MESSAGE);
 }
 static struct desk_box button_box(struct desk_box content, int index, int count)
@@ -4285,7 +4368,11 @@ void desk_internal_paint(struct desktop *d, int index, struct desk_box content, 
         snprintf(title,sizeof(title),"%.32s (%c:)",a->content.inf.label[0] ? a->content.inf.label :
                  a->active.label[0] ? a->active.label : "Removable media",'A'+a->active.drive);
         if (a->content.cd_audio) snprintf(title,sizeof(title),"Audio CD");
-        du_icon_blit(&c,content.x+12,content.y+12,desk_shell_icon(a->active.flags & CIUKI_MEDIA_OPTICAL ? "media-optical" : "drive-removable-media",32),32,DU_ICON_NORMAL);
+        /* fx-exeicons: the medium's AUTORUN.INF icon= (Microsoft, "Autorun.inf Entries"). */
+        char root[8]="/";
+        if (a->active.drive!=2) snprintf(root,sizeof(root),"/mnt/%c",'a'+(char)(a->active.drive%26));
+        const uint32_t *medium=a->content.inf.icon[0] ? du_file_icon_flags(root,(int64_t)a->active.generation+1,32,0) : NULL;
+        du_icon_blit(&c,content.x+12,content.y+12,medium ? medium : desk_shell_icon(a->active.flags & CIUKI_MEDIA_OPTICAL ? "media-optical" : "drive-removable-media",32),32,DU_ICON_NORMAL);
         bold(&c,content.x+56,content.y+12,title,SH_INK);
         du_text(&c,content.x+56,content.y+32,"What do you want CiukiOS to do?",SH_INK);
         for (int k=0;k<AP_CHOICES;k++) {
@@ -4454,6 +4541,7 @@ int desk_power_input(struct desktop *d, const struct ciuki_input_event *e)
 static void shutdown_commit(struct desktop *d, int index)
 {
     int sel = d->sh.shutdown_sel;
+    fprintf(stderr,"[desktop] shutdown choice=%d mode=%u geometry=%ux%u\n",sel,d->display_mode,d->width,d->height);
     if (sel == SD_STANDBY && d->sh.power_can_standby) d->sh.want_standby = 1;
     else d->sh.want_power = sel == SD_RESTART ? 1 : 2;
     desk_request_close(d, index);
@@ -4978,6 +5066,16 @@ void desk_shell_tick(struct desktop *d)
     while(d->pointer_trail_count && d->pointer_trail[d->pointer_trail_count-1].until<=d->now_ns) {
         unsigned k=--d->pointer_trail_count;
         damage(d,(struct desk_box){d->pointer_trail[k].x-64,d->pointer_trail[k].y-64,128,128});
+    }
+    /* fx-exeicons: the icon worker published own icons: repaint whatever
+     * shows file icons (desktop items, open menus, the taskbar). */
+    unsigned icons=du_file_icons_generation();
+    if (icons!=d->sh.icon_generation) {
+        d->sh.icon_generation=icons;
+        for (int k=0;k<d->sh.icon_count;k++) damage(d,d->sh.icons[k].box);
+        menus_damage(d);
+        damage(d,desk_taskbar(d));
+        for (int i=0;i<DESK_CLIENTS;i++) if (d->clients[i].window && d->clients[i].internal==DESK_INTERNAL_AUTOPLAY) damage(d,desk_outer(&d->clients[i]));
     }
     bar_autohide(d);
     dnd_tick(d);

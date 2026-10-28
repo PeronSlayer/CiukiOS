@@ -7,6 +7,9 @@
 struct ciuki_mixer_line;
 int line_preference_save(const char *,const struct ciuki_mixer_line *);
 int master_preference_save(const char *directory, unsigned left, unsigned right, unsigned mute);
+/* sec-user-05: re-apply the session's saved mixer levels at session start;
+ * apply(fd, 0 master / 1 line, record, bytes) is the control devctl. */
+int mixer_preferences_restore(int fd, int (*apply)(int, unsigned, void *, size_t));
 /* Paths are explicit for host fixtures; production uses SOUND_CFG,
  * SOUND_LEGACY_CFG and REG_DIRECTORY. Loads never create registry keys. */
 int sound_load_at(struct sound_scheme *, const char *cfg, const char *legacy, const char *registry);

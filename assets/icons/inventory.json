@@ -1,0 +1,6366 @@
+[
+  {
+    "icon": "list-add",
+    "object": "action:add",
+    "previous": "list-add",
+    "previous_derived_sizes": [
+      48
+    ],
+    "previous_missing_runtime_sizes": [],
+    "source": "apps/libdeskui/icon_map.c",
+    "status": "retained"
+  },
+  {
+    "icon": "format-justify-center",
+    "object": "action:align-center",
+    "previous": "format-justify-center",
+    "previous_derived_sizes": [
+      48
+    ],
+    "previous_missing_runtime_sizes": [],
+    "source": "apps/libdeskui/icon_map.c",
+    "status": "retained"
+  },
+  {
+    "icon": "format-justify-left",
+    "object": "action:align-left",
+    "previous": "format-justify-left",
+    "previous_derived_sizes": [
+      48
+    ],
+    "previous_missing_runtime_sizes": [],
+    "source": "apps/libdeskui/icon_map.c",
+    "status": "retained"
+  },
+  {
+    "icon": "format-justify-right",
+    "object": "action:align-right",
+    "previous": "format-justify-right",
+    "previous_derived_sizes": [
+      48
+    ],
+    "previous_missing_runtime_sizes": [],
+    "source": "apps/libdeskui/icon_map.c",
+    "status": "retained"
+  },
+  {
+    "icon": "go-previous",
+    "object": "action:back",
+    "previous": "go-previous",
+    "previous_derived_sizes": [
+      48
+    ],
+    "previous_missing_runtime_sizes": [],
+    "source": "apps/libdeskui/icon_map.c",
+    "status": "retained"
+  },
+  {
+    "icon": "format-text-bold",
+    "object": "action:bold",
+    "previous": "format-text-bold",
+    "previous_derived_sizes": [
+      48
+    ],
+    "previous_missing_runtime_sizes": [],
+    "source": "apps/libdeskui/icon_map.c",
+    "status": "retained"
+  },
+  {
+    "icon": "bookmark-new",
+    "object": "action:bookmark",
+    "previous": "bookmark-new",
+    "previous_derived_sizes": [
+      48
+    ],
+    "previous_missing_runtime_sizes": [],
+    "source": "apps/libdeskui/icon_map.c",
+    "status": "retained"
+  },
+  {
+    "icon": "go-bottom",
+    "object": "action:bottom",
+    "previous": "go-bottom",
+    "previous_derived_sizes": [
+      48
+    ],
+    "previous_missing_runtime_sizes": [],
+    "source": "apps/libdeskui/icon_map.c",
+    "status": "retained"
+  },
+  {
+    "icon": "edit-clear",
+    "object": "action:clear",
+    "previous": "edit-clear",
+    "previous_derived_sizes": [
+      48
+    ],
+    "previous_missing_runtime_sizes": [],
+    "source": "apps/libdeskui/icon_map.c",
+    "status": "retained"
+  },
+  {
+    "icon": "edit-copy",
+    "object": "action:copy",
+    "previous": "edit-copy",
+    "previous_derived_sizes": [
+      48
+    ],
+    "previous_missing_runtime_sizes": [],
+    "source": "apps/libdeskui/icon_map.c",
+    "status": "retained"
+  },
+  {
+    "icon": "edit-cut",
+    "object": "action:cut",
+    "previous": "edit-cut",
+    "previous_derived_sizes": [
+      48
+    ],
+    "previous_missing_runtime_sizes": [],
+    "source": "apps/libdeskui/icon_map.c",
+    "status": "retained"
+  },
+  {
+    "icon": "edit-delete",
+    "object": "action:delete",
+    "previous": "edit-delete",
+    "previous_derived_sizes": [
+      48
+    ],
+    "previous_missing_runtime_sizes": [],
+    "source": "apps/libdeskui/icon_map.c",
+    "status": "retained"
+  },
+  {
+    "icon": "go-down",
+    "object": "action:down",
+    "previous": "go-down",
+    "previous_derived_sizes": [
+      48
+    ],
+    "previous_missing_runtime_sizes": [],
+    "source": "apps/libdeskui/icon_map.c",
+    "status": "retained"
+  },
+  {
+    "icon": "media-eject",
+    "object": "action:eject",
+    "previous": "media-eject",
+    "previous_derived_sizes": [
+      48
+    ],
+    "previous_missing_runtime_sizes": [],
+    "source": "apps/libdeskui/icon_map.c",
+    "status": "retained"
+  },
+  {
+    "icon": "process-stop",
+    "object": "action:end-task",
+    "previous": "process-stop",
+    "previous_derived_sizes": [
+      48
+    ],
+    "previous_missing_runtime_sizes": [],
+    "source": "apps/libdeskui/icon_map.c",
+    "status": "retained"
+  },
+  {
+    "icon": "edit-find",
+    "object": "action:find",
+    "previous": "edit-find",
+    "previous_derived_sizes": [
+      48
+    ],
+    "previous_missing_runtime_sizes": [],
+    "source": "apps/libdeskui/icon_map.c",
+    "status": "retained"
+  },
+  {
+    "icon": "go-first",
+    "object": "action:first",
+    "previous": "go-first",
+    "previous_derived_sizes": [
+      48
+    ],
+    "previous_missing_runtime_sizes": [],
+    "source": "apps/libdeskui/icon_map.c",
+    "status": "retained"
+  },
+  {
+    "icon": "go-next",
+    "object": "action:forward",
+    "previous": "go-next",
+    "previous_derived_sizes": [
+      48
+    ],
+    "previous_missing_runtime_sizes": [],
+    "source": "apps/libdeskui/icon_map.c",
+    "status": "retained"
+  },
+  {
+    "icon": "view-fullscreen",
+    "object": "action:fullscreen",
+    "previous": "view-fullscreen",
+    "previous_derived_sizes": [
+      48
+    ],
+    "previous_missing_runtime_sizes": [],
+    "source": "apps/libdeskui/icon_map.c",
+    "status": "retained"
+  },
+  {
+    "icon": "go-jump",
+    "object": "action:go",
+    "previous": "go-jump",
+    "previous_derived_sizes": [
+      48
+    ],
+    "previous_missing_runtime_sizes": [],
+    "source": "apps/libdeskui/icon_map.c",
+    "status": "retained"
+  },
+  {
+    "icon": "go-home",
+    "object": "action:home",
+    "previous": "go-home",
+    "previous_derived_sizes": [
+      48
+    ],
+    "previous_missing_runtime_sizes": [],
+    "source": "apps/libdeskui/icon_map.c",
+    "status": "retained"
+  },
+  {
+    "icon": "format-indent-more",
+    "object": "action:indent",
+    "previous": "format-indent-more",
+    "previous_derived_sizes": [
+      48
+    ],
+    "previous_missing_runtime_sizes": [],
+    "source": "apps/libdeskui/icon_map.c",
+    "status": "retained"
+  },
+  {
+    "icon": "format-text-italic",
+    "object": "action:italic",
+    "previous": "format-text-italic",
+    "previous_derived_sizes": [
+      48
+    ],
+    "previous_missing_runtime_sizes": [],
+    "source": "apps/libdeskui/icon_map.c",
+    "status": "retained"
+  },
+  {
+    "icon": "format-justify-fill",
+    "object": "action:justify",
+    "previous": "format-justify-fill",
+    "previous_derived_sizes": [
+      48
+    ],
+    "previous_missing_runtime_sizes": [],
+    "source": "apps/libdeskui/icon_map.c",
+    "status": "retained"
+  },
+  {
+    "icon": "go-last",
+    "object": "action:last",
+    "previous": "go-last",
+    "previous_derived_sizes": [
+      48
+    ],
+    "previous_missing_runtime_sizes": [],
+    "source": "apps/libdeskui/icon_map.c",
+    "status": "retained"
+  },
+  {
+    "icon": "system-log-out",
+    "object": "action:logout",
+    "previous": "system-log-out",
+    "previous_derived_sizes": [
+      48
+    ],
+    "previous_missing_runtime_sizes": [],
+    "source": "apps/libdeskui/icon_map.c",
+    "status": "retained"
+  },
+  {
+    "icon": "media-playback-stop",
+    "object": "action:media-stop",
+    "previous": "media-playback-stop",
+    "previous_derived_sizes": [
+      48
+    ],
+    "previous_missing_runtime_sizes": [],
+    "source": "apps/libdeskui/icon_map.c",
+    "status": "retained"
+  },
+  {
+    "icon": "document-new",
+    "object": "action:new",
+    "previous": "document-new",
+    "previous_derived_sizes": [
+      48
+    ],
+    "previous_missing_runtime_sizes": [],
+    "source": "apps/libdeskui/icon_map.c",
+    "status": "retained"
+  },
+  {
+    "icon": "folder-new",
+    "object": "action:new-folder",
+    "previous": "folder-new",
+    "previous_derived_sizes": [
+      48
+    ],
+    "previous_missing_runtime_sizes": [],
+    "source": "apps/libdeskui/icon_map.c",
+    "status": "retained"
+  },
+  {
+    "icon": "tab-new",
+    "object": "action:new-tab",
+    "previous": "tab-new",
+    "previous_derived_sizes": [
+      48
+    ],
+    "previous_missing_runtime_sizes": [],
+    "source": "apps/libdeskui/icon_map.c",
+    "status": "retained"
+  },
+  {
+    "icon": "window-new",
+    "object": "action:new-window",
+    "previous": "window-new",
+    "previous_derived_sizes": [
+      48
+    ],
+    "previous_missing_runtime_sizes": [],
+    "source": "apps/libdeskui/icon_map.c",
+    "status": "retained"
+  },
+  {
+    "icon": "document-open",
+    "object": "action:open",
+    "previous": "document-open",
+    "previous_derived_sizes": [
+      48
+    ],
+    "previous_missing_runtime_sizes": [],
+    "source": "apps/libdeskui/icon_map.c",
+    "status": "retained"
+  },
+  {
+    "icon": "edit-paste",
+    "object": "action:paste",
+    "previous": "edit-paste",
+    "previous_derived_sizes": [
+      48
+    ],
+    "previous_missing_runtime_sizes": [],
+    "source": "apps/libdeskui/icon_map.c",
+    "status": "retained"
+  },
+  {
+    "icon": "media-playback-pause",
+    "object": "action:pause",
+    "previous": "media-playback-pause",
+    "previous_derived_sizes": [
+      48
+    ],
+    "previous_missing_runtime_sizes": [],
+    "source": "apps/libdeskui/icon_map.c",
+    "status": "retained"
+  },
+  {
+    "icon": "media-playback-start",
+    "object": "action:play",
+    "previous": "media-playback-start",
+    "previous_derived_sizes": [
+      48
+    ],
+    "previous_missing_runtime_sizes": [],
+    "source": "apps/libdeskui/icon_map.c",
+    "status": "retained"
+  },
+  {
+    "icon": "document-print",
+    "object": "action:print",
+    "previous": "document-print",
+    "previous_derived_sizes": [
+      48
+    ],
+    "previous_missing_runtime_sizes": [],
+    "source": "apps/libdeskui/icon_map.c",
+    "status": "retained"
+  },
+  {
+    "icon": "document-print-preview",
+    "object": "action:print-preview",
+    "previous": "document-print-preview",
+    "previous_derived_sizes": [
+      48
+    ],
+    "previous_missing_runtime_sizes": [],
+    "source": "apps/libdeskui/icon_map.c",
+    "status": "retained"
+  },
+  {
+    "icon": "document-properties",
+    "object": "action:properties",
+    "previous": "document-properties",
+    "previous_derived_sizes": [
+      48
+    ],
+    "previous_missing_runtime_sizes": [],
+    "source": "apps/libdeskui/icon_map.c",
+    "status": "retained"
+  },
+  {
+    "icon": "media-record",
+    "object": "action:record",
+    "previous": "media-record",
+    "previous_derived_sizes": [
+      48
+    ],
+    "previous_missing_runtime_sizes": [],
+    "source": "apps/libdeskui/icon_map.c",
+    "status": "retained"
+  },
+  {
+    "icon": "edit-redo",
+    "object": "action:redo",
+    "previous": "edit-redo",
+    "previous_derived_sizes": [
+      48
+    ],
+    "previous_missing_runtime_sizes": [],
+    "source": "apps/libdeskui/icon_map.c",
+    "status": "retained"
+  },
+  {
+    "icon": "view-refresh",
+    "object": "action:refresh",
+    "previous": "view-refresh",
+    "previous_derived_sizes": [
+      48
+    ],
+    "previous_missing_runtime_sizes": [],
+    "source": "apps/libdeskui/icon_map.c",
+    "status": "retained"
+  },
+  {
+    "icon": "list-remove",
+    "object": "action:remove",
+    "previous": "list-remove",
+    "previous_derived_sizes": [
+      48
+    ],
+    "previous_missing_runtime_sizes": [],
+    "source": "apps/libdeskui/icon_map.c",
+    "status": "retained"
+  },
+  {
+    "icon": "edit-find-replace",
+    "object": "action:replace",
+    "previous": "edit-find-replace",
+    "previous_derived_sizes": [
+      48
+    ],
+    "previous_missing_runtime_sizes": [],
+    "source": "apps/libdeskui/icon_map.c",
+    "status": "retained"
+  },
+  {
+    "icon": "view-refresh",
+    "object": "action:restart",
+    "previous": "view-refresh",
+    "previous_derived_sizes": [
+      48
+    ],
+    "previous_missing_runtime_sizes": [],
+    "source": "apps/libdeskui/icon_map.c",
+    "status": "retained"
+  },
+  {
+    "icon": "go-jump",
+    "object": "action:run",
+    "previous": "go-jump",
+    "previous_derived_sizes": [
+      48
+    ],
+    "previous_missing_runtime_sizes": [],
+    "source": "apps/libdeskui/icon_map.c",
+    "status": "retained"
+  },
+  {
+    "icon": "document-save",
+    "object": "action:save",
+    "previous": "document-save",
+    "previous_derived_sizes": [
+      48
+    ],
+    "previous_missing_runtime_sizes": [],
+    "source": "apps/libdeskui/icon_map.c",
+    "status": "retained"
+  },
+  {
+    "icon": "document-save-as",
+    "object": "action:save-as",
+    "previous": "document-save-as",
+    "previous_derived_sizes": [
+      48
+    ],
+    "previous_missing_runtime_sizes": [],
+    "source": "apps/libdeskui/icon_map.c",
+    "status": "retained"
+  },
+  {
+    "icon": "system-search",
+    "object": "action:search",
+    "previous": "system-search",
+    "previous_derived_sizes": [
+      48
+    ],
+    "previous_missing_runtime_sizes": [],
+    "source": "apps/libdeskui/icon_map.c",
+    "status": "retained"
+  },
+  {
+    "icon": "media-seek-backward",
+    "object": "action:seek-backward",
+    "previous": "media-seek-backward",
+    "previous_derived_sizes": [
+      48
+    ],
+    "previous_missing_runtime_sizes": [],
+    "source": "apps/libdeskui/icon_map.c",
+    "status": "retained"
+  },
+  {
+    "icon": "media-seek-forward",
+    "object": "action:seek-forward",
+    "previous": "media-seek-forward",
+    "previous_derived_sizes": [
+      48
+    ],
+    "previous_missing_runtime_sizes": [],
+    "source": "apps/libdeskui/icon_map.c",
+    "status": "retained"
+  },
+  {
+    "icon": "edit-select-all",
+    "object": "action:select-all",
+    "previous": "edit-select-all",
+    "previous_derived_sizes": [
+      48
+    ],
+    "previous_missing_runtime_sizes": [],
+    "source": "apps/libdeskui/icon_map.c",
+    "status": "retained"
+  },
+  {
+    "icon": "system-shutdown",
+    "object": "action:shutdown",
+    "previous": "system-shutdown",
+    "previous_derived_sizes": [
+      48
+    ],
+    "previous_missing_runtime_sizes": [],
+    "source": "apps/libdeskui/icon_map.c",
+    "status": "retained"
+  },
+  {
+    "icon": "media-skip-backward",
+    "object": "action:skip-backward",
+    "previous": "media-skip-backward",
+    "previous_derived_sizes": [
+      48
+    ],
+    "previous_missing_runtime_sizes": [],
+    "source": "apps/libdeskui/icon_map.c",
+    "status": "retained"
+  },
+  {
+    "icon": "media-skip-forward",
+    "object": "action:skip-forward",
+    "previous": "media-skip-forward",
+    "previous_derived_sizes": [
+      48
+    ],
+    "previous_missing_runtime_sizes": [],
+    "source": "apps/libdeskui/icon_map.c",
+    "status": "retained"
+  },
+  {
+    "icon": "process-stop",
+    "object": "action:stop",
+    "previous": "process-stop",
+    "previous_derived_sizes": [
+      48
+    ],
+    "previous_missing_runtime_sizes": [],
+    "source": "apps/libdeskui/icon_map.c",
+    "status": "retained"
+  },
+  {
+    "icon": "format-text-strikethrough",
+    "object": "action:strikethrough",
+    "previous": "format-text-strikethrough",
+    "previous_derived_sizes": [
+      48
+    ],
+    "previous_missing_runtime_sizes": [],
+    "source": "apps/libdeskui/icon_map.c",
+    "status": "retained"
+  },
+  {
+    "icon": "go-jump",
+    "object": "action:switch-to",
+    "previous": "go-jump",
+    "previous_derived_sizes": [
+      48
+    ],
+    "previous_missing_runtime_sizes": [],
+    "source": "apps/libdeskui/icon_map.c",
+    "status": "retained"
+  },
+  {
+    "icon": "go-top",
+    "object": "action:top",
+    "previous": "go-top",
+    "previous_derived_sizes": [
+      48
+    ],
+    "previous_missing_runtime_sizes": [],
+    "source": "apps/libdeskui/icon_map.c",
+    "status": "retained"
+  },
+  {
+    "icon": "format-text-underline",
+    "object": "action:underline",
+    "previous": "format-text-underline",
+    "previous_derived_sizes": [
+      48
+    ],
+    "previous_missing_runtime_sizes": [],
+    "source": "apps/libdeskui/icon_map.c",
+    "status": "retained"
+  },
+  {
+    "icon": "edit-undo",
+    "object": "action:undo",
+    "previous": "edit-undo",
+    "previous_derived_sizes": [
+      48
+    ],
+    "previous_missing_runtime_sizes": [],
+    "source": "apps/libdeskui/icon_map.c",
+    "status": "retained"
+  },
+  {
+    "icon": "format-indent-less",
+    "object": "action:unindent",
+    "previous": "format-indent-less",
+    "previous_derived_sizes": [
+      48
+    ],
+    "previous_missing_runtime_sizes": [],
+    "source": "apps/libdeskui/icon_map.c",
+    "status": "retained"
+  },
+  {
+    "icon": "go-up",
+    "object": "action:up",
+    "previous": "go-up",
+    "previous_derived_sizes": [
+      48
+    ],
+    "previous_missing_runtime_sizes": [],
+    "source": "apps/libdeskui/icon_map.c",
+    "status": "retained"
+  },
+  {
+    "icon": "format-justify-fill",
+    "object": "action:views",
+    "previous": "format-justify-fill",
+    "previous_derived_sizes": [
+      48
+    ],
+    "previous_missing_runtime_sizes": [],
+    "source": "apps/libdeskui/icon_map.c",
+    "status": "retained"
+  },
+  {
+    "icon": "process-working-*",
+    "object": "animation:busy",
+    "previous": "process-working-*",
+    "previous_derived_sizes": [],
+    "previous_missing_runtime_sizes": [],
+    "source": "apps/libdeskui/icons.c",
+    "status": "retained"
+  },
+  {
+    "icon": "preferences-desktop-accessibility",
+    "label": "Accessibility Options",
+    "object": "applet:access",
+    "previous": "preferences-desktop-accessibility",
+    "previous_derived_sizes": [
+      48
+    ],
+    "previous_missing_runtime_sizes": [],
+    "source": "apps/desktop/settings_catalog.h",
+    "status": "retained"
+  },
+  {
+    "icon": "preferences-desktop-peripherals",
+    "label": "Add New Hardware",
+    "object": "applet:addhw",
+    "previous": "preferences-desktop-peripherals",
+    "previous_derived_sizes": [
+      48
+    ],
+    "previous_missing_runtime_sizes": [],
+    "source": "apps/desktop/settings_catalog.h",
+    "status": "retained"
+  },
+  {
+    "icon": "office-calendar",
+    "label": "Date and Time",
+    "object": "applet:datetime",
+    "previous": "office-calendar",
+    "previous_derived_sizes": [
+      48
+    ],
+    "previous_missing_runtime_sizes": [],
+    "source": "apps/desktop/settings_catalog.h",
+    "status": "retained"
+  },
+  {
+    "icon": "preferences-desktop-wallpaper",
+    "label": "Display",
+    "object": "applet:display",
+    "previous": "preferences-desktop-wallpaper",
+    "previous_derived_sizes": [
+      48
+    ],
+    "previous_missing_runtime_sizes": [],
+    "source": "apps/desktop/settings_catalog.h",
+    "status": "retained"
+  },
+  {
+    "icon": "internet-web-browser",
+    "label": "Internet",
+    "object": "applet:internet",
+    "previous": "internet-web-browser",
+    "previous_derived_sizes": [
+      48
+    ],
+    "previous_missing_runtime_sizes": [],
+    "source": "apps/desktop/settings_catalog.h",
+    "status": "retained"
+  },
+  {
+    "icon": "input-gaming",
+    "label": "Game controllers",
+    "object": "applet:joystick",
+    "previous": "input-gaming",
+    "previous_derived_sizes": [
+      48
+    ],
+    "previous_missing_runtime_sizes": [],
+    "source": "apps/desktop/settings_catalog.h",
+    "status": "retained"
+  },
+  {
+    "icon": "input-keyboard",
+    "label": "Keyboard",
+    "object": "applet:keyboard",
+    "previous": "input-keyboard",
+    "previous_derived_sizes": [
+      48
+    ],
+    "previous_missing_runtime_sizes": [],
+    "source": "apps/desktop/settings_catalog.h",
+    "status": "retained"
+  },
+  {
+    "icon": "input-mouse",
+    "label": "Mouse",
+    "object": "applet:mouse",
+    "previous": "input-mouse",
+    "previous_derived_sizes": [
+      48
+    ],
+    "previous_missing_runtime_sizes": [],
+    "source": "apps/desktop/settings_catalog.h",
+    "status": "retained"
+  },
+  {
+    "icon": "preferences-desktop-multimedia",
+    "label": "Multimedia",
+    "object": "applet:multimedia",
+    "previous": "preferences-desktop-multimedia",
+    "previous_derived_sizes": [
+      48
+    ],
+    "previous_missing_runtime_sizes": [],
+    "source": "apps/desktop/settings_catalog.h",
+    "status": "retained"
+  },
+  {
+    "icon": "network-wired",
+    "label": "Network",
+    "object": "applet:network",
+    "previous": "network-wired",
+    "previous_derived_sizes": [
+      48
+    ],
+    "previous_missing_runtime_sizes": [],
+    "source": "apps/desktop/settings_catalog.h",
+    "status": "retained"
+  },
+  {
+    "icon": "system-shutdown",
+    "label": "Power",
+    "object": "applet:power",
+    "previous": "system-shutdown",
+    "previous_derived_sizes": [
+      48
+    ],
+    "previous_missing_runtime_sizes": [],
+    "source": "apps/desktop/settings_catalog.h",
+    "status": "retained"
+  },
+  {
+    "icon": "system-installer",
+    "label": "Add/Remove Programs",
+    "object": "applet:programs",
+    "previous": "system-installer",
+    "previous_derived_sizes": [
+      48
+    ],
+    "previous_missing_runtime_sizes": [],
+    "source": "apps/desktop/settings_catalog.h",
+    "status": "retained"
+  },
+  {
+    "icon": "preferences-desktop-locale",
+    "label": "Regional Settings",
+    "object": "applet:regional",
+    "previous": "preferences-desktop-locale",
+    "previous_derived_sizes": [
+      48
+    ],
+    "previous_missing_runtime_sizes": [],
+    "source": "apps/desktop/settings_catalog.h",
+    "status": "retained"
+  },
+  {
+    "icon": "audio-card",
+    "label": "Sounds and Audio",
+    "object": "applet:sounds",
+    "previous": "audio-card",
+    "previous_derived_sizes": [
+      48
+    ],
+    "previous_missing_runtime_sizes": [],
+    "source": "apps/desktop/settings_catalog.h",
+    "status": "retained"
+  },
+  {
+    "icon": "drive-removable-media",
+    "label": "Storage and removable devices",
+    "object": "applet:storage",
+    "previous": "drive-removable-media",
+    "previous_derived_sizes": [
+      48
+    ],
+    "previous_missing_runtime_sizes": [],
+    "source": "apps/desktop/settings_catalog.h",
+    "status": "retained"
+  },
+  {
+    "icon": "ciuki",
+    "label": "System",
+    "object": "applet:system",
+    "previous": "ciuki",
+    "previous_derived_sizes": [],
+    "previous_missing_runtime_sizes": [],
+    "source": "apps/desktop/settings_catalog.h",
+    "status": "retained"
+  },
+  {
+    "icon": "preferences-system-windows",
+    "label": "Taskbar & Start Menu",
+    "object": "applet:taskbar",
+    "previous": "preferences-system-windows",
+    "previous_derived_sizes": [
+      48
+    ],
+    "previous_missing_runtime_sizes": [],
+    "source": "apps/desktop/settings_catalog.h",
+    "status": "retained"
+  },
+  {
+    "icon": "system-users",
+    "label": "User Accounts",
+    "object": "applet:users",
+    "previous": "system-users",
+    "previous_derived_sizes": [
+      48
+    ],
+    "previous_missing_runtime_sizes": [],
+    "source": "apps/desktop/settings_catalog.h",
+    "status": "retained"
+  },
+  {
+    "icon": "drive-harddisk",
+    "object": "apps/accessories/scandisk_view.c:drive-harddisk",
+    "previous": "drive-harddisk",
+    "previous_derived_sizes": [
+      48
+    ],
+    "previous_missing_runtime_sizes": [],
+    "source": "apps/accessories/scandisk_view.c",
+    "status": "retained"
+  },
+  {
+    "icon": "document-open",
+    "object": "apps/accessories/viewer_view.c:document-open",
+    "previous": "document-open",
+    "previous_derived_sizes": [
+      48
+    ],
+    "previous_missing_runtime_sizes": [],
+    "source": "apps/accessories/viewer_view.c",
+    "status": "retained"
+  },
+  {
+    "icon": "go-next",
+    "object": "apps/accessories/viewer_view.c:go-next",
+    "previous": "go-next",
+    "previous_derived_sizes": [
+      48
+    ],
+    "previous_missing_runtime_sizes": [],
+    "source": "apps/accessories/viewer_view.c",
+    "status": "retained"
+  },
+  {
+    "icon": "go-previous",
+    "object": "apps/accessories/viewer_view.c:go-previous",
+    "previous": "go-previous",
+    "previous_derived_sizes": [
+      48
+    ],
+    "previous_missing_runtime_sizes": [],
+    "source": "apps/accessories/viewer_view.c",
+    "status": "retained"
+  },
+  {
+    "icon": "image-x-generic",
+    "object": "apps/accessories/viewer_view.c:image-x-generic",
+    "previous": "image-x-generic",
+    "previous_derived_sizes": [
+      48
+    ],
+    "previous_missing_runtime_sizes": [],
+    "source": "apps/accessories/viewer_view.c",
+    "status": "retained"
+  },
+  {
+    "icon": "list-add",
+    "object": "apps/accessories/viewer_view.c:list-add",
+    "previous": "list-add",
+    "previous_derived_sizes": [
+      48
+    ],
+    "previous_missing_runtime_sizes": [],
+    "source": "apps/accessories/viewer_view.c",
+    "status": "retained"
+  },
+  {
+    "icon": "list-remove",
+    "object": "apps/accessories/viewer_view.c:list-remove",
+    "previous": "list-remove",
+    "previous_derived_sizes": [
+      48
+    ],
+    "previous_missing_runtime_sizes": [],
+    "source": "apps/accessories/viewer_view.c",
+    "status": "retained"
+  },
+  {
+    "icon": "view-fullscreen",
+    "object": "apps/accessories/viewer_view.c:view-fullscreen",
+    "previous": "view-fullscreen",
+    "previous_derived_sizes": [
+      48
+    ],
+    "previous_missing_runtime_sizes": [],
+    "source": "apps/accessories/viewer_view.c",
+    "status": "retained"
+  },
+  {
+    "icon": "applications-system",
+    "object": "apps/ciukide/app.c:applications-system",
+    "previous": "applications-system",
+    "previous_derived_sizes": [
+      48
+    ],
+    "previous_missing_runtime_sizes": [],
+    "source": "apps/ciukide/app.c",
+    "status": "retained"
+  },
+  {
+    "icon": "document-open",
+    "object": "apps/ciukide/app.c:document-open",
+    "previous": "document-open",
+    "previous_derived_sizes": [
+      48
+    ],
+    "previous_missing_runtime_sizes": [],
+    "source": "apps/ciukide/app.c",
+    "status": "retained"
+  },
+  {
+    "icon": "document-save",
+    "object": "apps/ciukide/app.c:document-save",
+    "previous": "document-save",
+    "previous_derived_sizes": [
+      48
+    ],
+    "previous_missing_runtime_sizes": [],
+    "source": "apps/ciukide/app.c",
+    "status": "retained"
+  },
+  {
+    "icon": "help-browser",
+    "object": "apps/ciukide/app.c:help-browser",
+    "previous": "help-browser",
+    "previous_derived_sizes": [
+      48
+    ],
+    "previous_missing_runtime_sizes": [],
+    "source": "apps/ciukide/app.c",
+    "status": "retained"
+  },
+  {
+    "icon": "media-playback-start",
+    "object": "apps/ciukide/app.c:media-playback-start",
+    "previous": "media-playback-start",
+    "previous_derived_sizes": [
+      48
+    ],
+    "previous_missing_runtime_sizes": [],
+    "source": "apps/ciukide/app.c",
+    "status": "retained"
+  },
+  {
+    "icon": "battery",
+    "object": "apps/control/app.c:battery",
+    "previous": "battery",
+    "previous_derived_sizes": [
+      48
+    ],
+    "previous_missing_runtime_sizes": [],
+    "source": "apps/control/app.c",
+    "status": "retained"
+  },
+  {
+    "icon": "ciuki",
+    "object": "apps/control/app.c:ciuki",
+    "previous": "ciuki",
+    "previous_derived_sizes": [],
+    "previous_missing_runtime_sizes": [],
+    "source": "apps/control/app.c",
+    "status": "retained"
+  },
+  {
+    "icon": "package-x-generic",
+    "object": "apps/control/app.c:package-x-generic",
+    "previous": "package-x-generic",
+    "previous_derived_sizes": [
+      48
+    ],
+    "previous_missing_runtime_sizes": [],
+    "source": "apps/control/app.c",
+    "status": "retained"
+  },
+  {
+    "icon": "utilities-terminal",
+    "object": "apps/control/app.c:utilities-terminal",
+    "previous": "utilities-terminal",
+    "previous_derived_sizes": [
+      48
+    ],
+    "previous_missing_runtime_sizes": [],
+    "source": "apps/control/app.c",
+    "status": "retained"
+  },
+  {
+    "icon": "accessories-calculator",
+    "object": "apps/desktop/catalog.h:accessories-calculator",
+    "previous": "accessories-calculator",
+    "previous_derived_sizes": [
+      48
+    ],
+    "previous_missing_runtime_sizes": [],
+    "source": "apps/desktop/catalog.h",
+    "status": "retained"
+  },
+  {
+    "icon": "accessories-character-map",
+    "object": "apps/desktop/catalog.h:accessories-character-map",
+    "previous": "accessories-character-map",
+    "previous_derived_sizes": [
+      48
+    ],
+    "previous_missing_runtime_sizes": [],
+    "source": "apps/desktop/catalog.h",
+    "status": "retained"
+  },
+  {
+    "icon": "applications-games",
+    "object": "apps/desktop/catalog.h:applications-games",
+    "previous": "applications-games",
+    "previous_derived_sizes": [
+      48
+    ],
+    "previous_missing_runtime_sizes": [],
+    "source": "apps/desktop/catalog.h",
+    "status": "retained"
+  },
+  {
+    "icon": "applications-graphics",
+    "object": "apps/desktop/catalog.h:applications-graphics",
+    "previous": "applications-graphics",
+    "previous_derived_sizes": [
+      48
+    ],
+    "previous_missing_runtime_sizes": [],
+    "source": "apps/desktop/catalog.h",
+    "status": "retained"
+  },
+  {
+    "icon": "audio-input-microphone",
+    "object": "apps/desktop/catalog.h:audio-input-microphone",
+    "previous": "audio-input-microphone",
+    "previous_derived_sizes": [
+      48
+    ],
+    "previous_missing_runtime_sizes": [],
+    "source": "apps/desktop/catalog.h",
+    "status": "retained"
+  },
+  {
+    "icon": "audio-volume-high",
+    "object": "apps/desktop/catalog.h:audio-volume-high",
+    "previous": "audio-volume-high",
+    "previous_derived_sizes": [
+      48
+    ],
+    "previous_missing_runtime_sizes": [],
+    "source": "apps/desktop/catalog.h",
+    "status": "retained"
+  },
+  {
+    "icon": "audio-x-generic",
+    "object": "apps/desktop/catalog.h:audio-x-generic",
+    "previous": "audio-x-generic",
+    "previous_derived_sizes": [
+      48
+    ],
+    "previous_missing_runtime_sizes": [],
+    "source": "apps/desktop/catalog.h",
+    "status": "retained"
+  },
+  {
+    "icon": "drive-harddisk",
+    "object": "apps/desktop/catalog.h:drive-harddisk",
+    "previous": "drive-harddisk",
+    "previous_derived_sizes": [
+      48
+    ],
+    "previous_missing_runtime_sizes": [],
+    "source": "apps/desktop/catalog.h",
+    "status": "retained"
+  },
+  {
+    "icon": "edit-paste",
+    "object": "apps/desktop/catalog.h:edit-paste",
+    "previous": "edit-paste",
+    "previous_derived_sizes": [
+      48
+    ],
+    "previous_missing_runtime_sizes": [],
+    "source": "apps/desktop/catalog.h",
+    "status": "retained"
+  },
+  {
+    "icon": "emblem-favorite",
+    "object": "apps/desktop/catalog.h:emblem-favorite",
+    "previous": "emblem-favorite",
+    "previous_derived_sizes": [
+      48
+    ],
+    "previous_missing_runtime_sizes": [],
+    "source": "apps/desktop/catalog.h",
+    "status": "retained"
+  },
+  {
+    "icon": "haiku-clock",
+    "object": "apps/desktop/catalog.h:haiku-clock",
+    "previous": "haiku-clock",
+    "previous_derived_sizes": [],
+    "previous_missing_runtime_sizes": [],
+    "source": "apps/desktop/catalog.h",
+    "status": "retained"
+  },
+  {
+    "icon": "haiku-log-viewer",
+    "object": "apps/desktop/catalog.h:haiku-log-viewer",
+    "previous": "haiku-log-viewer",
+    "previous_derived_sizes": [],
+    "previous_missing_runtime_sizes": [],
+    "source": "apps/desktop/catalog.h",
+    "status": "retained"
+  },
+  {
+    "icon": "haiku-mines",
+    "object": "apps/desktop/catalog.h:haiku-mines",
+    "previous": "haiku-mines",
+    "previous_derived_sizes": [],
+    "previous_missing_runtime_sizes": [],
+    "source": "apps/desktop/catalog.h",
+    "status": "retained"
+  },
+  {
+    "icon": "haiku-registry",
+    "object": "apps/desktop/catalog.h:haiku-registry",
+    "previous": "haiku-registry",
+    "previous_derived_sizes": [],
+    "previous_missing_runtime_sizes": [],
+    "source": "apps/desktop/catalog.h",
+    "status": "retained"
+  },
+  {
+    "icon": "haiku-resource-meter",
+    "object": "apps/desktop/catalog.h:haiku-resource-meter",
+    "previous": "haiku-resource-meter",
+    "previous_derived_sizes": [],
+    "previous_missing_runtime_sizes": [],
+    "source": "apps/desktop/catalog.h",
+    "status": "retained"
+  },
+  {
+    "icon": "haiku-serial",
+    "object": "apps/desktop/catalog.h:haiku-serial",
+    "previous": "haiku-serial",
+    "previous_derived_sizes": [],
+    "previous_missing_runtime_sizes": [],
+    "source": "apps/desktop/catalog.h",
+    "status": "retained"
+  },
+  {
+    "icon": "haiku-system-info",
+    "object": "apps/desktop/catalog.h:haiku-system-info",
+    "previous": "haiku-system-info",
+    "previous_derived_sizes": [],
+    "previous_missing_runtime_sizes": [],
+    "source": "apps/desktop/catalog.h",
+    "status": "retained"
+  },
+  {
+    "icon": "haiku-system-monitor",
+    "object": "apps/desktop/catalog.h:haiku-system-monitor",
+    "previous": "haiku-system-monitor",
+    "previous_derived_sizes": [],
+    "previous_missing_runtime_sizes": [],
+    "source": "apps/desktop/catalog.h",
+    "status": "retained"
+  },
+  {
+    "icon": "help-browser",
+    "object": "apps/desktop/catalog.h:help-browser",
+    "previous": "help-browser",
+    "previous_derived_sizes": [
+      48
+    ],
+    "previous_missing_runtime_sizes": [],
+    "source": "apps/desktop/catalog.h",
+    "status": "retained"
+  },
+  {
+    "icon": "image-x-generic",
+    "object": "apps/desktop/catalog.h:image-x-generic",
+    "previous": "image-x-generic",
+    "previous_derived_sizes": [
+      48
+    ],
+    "previous_missing_runtime_sizes": [],
+    "source": "apps/desktop/catalog.h",
+    "status": "retained"
+  },
+  {
+    "icon": "input-gaming",
+    "object": "apps/desktop/catalog.h:input-gaming",
+    "previous": "input-gaming",
+    "previous_derived_sizes": [
+      48
+    ],
+    "previous_missing_runtime_sizes": [],
+    "source": "apps/desktop/catalog.h",
+    "status": "retained"
+  },
+  {
+    "icon": "internet-web-browser",
+    "object": "apps/desktop/catalog.h:internet-web-browser",
+    "previous": "internet-web-browser",
+    "previous_derived_sizes": [
+      48
+    ],
+    "previous_missing_runtime_sizes": [],
+    "source": "apps/desktop/catalog.h",
+    "status": "retained"
+  },
+  {
+    "icon": "preferences-desktop-peripherals",
+    "object": "apps/desktop/catalog.h:preferences-desktop-peripherals",
+    "previous": "preferences-desktop-peripherals",
+    "previous_derived_sizes": [
+      48
+    ],
+    "previous_missing_runtime_sizes": [],
+    "source": "apps/desktop/catalog.h",
+    "status": "retained"
+  },
+  {
+    "icon": "preferences-system",
+    "object": "apps/desktop/catalog.h:preferences-system",
+    "previous": "preferences-system",
+    "previous_derived_sizes": [
+      48
+    ],
+    "previous_missing_runtime_sizes": [],
+    "source": "apps/desktop/catalog.h",
+    "status": "retained"
+  },
+  {
+    "icon": "printer",
+    "object": "apps/desktop/catalog.h:printer",
+    "previous": "printer",
+    "previous_derived_sizes": [
+      48
+    ],
+    "previous_missing_runtime_sizes": [],
+    "source": "apps/desktop/catalog.h",
+    "status": "retained"
+  },
+  {
+    "icon": "video-display",
+    "object": "apps/desktop/catalog.h:video-display",
+    "previous": "video-display",
+    "previous_derived_sizes": [
+      48
+    ],
+    "previous_missing_runtime_sizes": [],
+    "source": "apps/desktop/catalog.h",
+    "status": "retained"
+  },
+  {
+    "icon": "x-office-calendar",
+    "object": "apps/desktop/catalog.h:x-office-calendar",
+    "previous": "x-office-calendar",
+    "previous_derived_sizes": [
+      48
+    ],
+    "previous_missing_runtime_sizes": [],
+    "source": "apps/desktop/catalog.h",
+    "status": "retained"
+  },
+  {
+    "icon": "x-office-document",
+    "object": "apps/desktop/catalog.h:x-office-document",
+    "previous": "x-office-document",
+    "previous_derived_sizes": [
+      48
+    ],
+    "previous_missing_runtime_sizes": [],
+    "source": "apps/desktop/catalog.h",
+    "status": "retained"
+  },
+  {
+    "icon": "ciuki",
+    "object": "apps/desktop/desktop.c:ciuki",
+    "previous": "ciuki",
+    "previous_derived_sizes": [],
+    "previous_missing_runtime_sizes": [],
+    "source": "apps/desktop/desktop.c",
+    "status": "retained"
+  },
+  {
+    "icon": "ciuki",
+    "object": "apps/desktop/logon.inc:ciuki",
+    "previous": "ciuki",
+    "previous_derived_sizes": [],
+    "previous_missing_runtime_sizes": [],
+    "source": "apps/desktop/logon.inc",
+    "status": "retained"
+  },
+  {
+    "icon": "audio-card",
+    "object": "apps/desktop/settings_catalog.h:audio-card",
+    "previous": "audio-card",
+    "previous_derived_sizes": [
+      48
+    ],
+    "previous_missing_runtime_sizes": [],
+    "source": "apps/desktop/settings_catalog.h",
+    "status": "retained"
+  },
+  {
+    "icon": "ciuki",
+    "object": "apps/desktop/settings_catalog.h:ciuki",
+    "previous": "ciuki",
+    "previous_derived_sizes": [],
+    "previous_missing_runtime_sizes": [],
+    "source": "apps/desktop/settings_catalog.h",
+    "status": "retained"
+  },
+  {
+    "icon": "drive-removable-media",
+    "object": "apps/desktop/settings_catalog.h:drive-removable-media",
+    "previous": "drive-removable-media",
+    "previous_derived_sizes": [
+      48
+    ],
+    "previous_missing_runtime_sizes": [],
+    "source": "apps/desktop/settings_catalog.h",
+    "status": "retained"
+  },
+  {
+    "icon": "input-gaming",
+    "object": "apps/desktop/settings_catalog.h:input-gaming",
+    "previous": "input-gaming",
+    "previous_derived_sizes": [
+      48
+    ],
+    "previous_missing_runtime_sizes": [],
+    "source": "apps/desktop/settings_catalog.h",
+    "status": "retained"
+  },
+  {
+    "icon": "input-keyboard",
+    "object": "apps/desktop/settings_catalog.h:input-keyboard",
+    "previous": "input-keyboard",
+    "previous_derived_sizes": [
+      48
+    ],
+    "previous_missing_runtime_sizes": [],
+    "source": "apps/desktop/settings_catalog.h",
+    "status": "retained"
+  },
+  {
+    "icon": "input-mouse",
+    "object": "apps/desktop/settings_catalog.h:input-mouse",
+    "previous": "input-mouse",
+    "previous_derived_sizes": [
+      48
+    ],
+    "previous_missing_runtime_sizes": [],
+    "source": "apps/desktop/settings_catalog.h",
+    "status": "retained"
+  },
+  {
+    "icon": "internet-web-browser",
+    "object": "apps/desktop/settings_catalog.h:internet-web-browser",
+    "previous": "internet-web-browser",
+    "previous_derived_sizes": [
+      48
+    ],
+    "previous_missing_runtime_sizes": [],
+    "source": "apps/desktop/settings_catalog.h",
+    "status": "retained"
+  },
+  {
+    "icon": "network-wired",
+    "object": "apps/desktop/settings_catalog.h:network-wired",
+    "previous": "network-wired",
+    "previous_derived_sizes": [
+      48
+    ],
+    "previous_missing_runtime_sizes": [],
+    "source": "apps/desktop/settings_catalog.h",
+    "status": "retained"
+  },
+  {
+    "icon": "office-calendar",
+    "object": "apps/desktop/settings_catalog.h:office-calendar",
+    "previous": "office-calendar",
+    "previous_derived_sizes": [
+      48
+    ],
+    "previous_missing_runtime_sizes": [],
+    "source": "apps/desktop/settings_catalog.h",
+    "status": "retained"
+  },
+  {
+    "icon": "preferences-desktop-accessibility",
+    "object": "apps/desktop/settings_catalog.h:preferences-desktop-accessibility",
+    "previous": "preferences-desktop-accessibility",
+    "previous_derived_sizes": [
+      48
+    ],
+    "previous_missing_runtime_sizes": [],
+    "source": "apps/desktop/settings_catalog.h",
+    "status": "retained"
+  },
+  {
+    "icon": "preferences-desktop-locale",
+    "object": "apps/desktop/settings_catalog.h:preferences-desktop-locale",
+    "previous": "preferences-desktop-locale",
+    "previous_derived_sizes": [
+      48
+    ],
+    "previous_missing_runtime_sizes": [],
+    "source": "apps/desktop/settings_catalog.h",
+    "status": "retained"
+  },
+  {
+    "icon": "preferences-desktop-multimedia",
+    "object": "apps/desktop/settings_catalog.h:preferences-desktop-multimedia",
+    "previous": "preferences-desktop-multimedia",
+    "previous_derived_sizes": [
+      48
+    ],
+    "previous_missing_runtime_sizes": [],
+    "source": "apps/desktop/settings_catalog.h",
+    "status": "retained"
+  },
+  {
+    "icon": "preferences-desktop-peripherals",
+    "object": "apps/desktop/settings_catalog.h:preferences-desktop-peripherals",
+    "previous": "preferences-desktop-peripherals",
+    "previous_derived_sizes": [
+      48
+    ],
+    "previous_missing_runtime_sizes": [],
+    "source": "apps/desktop/settings_catalog.h",
+    "status": "retained"
+  },
+  {
+    "icon": "preferences-desktop-theme",
+    "object": "apps/desktop/settings_catalog.h:preferences-desktop-theme",
+    "previous": "preferences-desktop-theme",
+    "previous_derived_sizes": [
+      48
+    ],
+    "previous_missing_runtime_sizes": [],
+    "source": "apps/desktop/settings_catalog.h",
+    "status": "retained"
+  },
+  {
+    "icon": "preferences-desktop-wallpaper",
+    "object": "apps/desktop/settings_catalog.h:preferences-desktop-wallpaper",
+    "previous": "preferences-desktop-wallpaper",
+    "previous_derived_sizes": [
+      48
+    ],
+    "previous_missing_runtime_sizes": [],
+    "source": "apps/desktop/settings_catalog.h",
+    "status": "retained"
+  },
+  {
+    "icon": "preferences-system-windows",
+    "object": "apps/desktop/settings_catalog.h:preferences-system-windows",
+    "previous": "preferences-system-windows",
+    "previous_derived_sizes": [
+      48
+    ],
+    "previous_missing_runtime_sizes": [],
+    "source": "apps/desktop/settings_catalog.h",
+    "status": "retained"
+  },
+  {
+    "icon": "system-installer",
+    "object": "apps/desktop/settings_catalog.h:system-installer",
+    "previous": "system-installer",
+    "previous_derived_sizes": [
+      48
+    ],
+    "previous_missing_runtime_sizes": [],
+    "source": "apps/desktop/settings_catalog.h",
+    "status": "retained"
+  },
+  {
+    "icon": "system-shutdown",
+    "object": "apps/desktop/settings_catalog.h:system-shutdown",
+    "previous": "system-shutdown",
+    "previous_derived_sizes": [
+      48
+    ],
+    "previous_missing_runtime_sizes": [],
+    "source": "apps/desktop/settings_catalog.h",
+    "status": "retained"
+  },
+  {
+    "icon": "system-users",
+    "object": "apps/desktop/settings_catalog.h:system-users",
+    "previous": "system-users",
+    "previous_derived_sizes": [
+      48
+    ],
+    "previous_missing_runtime_sizes": [],
+    "source": "apps/desktop/settings_catalog.h",
+    "status": "retained"
+  },
+  {
+    "icon": "accessories-calculator",
+    "object": "apps/desktop/shell.c:accessories-calculator",
+    "previous": "accessories-calculator",
+    "previous_derived_sizes": [
+      48
+    ],
+    "previous_missing_runtime_sizes": [],
+    "source": "apps/desktop/shell.c",
+    "status": "retained"
+  },
+  {
+    "icon": "accessories-character-map",
+    "object": "apps/desktop/shell.c:accessories-character-map",
+    "previous": "accessories-character-map",
+    "previous_derived_sizes": [
+      48
+    ],
+    "previous_missing_runtime_sizes": [],
+    "source": "apps/desktop/shell.c",
+    "status": "retained"
+  },
+  {
+    "icon": "accessories-text-editor",
+    "object": "apps/desktop/shell.c:accessories-text-editor",
+    "previous": "accessories-text-editor",
+    "previous_derived_sizes": [
+      48
+    ],
+    "previous_missing_runtime_sizes": [],
+    "source": "apps/desktop/shell.c",
+    "status": "retained"
+  },
+  {
+    "icon": "application-x-executable",
+    "object": "apps/desktop/shell.c:application-x-executable",
+    "previous": "application-x-executable",
+    "previous_derived_sizes": [
+      48
+    ],
+    "previous_missing_runtime_sizes": [],
+    "source": "apps/desktop/shell.c",
+    "status": "retained"
+  },
+  {
+    "icon": "applications-development",
+    "object": "apps/desktop/shell.c:applications-development",
+    "previous": "applications-development",
+    "previous_derived_sizes": [
+      48
+    ],
+    "previous_missing_runtime_sizes": [],
+    "source": "apps/desktop/shell.c",
+    "status": "retained"
+  },
+  {
+    "icon": "applications-games",
+    "object": "apps/desktop/shell.c:applications-games",
+    "previous": "applications-games",
+    "previous_derived_sizes": [
+      48
+    ],
+    "previous_missing_runtime_sizes": [],
+    "source": "apps/desktop/shell.c",
+    "status": "retained"
+  },
+  {
+    "icon": "applications-graphics",
+    "object": "apps/desktop/shell.c:applications-graphics",
+    "previous": "applications-graphics",
+    "previous_derived_sizes": [
+      48
+    ],
+    "previous_missing_runtime_sizes": [],
+    "source": "apps/desktop/shell.c",
+    "status": "retained"
+  },
+  {
+    "icon": "applications-other",
+    "object": "apps/desktop/shell.c:applications-other",
+    "previous": "applications-other",
+    "previous_derived_sizes": [
+      48
+    ],
+    "previous_missing_runtime_sizes": [],
+    "source": "apps/desktop/shell.c",
+    "status": "retained"
+  },
+  {
+    "icon": "applications-system",
+    "object": "apps/desktop/shell.c:applications-system",
+    "previous": "applications-system",
+    "previous_derived_sizes": [
+      48
+    ],
+    "previous_missing_runtime_sizes": [],
+    "source": "apps/desktop/shell.c",
+    "status": "retained"
+  },
+  {
+    "icon": "audio-card",
+    "object": "apps/desktop/shell.c:audio-card",
+    "previous": "audio-card",
+    "previous_derived_sizes": [
+      48
+    ],
+    "previous_missing_runtime_sizes": [],
+    "source": "apps/desktop/shell.c",
+    "status": "retained"
+  },
+  {
+    "icon": "audio-volume-high",
+    "object": "apps/desktop/shell.c:audio-volume-high",
+    "previous": "audio-volume-high",
+    "previous_derived_sizes": [
+      48
+    ],
+    "previous_missing_runtime_sizes": [],
+    "source": "apps/desktop/shell.c",
+    "status": "retained"
+  },
+  {
+    "icon": "audio-volume-muted",
+    "object": "apps/desktop/shell.c:audio-volume-muted",
+    "previous": "audio-volume-muted",
+    "previous_derived_sizes": [
+      48
+    ],
+    "previous_missing_runtime_sizes": [],
+    "source": "apps/desktop/shell.c",
+    "status": "retained"
+  },
+  {
+    "icon": "audio-x-generic",
+    "object": "apps/desktop/shell.c:audio-x-generic",
+    "previous": "audio-x-generic",
+    "previous_derived_sizes": [
+      48
+    ],
+    "previous_missing_runtime_sizes": [],
+    "source": "apps/desktop/shell.c",
+    "status": "retained"
+  },
+  {
+    "icon": "battery",
+    "object": "apps/desktop/shell.c:battery",
+    "previous": "battery",
+    "previous_derived_sizes": [
+      48
+    ],
+    "previous_missing_runtime_sizes": [],
+    "source": "apps/desktop/shell.c",
+    "status": "retained"
+  },
+  {
+    "icon": "battery-caution",
+    "object": "apps/desktop/shell.c:battery-caution",
+    "previous": "battery-caution",
+    "previous_derived_sizes": [
+      48
+    ],
+    "previous_missing_runtime_sizes": [],
+    "source": "apps/desktop/shell.c",
+    "status": "retained"
+  },
+  {
+    "icon": "ciuki",
+    "object": "apps/desktop/shell.c:ciuki",
+    "previous": "ciuki",
+    "previous_derived_sizes": [],
+    "previous_missing_runtime_sizes": [],
+    "source": "apps/desktop/shell.c",
+    "status": "retained"
+  },
+  {
+    "icon": "ciuki-computer",
+    "object": "apps/desktop/shell.c:ciuki-computer",
+    "previous": "ciuki-computer",
+    "previous_derived_sizes": [],
+    "previous_missing_runtime_sizes": [],
+    "source": "apps/desktop/shell.c",
+    "status": "retained"
+  },
+  {
+    "icon": "computer",
+    "object": "apps/desktop/shell.c:computer",
+    "previous": "computer",
+    "previous_derived_sizes": [
+      48
+    ],
+    "previous_missing_runtime_sizes": [],
+    "source": "apps/desktop/shell.c",
+    "status": "retained"
+  },
+  {
+    "icon": "dialog-error",
+    "object": "apps/desktop/shell.c:dialog-error",
+    "previous": "dialog-error",
+    "previous_derived_sizes": [
+      48
+    ],
+    "previous_missing_runtime_sizes": [],
+    "source": "apps/desktop/shell.c",
+    "status": "retained"
+  },
+  {
+    "icon": "dialog-information",
+    "object": "apps/desktop/shell.c:dialog-information",
+    "previous": "dialog-information",
+    "previous_derived_sizes": [
+      48
+    ],
+    "previous_missing_runtime_sizes": [],
+    "source": "apps/desktop/shell.c",
+    "status": "retained"
+  },
+  {
+    "icon": "dialog-warning",
+    "object": "apps/desktop/shell.c:dialog-warning",
+    "previous": "dialog-warning",
+    "previous_derived_sizes": [
+      48
+    ],
+    "previous_missing_runtime_sizes": [],
+    "source": "apps/desktop/shell.c",
+    "status": "retained"
+  },
+  {
+    "icon": "document-new",
+    "object": "apps/desktop/shell.c:document-new",
+    "previous": "document-new",
+    "previous_derived_sizes": [
+      48
+    ],
+    "previous_missing_runtime_sizes": [],
+    "source": "apps/desktop/shell.c",
+    "status": "retained"
+  },
+  {
+    "icon": "document-open",
+    "object": "apps/desktop/shell.c:document-open",
+    "previous": "document-open",
+    "previous_derived_sizes": [
+      48
+    ],
+    "previous_missing_runtime_sizes": [],
+    "source": "apps/desktop/shell.c",
+    "status": "retained"
+  },
+  {
+    "icon": "document-properties",
+    "object": "apps/desktop/shell.c:document-properties",
+    "previous": "document-properties",
+    "previous_derived_sizes": [
+      48
+    ],
+    "previous_missing_runtime_sizes": [],
+    "source": "apps/desktop/shell.c",
+    "status": "retained"
+  },
+  {
+    "icon": "drive-harddisk",
+    "object": "apps/desktop/shell.c:drive-harddisk",
+    "previous": "drive-harddisk",
+    "previous_derived_sizes": [
+      48
+    ],
+    "previous_missing_runtime_sizes": [],
+    "source": "apps/desktop/shell.c",
+    "status": "retained"
+  },
+  {
+    "icon": "drive-removable-media",
+    "object": "apps/desktop/shell.c:drive-removable-media",
+    "previous": "drive-removable-media",
+    "previous_derived_sizes": [
+      48
+    ],
+    "previous_missing_runtime_sizes": [],
+    "source": "apps/desktop/shell.c",
+    "status": "retained"
+  },
+  {
+    "icon": "edit-copy",
+    "object": "apps/desktop/shell.c:edit-copy",
+    "previous": "edit-copy",
+    "previous_derived_sizes": [
+      48
+    ],
+    "previous_missing_runtime_sizes": [],
+    "source": "apps/desktop/shell.c",
+    "status": "retained"
+  },
+  {
+    "icon": "edit-cut",
+    "object": "apps/desktop/shell.c:edit-cut",
+    "previous": "edit-cut",
+    "previous_derived_sizes": [
+      48
+    ],
+    "previous_missing_runtime_sizes": [],
+    "source": "apps/desktop/shell.c",
+    "status": "retained"
+  },
+  {
+    "icon": "edit-delete",
+    "object": "apps/desktop/shell.c:edit-delete",
+    "previous": "edit-delete",
+    "previous_derived_sizes": [
+      48
+    ],
+    "previous_missing_runtime_sizes": [],
+    "source": "apps/desktop/shell.c",
+    "status": "retained"
+  },
+  {
+    "icon": "edit-paste",
+    "object": "apps/desktop/shell.c:edit-paste",
+    "previous": "edit-paste",
+    "previous_derived_sizes": [
+      48
+    ],
+    "previous_missing_runtime_sizes": [],
+    "source": "apps/desktop/shell.c",
+    "status": "retained"
+  },
+  {
+    "icon": "edit-undo",
+    "object": "apps/desktop/shell.c:edit-undo",
+    "previous": "edit-undo",
+    "previous_derived_sizes": [
+      48
+    ],
+    "previous_missing_runtime_sizes": [],
+    "source": "apps/desktop/shell.c",
+    "status": "retained"
+  },
+  {
+    "icon": "emblem-favorite",
+    "object": "apps/desktop/shell.c:emblem-favorite",
+    "previous": "emblem-favorite",
+    "previous_derived_sizes": [
+      48
+    ],
+    "previous_missing_runtime_sizes": [],
+    "source": "apps/desktop/shell.c",
+    "status": "retained"
+  },
+  {
+    "icon": "emblem-symbolic-link",
+    "object": "apps/desktop/shell.c:emblem-symbolic-link",
+    "previous": "emblem-symbolic-link",
+    "previous_derived_sizes": [
+      48
+    ],
+    "previous_missing_runtime_sizes": [],
+    "source": "apps/desktop/shell.c",
+    "status": "retained"
+  },
+  {
+    "icon": "face-wink",
+    "object": "apps/desktop/shell.c:face-wink",
+    "previous": "face-wink",
+    "previous_derived_sizes": [
+      48
+    ],
+    "previous_missing_runtime_sizes": [],
+    "source": "apps/desktop/shell.c",
+    "status": "retained"
+  },
+  {
+    "icon": "folder",
+    "object": "apps/desktop/shell.c:folder",
+    "previous": "folder",
+    "previous_derived_sizes": [
+      48
+    ],
+    "previous_missing_runtime_sizes": [],
+    "source": "apps/desktop/shell.c",
+    "status": "retained"
+  },
+  {
+    "icon": "folder-new",
+    "object": "apps/desktop/shell.c:folder-new",
+    "previous": "folder-new",
+    "previous_derived_sizes": [
+      48
+    ],
+    "previous_missing_runtime_sizes": [],
+    "source": "apps/desktop/shell.c",
+    "status": "retained"
+  },
+  {
+    "icon": "go-jump",
+    "object": "apps/desktop/shell.c:go-jump",
+    "previous": "go-jump",
+    "previous_derived_sizes": [
+      48
+    ],
+    "previous_missing_runtime_sizes": [],
+    "source": "apps/desktop/shell.c",
+    "status": "retained"
+  },
+  {
+    "icon": "go-up",
+    "object": "apps/desktop/shell.c:go-up",
+    "previous": "go-up",
+    "previous_derived_sizes": [
+      48
+    ],
+    "previous_missing_runtime_sizes": [],
+    "source": "apps/desktop/shell.c",
+    "status": "retained"
+  },
+  {
+    "icon": "haiku-clock",
+    "object": "apps/desktop/shell.c:haiku-clock",
+    "previous": "haiku-clock",
+    "previous_derived_sizes": [],
+    "previous_missing_runtime_sizes": [],
+    "source": "apps/desktop/shell.c",
+    "status": "retained"
+  },
+  {
+    "icon": "haiku-log-viewer",
+    "object": "apps/desktop/shell.c:haiku-log-viewer",
+    "previous": "haiku-log-viewer",
+    "previous_derived_sizes": [],
+    "previous_missing_runtime_sizes": [],
+    "source": "apps/desktop/shell.c",
+    "status": "retained"
+  },
+  {
+    "icon": "haiku-mines",
+    "object": "apps/desktop/shell.c:haiku-mines",
+    "previous": "haiku-mines",
+    "previous_derived_sizes": [],
+    "previous_missing_runtime_sizes": [],
+    "source": "apps/desktop/shell.c",
+    "status": "retained"
+  },
+  {
+    "icon": "haiku-registry",
+    "object": "apps/desktop/shell.c:haiku-registry",
+    "previous": "haiku-registry",
+    "previous_derived_sizes": [],
+    "previous_missing_runtime_sizes": [],
+    "source": "apps/desktop/shell.c",
+    "status": "retained"
+  },
+  {
+    "icon": "haiku-resource-meter",
+    "object": "apps/desktop/shell.c:haiku-resource-meter",
+    "previous": "haiku-resource-meter",
+    "previous_derived_sizes": [],
+    "previous_missing_runtime_sizes": [],
+    "source": "apps/desktop/shell.c",
+    "status": "retained"
+  },
+  {
+    "icon": "haiku-serial",
+    "object": "apps/desktop/shell.c:haiku-serial",
+    "previous": "haiku-serial",
+    "previous_derived_sizes": [],
+    "previous_missing_runtime_sizes": [],
+    "source": "apps/desktop/shell.c",
+    "status": "retained"
+  },
+  {
+    "icon": "haiku-system-info",
+    "object": "apps/desktop/shell.c:haiku-system-info",
+    "previous": "haiku-system-info",
+    "previous_derived_sizes": [],
+    "previous_missing_runtime_sizes": [],
+    "source": "apps/desktop/shell.c",
+    "status": "retained"
+  },
+  {
+    "icon": "haiku-system-monitor",
+    "object": "apps/desktop/shell.c:haiku-system-monitor",
+    "previous": "haiku-system-monitor",
+    "previous_derived_sizes": [],
+    "previous_missing_runtime_sizes": [],
+    "source": "apps/desktop/shell.c",
+    "status": "retained"
+  },
+  {
+    "icon": "help-browser",
+    "object": "apps/desktop/shell.c:help-browser",
+    "previous": "help-browser",
+    "previous_derived_sizes": [
+      48
+    ],
+    "previous_missing_runtime_sizes": [],
+    "source": "apps/desktop/shell.c",
+    "status": "retained"
+  },
+  {
+    "icon": "image-x-generic",
+    "object": "apps/desktop/shell.c:image-x-generic",
+    "previous": "image-x-generic",
+    "previous_derived_sizes": [
+      48
+    ],
+    "previous_missing_runtime_sizes": [],
+    "source": "apps/desktop/shell.c",
+    "status": "retained"
+  },
+  {
+    "icon": "input-gaming",
+    "object": "apps/desktop/shell.c:input-gaming",
+    "previous": "input-gaming",
+    "previous_derived_sizes": [
+      48
+    ],
+    "previous_missing_runtime_sizes": [],
+    "source": "apps/desktop/shell.c",
+    "status": "retained"
+  },
+  {
+    "icon": "input-keyboard",
+    "object": "apps/desktop/shell.c:input-keyboard",
+    "previous": "input-keyboard",
+    "previous_derived_sizes": [
+      48
+    ],
+    "previous_missing_runtime_sizes": [],
+    "source": "apps/desktop/shell.c",
+    "status": "retained"
+  },
+  {
+    "icon": "input-mouse",
+    "object": "apps/desktop/shell.c:input-mouse",
+    "previous": "input-mouse",
+    "previous_derived_sizes": [
+      48
+    ],
+    "previous_missing_runtime_sizes": [],
+    "source": "apps/desktop/shell.c",
+    "status": "retained"
+  },
+  {
+    "icon": "internet-web-browser",
+    "object": "apps/desktop/shell.c:internet-web-browser",
+    "previous": "internet-web-browser",
+    "previous_derived_sizes": [
+      48
+    ],
+    "previous_missing_runtime_sizes": [],
+    "source": "apps/desktop/shell.c",
+    "status": "retained"
+  },
+  {
+    "icon": "media-floppy",
+    "object": "apps/desktop/shell.c:media-floppy",
+    "previous": "media-floppy",
+    "previous_derived_sizes": [
+      48
+    ],
+    "previous_missing_runtime_sizes": [],
+    "source": "apps/desktop/shell.c",
+    "status": "retained"
+  },
+  {
+    "icon": "media-optical",
+    "object": "apps/desktop/shell.c:media-optical",
+    "previous": "media-optical",
+    "previous_derived_sizes": [
+      48
+    ],
+    "previous_missing_runtime_sizes": [],
+    "source": "apps/desktop/shell.c",
+    "status": "retained"
+  },
+  {
+    "icon": "network-error",
+    "object": "apps/desktop/shell.c:network-error",
+    "previous": "network-error",
+    "previous_derived_sizes": [
+      48
+    ],
+    "previous_missing_runtime_sizes": [],
+    "source": "apps/desktop/shell.c",
+    "status": "retained"
+  },
+  {
+    "icon": "network-offline",
+    "object": "apps/desktop/shell.c:network-offline",
+    "previous": "network-offline",
+    "previous_derived_sizes": [
+      48
+    ],
+    "previous_missing_runtime_sizes": [],
+    "source": "apps/desktop/shell.c",
+    "status": "retained"
+  },
+  {
+    "icon": "network-wired",
+    "object": "apps/desktop/shell.c:network-wired",
+    "previous": "network-wired",
+    "previous_derived_sizes": [
+      48
+    ],
+    "previous_missing_runtime_sizes": [],
+    "source": "apps/desktop/shell.c",
+    "status": "retained"
+  },
+  {
+    "icon": "network-workgroup",
+    "object": "apps/desktop/shell.c:network-workgroup",
+    "previous": "network-workgroup",
+    "previous_derived_sizes": [
+      48
+    ],
+    "previous_missing_runtime_sizes": [],
+    "source": "apps/desktop/shell.c",
+    "status": "retained"
+  },
+  {
+    "icon": "office-calendar",
+    "object": "apps/desktop/shell.c:office-calendar",
+    "previous": "office-calendar",
+    "previous_derived_sizes": [
+      48
+    ],
+    "previous_missing_runtime_sizes": [],
+    "source": "apps/desktop/shell.c",
+    "status": "retained"
+  },
+  {
+    "icon": "package-x-generic",
+    "object": "apps/desktop/shell.c:package-x-generic",
+    "previous": "package-x-generic",
+    "previous_derived_sizes": [
+      48
+    ],
+    "previous_missing_runtime_sizes": [],
+    "source": "apps/desktop/shell.c",
+    "status": "retained"
+  },
+  {
+    "icon": "preferences-desktop",
+    "object": "apps/desktop/shell.c:preferences-desktop",
+    "previous": "preferences-desktop",
+    "previous_derived_sizes": [
+      48
+    ],
+    "previous_missing_runtime_sizes": [],
+    "source": "apps/desktop/shell.c",
+    "status": "retained"
+  },
+  {
+    "icon": "preferences-desktop-accessibility",
+    "object": "apps/desktop/shell.c:preferences-desktop-accessibility",
+    "previous": "preferences-desktop-accessibility",
+    "previous_derived_sizes": [
+      48
+    ],
+    "previous_missing_runtime_sizes": [],
+    "source": "apps/desktop/shell.c",
+    "status": "retained"
+  },
+  {
+    "icon": "preferences-desktop-keyboard-shortcuts",
+    "object": "apps/desktop/shell.c:preferences-desktop-keyboard-shortcuts",
+    "previous": "preferences-desktop-keyboard-shortcuts",
+    "previous_derived_sizes": [
+      48
+    ],
+    "previous_missing_runtime_sizes": [],
+    "source": "apps/desktop/shell.c",
+    "status": "retained"
+  },
+  {
+    "icon": "preferences-desktop-peripherals",
+    "object": "apps/desktop/shell.c:preferences-desktop-peripherals",
+    "previous": "preferences-desktop-peripherals",
+    "previous_derived_sizes": [
+      48
+    ],
+    "previous_missing_runtime_sizes": [],
+    "source": "apps/desktop/shell.c",
+    "status": "retained"
+  },
+  {
+    "icon": "preferences-desktop-wallpaper",
+    "object": "apps/desktop/shell.c:preferences-desktop-wallpaper",
+    "previous": "preferences-desktop-wallpaper",
+    "previous_derived_sizes": [
+      48
+    ],
+    "previous_missing_runtime_sizes": [],
+    "source": "apps/desktop/shell.c",
+    "status": "retained"
+  },
+  {
+    "icon": "preferences-system",
+    "object": "apps/desktop/shell.c:preferences-system",
+    "previous": "preferences-system",
+    "previous_derived_sizes": [
+      48
+    ],
+    "previous_missing_runtime_sizes": [],
+    "source": "apps/desktop/shell.c",
+    "status": "retained"
+  },
+  {
+    "icon": "preferences-system-windows",
+    "object": "apps/desktop/shell.c:preferences-system-windows",
+    "previous": "preferences-system-windows",
+    "previous_derived_sizes": [
+      48
+    ],
+    "previous_missing_runtime_sizes": [],
+    "source": "apps/desktop/shell.c",
+    "status": "retained"
+  },
+  {
+    "icon": "printer",
+    "object": "apps/desktop/shell.c:printer",
+    "previous": "printer",
+    "previous_derived_sizes": [
+      48
+    ],
+    "previous_missing_runtime_sizes": [],
+    "source": "apps/desktop/shell.c",
+    "status": "retained"
+  },
+  {
+    "icon": "process-stop",
+    "object": "apps/desktop/shell.c:process-stop",
+    "previous": "process-stop",
+    "previous_derived_sizes": [
+      48
+    ],
+    "previous_missing_runtime_sizes": [],
+    "source": "apps/desktop/shell.c",
+    "status": "retained"
+  },
+  {
+    "icon": "system-file-manager",
+    "object": "apps/desktop/shell.c:system-file-manager",
+    "previous": "system-file-manager",
+    "previous_derived_sizes": [
+      48
+    ],
+    "previous_missing_runtime_sizes": [],
+    "source": "apps/desktop/shell.c",
+    "status": "retained"
+  },
+  {
+    "icon": "system-lock-screen",
+    "object": "apps/desktop/shell.c:system-lock-screen",
+    "previous": "system-lock-screen",
+    "previous_derived_sizes": [
+      48
+    ],
+    "previous_missing_runtime_sizes": [],
+    "source": "apps/desktop/shell.c",
+    "status": "retained"
+  },
+  {
+    "icon": "system-log-out",
+    "object": "apps/desktop/shell.c:system-log-out",
+    "previous": "system-log-out",
+    "previous_derived_sizes": [
+      48
+    ],
+    "previous_missing_runtime_sizes": [],
+    "source": "apps/desktop/shell.c",
+    "status": "retained"
+  },
+  {
+    "icon": "system-search",
+    "object": "apps/desktop/shell.c:system-search",
+    "previous": "system-search",
+    "previous_derived_sizes": [
+      48
+    ],
+    "previous_missing_runtime_sizes": [],
+    "source": "apps/desktop/shell.c",
+    "status": "retained"
+  },
+  {
+    "icon": "system-shutdown",
+    "object": "apps/desktop/shell.c:system-shutdown",
+    "previous": "system-shutdown",
+    "previous_derived_sizes": [
+      48
+    ],
+    "previous_missing_runtime_sizes": [],
+    "source": "apps/desktop/shell.c",
+    "status": "retained"
+  },
+  {
+    "icon": "system-users",
+    "object": "apps/desktop/shell.c:system-users",
+    "previous": "system-users",
+    "previous_derived_sizes": [
+      48
+    ],
+    "previous_missing_runtime_sizes": [],
+    "source": "apps/desktop/shell.c",
+    "status": "retained"
+  },
+  {
+    "icon": "text-x-generic",
+    "object": "apps/desktop/shell.c:text-x-generic",
+    "previous": "text-x-generic",
+    "previous_derived_sizes": [
+      48
+    ],
+    "previous_missing_runtime_sizes": [],
+    "source": "apps/desktop/shell.c",
+    "status": "retained"
+  },
+  {
+    "icon": "text-x-script",
+    "object": "apps/desktop/shell.c:text-x-script",
+    "previous": "text-x-script",
+    "previous_derived_sizes": [
+      48
+    ],
+    "previous_missing_runtime_sizes": [],
+    "source": "apps/desktop/shell.c",
+    "status": "retained"
+  },
+  {
+    "icon": "user-desktop",
+    "object": "apps/desktop/shell.c:user-desktop",
+    "previous": "user-desktop",
+    "previous_derived_sizes": [
+      48
+    ],
+    "previous_missing_runtime_sizes": [],
+    "source": "apps/desktop/shell.c",
+    "status": "retained"
+  },
+  {
+    "icon": "user-home",
+    "object": "apps/desktop/shell.c:user-home",
+    "previous": "user-home",
+    "previous_derived_sizes": [
+      48
+    ],
+    "previous_missing_runtime_sizes": [],
+    "source": "apps/desktop/shell.c",
+    "status": "retained"
+  },
+  {
+    "icon": "user-trash",
+    "object": "apps/desktop/shell.c:user-trash",
+    "previous": "user-trash",
+    "previous_derived_sizes": [
+      48
+    ],
+    "previous_missing_runtime_sizes": [],
+    "source": "apps/desktop/shell.c",
+    "status": "retained"
+  },
+  {
+    "icon": "user-trash-full",
+    "object": "apps/desktop/shell.c:user-trash-full",
+    "previous": "user-trash-full",
+    "previous_derived_sizes": [
+      48
+    ],
+    "previous_missing_runtime_sizes": [],
+    "source": "apps/desktop/shell.c",
+    "status": "retained"
+  },
+  {
+    "icon": "utilities-system-monitor",
+    "object": "apps/desktop/shell.c:utilities-system-monitor",
+    "previous": "utilities-system-monitor",
+    "previous_derived_sizes": [
+      48
+    ],
+    "previous_missing_runtime_sizes": [],
+    "source": "apps/desktop/shell.c",
+    "status": "retained"
+  },
+  {
+    "icon": "utilities-terminal",
+    "object": "apps/desktop/shell.c:utilities-terminal",
+    "previous": "utilities-terminal",
+    "previous_derived_sizes": [
+      48
+    ],
+    "previous_missing_runtime_sizes": [],
+    "source": "apps/desktop/shell.c",
+    "status": "retained"
+  },
+  {
+    "icon": "video-display",
+    "object": "apps/desktop/shell.c:video-display",
+    "previous": "video-display",
+    "previous_derived_sizes": [
+      48
+    ],
+    "previous_missing_runtime_sizes": [],
+    "source": "apps/desktop/shell.c",
+    "status": "retained"
+  },
+  {
+    "icon": "view-refresh",
+    "object": "apps/desktop/shell.c:view-refresh",
+    "previous": "view-refresh",
+    "previous_derived_sizes": [
+      48
+    ],
+    "previous_missing_runtime_sizes": [],
+    "source": "apps/desktop/shell.c",
+    "status": "retained"
+  },
+  {
+    "icon": "weather-clear-night",
+    "object": "apps/desktop/shell.c:weather-clear-night",
+    "previous": "weather-clear-night",
+    "previous_derived_sizes": [
+      48
+    ],
+    "previous_missing_runtime_sizes": [],
+    "source": "apps/desktop/shell.c",
+    "status": "retained"
+  },
+  {
+    "icon": "x-office-calendar",
+    "object": "apps/desktop/shell.c:x-office-calendar",
+    "previous": "x-office-calendar",
+    "previous_derived_sizes": [
+      48
+    ],
+    "previous_missing_runtime_sizes": [],
+    "source": "apps/desktop/shell.c",
+    "status": "retained"
+  },
+  {
+    "icon": "x-office-document",
+    "object": "apps/desktop/shell.c:x-office-document",
+    "previous": "x-office-document",
+    "previous_derived_sizes": [
+      48
+    ],
+    "previous_missing_runtime_sizes": [],
+    "source": "apps/desktop/shell.c",
+    "status": "retained"
+  },
+  {
+    "icon": "application-x-executable",
+    "object": "apps/desktop/taskbar_custom.inc:application-x-executable",
+    "previous": "application-x-executable",
+    "previous_derived_sizes": [
+      48
+    ],
+    "previous_missing_runtime_sizes": [],
+    "source": "apps/desktop/taskbar_custom.inc",
+    "status": "retained"
+  },
+  {
+    "icon": "folder",
+    "object": "apps/desktop/taskbar_custom.inc:folder",
+    "previous": "folder",
+    "previous_derived_sizes": [
+      48
+    ],
+    "previous_missing_runtime_sizes": [],
+    "source": "apps/desktop/taskbar_custom.inc",
+    "status": "retained"
+  },
+  {
+    "icon": "folder-open",
+    "object": "apps/libdeskui/commdlg.c:folder-open",
+    "previous": "folder-open",
+    "previous_derived_sizes": [
+      48
+    ],
+    "previous_missing_runtime_sizes": [],
+    "source": "apps/libdeskui/commdlg.c",
+    "status": "retained"
+  },
+  {
+    "icon": "applications-other",
+    "object": "apps/libdeskui/dialog.c:applications-other",
+    "previous": "applications-other",
+    "previous_derived_sizes": [
+      48
+    ],
+    "previous_missing_runtime_sizes": [],
+    "source": "apps/libdeskui/dialog.c",
+    "status": "retained"
+  },
+  {
+    "icon": "audio-x-generic",
+    "object": "apps/libdeskui/dialog.c:audio-x-generic",
+    "previous": "audio-x-generic",
+    "previous_derived_sizes": [
+      48
+    ],
+    "previous_missing_runtime_sizes": [],
+    "source": "apps/libdeskui/dialog.c",
+    "status": "retained"
+  },
+  {
+    "icon": "drive-harddisk",
+    "object": "apps/libdeskui/dialog.c:drive-harddisk",
+    "previous": "drive-harddisk",
+    "previous_derived_sizes": [
+      48
+    ],
+    "previous_missing_runtime_sizes": [],
+    "source": "apps/libdeskui/dialog.c",
+    "status": "retained"
+  },
+  {
+    "icon": "drive-optical",
+    "object": "apps/libdeskui/dialog.c:drive-optical",
+    "previous": "drive-optical",
+    "previous_derived_sizes": [
+      48
+    ],
+    "previous_missing_runtime_sizes": [],
+    "source": "apps/libdeskui/dialog.c",
+    "status": "retained"
+  },
+  {
+    "icon": "drive-removable-media",
+    "object": "apps/libdeskui/dialog.c:drive-removable-media",
+    "previous": "drive-removable-media",
+    "previous_derived_sizes": [
+      48
+    ],
+    "previous_missing_runtime_sizes": [],
+    "source": "apps/libdeskui/dialog.c",
+    "status": "retained"
+  },
+  {
+    "icon": "folder",
+    "object": "apps/libdeskui/dialog.c:folder",
+    "previous": "folder",
+    "previous_derived_sizes": [
+      48
+    ],
+    "previous_missing_runtime_sizes": [],
+    "source": "apps/libdeskui/dialog.c",
+    "status": "retained"
+  },
+  {
+    "icon": "folder-new",
+    "object": "apps/libdeskui/dialog.c:folder-new",
+    "previous": "folder-new",
+    "previous_derived_sizes": [
+      48
+    ],
+    "previous_missing_runtime_sizes": [],
+    "source": "apps/libdeskui/dialog.c",
+    "status": "retained"
+  },
+  {
+    "icon": "folder-open",
+    "object": "apps/libdeskui/dialog.c:folder-open",
+    "previous": "folder-open",
+    "previous_derived_sizes": [
+      48
+    ],
+    "previous_missing_runtime_sizes": [],
+    "source": "apps/libdeskui/dialog.c",
+    "status": "retained"
+  },
+  {
+    "icon": "format-justify-fill",
+    "object": "apps/libdeskui/dialog.c:format-justify-fill",
+    "previous": "format-justify-fill",
+    "previous_derived_sizes": [
+      48
+    ],
+    "previous_missing_runtime_sizes": [],
+    "source": "apps/libdeskui/dialog.c",
+    "status": "retained"
+  },
+  {
+    "icon": "format-justify-left",
+    "object": "apps/libdeskui/dialog.c:format-justify-left",
+    "previous": "format-justify-left",
+    "previous_derived_sizes": [
+      48
+    ],
+    "previous_missing_runtime_sizes": [],
+    "source": "apps/libdeskui/dialog.c",
+    "status": "retained"
+  },
+  {
+    "icon": "go-up",
+    "object": "apps/libdeskui/dialog.c:go-up",
+    "previous": "go-up",
+    "previous_derived_sizes": [
+      48
+    ],
+    "previous_missing_runtime_sizes": [],
+    "source": "apps/libdeskui/dialog.c",
+    "status": "retained"
+  },
+  {
+    "icon": "image-x-generic",
+    "object": "apps/libdeskui/dialog.c:image-x-generic",
+    "previous": "image-x-generic",
+    "previous_derived_sizes": [
+      48
+    ],
+    "previous_missing_runtime_sizes": [],
+    "source": "apps/libdeskui/dialog.c",
+    "status": "retained"
+  },
+  {
+    "icon": "media-floppy",
+    "object": "apps/libdeskui/dialog.c:media-floppy",
+    "previous": "media-floppy",
+    "previous_derived_sizes": [
+      48
+    ],
+    "previous_missing_runtime_sizes": [],
+    "source": "apps/libdeskui/dialog.c",
+    "status": "retained"
+  },
+  {
+    "icon": "applications-system",
+    "object": "apps/regedit/app.c:applications-system",
+    "previous": "applications-system",
+    "previous_derived_sizes": [
+      48
+    ],
+    "previous_missing_runtime_sizes": [],
+    "source": "apps/regedit/app.c",
+    "status": "retained"
+  },
+  {
+    "icon": "folder",
+    "object": "apps/regedit/app.c:folder",
+    "previous": "folder",
+    "previous_derived_sizes": [
+      48
+    ],
+    "previous_missing_runtime_sizes": [],
+    "source": "apps/regedit/app.c",
+    "status": "retained"
+  },
+  {
+    "icon": "format-indent-more",
+    "object": "apps/wordpad/app.c:format-indent-more",
+    "previous": "format-indent-more",
+    "previous_derived_sizes": [
+      48
+    ],
+    "previous_missing_runtime_sizes": [],
+    "source": "apps/wordpad/app.c",
+    "status": "retained"
+  },
+  {
+    "icon": "preferences-desktop-theme",
+    "object": "apps/wordpad/app.c:preferences-desktop-theme",
+    "previous": "preferences-desktop-theme",
+    "previous_derived_sizes": [
+      48
+    ],
+    "previous_missing_runtime_sizes": [],
+    "source": "apps/wordpad/app.c",
+    "status": "retained"
+  },
+  {
+    "icon": "applications-other",
+    "object": "category:*",
+    "previous": "applications-other",
+    "previous_derived_sizes": [
+      48
+    ],
+    "previous_missing_runtime_sizes": [],
+    "source": "apps/libdeskui/icon_map.c",
+    "status": "generic fallback"
+  },
+  {
+    "icon": "applications-accessories",
+    "object": "category:accessories",
+    "previous": "applications-accessories",
+    "previous_derived_sizes": [
+      48
+    ],
+    "previous_missing_runtime_sizes": [],
+    "source": "apps/libdeskui/icon_map.c",
+    "status": "retained"
+  },
+  {
+    "icon": "applications-development",
+    "object": "category:development",
+    "previous": "applications-development",
+    "previous_derived_sizes": [
+      48
+    ],
+    "previous_missing_runtime_sizes": [],
+    "source": "apps/libdeskui/icon_map.c",
+    "status": "retained"
+  },
+  {
+    "icon": "applications-games",
+    "object": "category:games",
+    "previous": "applications-games",
+    "previous_derived_sizes": [
+      48
+    ],
+    "previous_missing_runtime_sizes": [],
+    "source": "apps/libdeskui/icon_map.c",
+    "status": "retained"
+  },
+  {
+    "icon": "applications-graphics",
+    "object": "category:graphics",
+    "previous": "applications-graphics",
+    "previous_derived_sizes": [
+      48
+    ],
+    "previous_missing_runtime_sizes": [],
+    "source": "apps/libdeskui/icon_map.c",
+    "status": "retained"
+  },
+  {
+    "icon": "applications-internet",
+    "object": "category:internet",
+    "previous": "applications-internet",
+    "previous_derived_sizes": [
+      48
+    ],
+    "previous_missing_runtime_sizes": [],
+    "source": "apps/libdeskui/icon_map.c",
+    "status": "retained"
+  },
+  {
+    "icon": "applications-multimedia",
+    "object": "category:multimedia",
+    "previous": "applications-multimedia",
+    "previous_derived_sizes": [
+      48
+    ],
+    "previous_missing_runtime_sizes": [],
+    "source": "apps/libdeskui/icon_map.c",
+    "status": "retained"
+  },
+  {
+    "icon": "applications-office",
+    "object": "category:office",
+    "previous": "applications-office",
+    "previous_derived_sizes": [
+      48
+    ],
+    "previous_missing_runtime_sizes": [],
+    "source": "apps/libdeskui/icon_map.c",
+    "status": "retained"
+  },
+  {
+    "icon": "applications-other",
+    "object": "category:other",
+    "previous": "applications-other",
+    "previous_derived_sizes": [
+      48
+    ],
+    "previous_missing_runtime_sizes": [],
+    "source": "apps/libdeskui/icon_map.c",
+    "status": "retained"
+  },
+  {
+    "icon": "preferences-system",
+    "object": "category:settings",
+    "previous": "preferences-system",
+    "previous_derived_sizes": [
+      48
+    ],
+    "previous_missing_runtime_sizes": [],
+    "source": "apps/libdeskui/icon_map.c",
+    "status": "retained"
+  },
+  {
+    "icon": "applications-system",
+    "object": "category:system",
+    "previous": "applications-system",
+    "previous_derived_sizes": [
+      48
+    ],
+    "previous_missing_runtime_sizes": [],
+    "source": "apps/libdeskui/icon_map.c",
+    "status": "retained"
+  },
+  {
+    "icon": "drive-harddisk",
+    "object": "device:*",
+    "previous": "drive-harddisk",
+    "previous_derived_sizes": [
+      48
+    ],
+    "previous_missing_runtime_sizes": [],
+    "source": "apps/libdeskui/icon_map.c",
+    "status": "generic fallback"
+  },
+  {
+    "icon": "battery",
+    "object": "device:battery",
+    "previous": "battery",
+    "previous_derived_sizes": [
+      48
+    ],
+    "previous_missing_runtime_sizes": [],
+    "source": "apps/libdeskui/icon_map.c",
+    "status": "retained"
+  },
+  {
+    "icon": "camera-photo",
+    "object": "device:camera",
+    "previous": "camera-photo",
+    "previous_derived_sizes": [
+      48
+    ],
+    "previous_missing_runtime_sizes": [],
+    "source": "apps/libdeskui/icon_map.c",
+    "status": "retained"
+  },
+  {
+    "icon": "drive-optical",
+    "object": "device:cdrom",
+    "previous": "drive-optical",
+    "previous_derived_sizes": [
+      48
+    ],
+    "previous_missing_runtime_sizes": [],
+    "source": "apps/libdeskui/icon_map.c",
+    "status": "retained"
+  },
+  {
+    "icon": "ciuki",
+    "object": "device:computer",
+    "previous": "ciuki",
+    "previous_derived_sizes": [],
+    "previous_missing_runtime_sizes": [],
+    "source": "apps/libdeskui/icon_map.c",
+    "status": "retained"
+  },
+  {
+    "icon": "video-display",
+    "object": "device:display",
+    "previous": "video-display",
+    "previous_derived_sizes": [
+      48
+    ],
+    "previous_missing_runtime_sizes": [],
+    "source": "apps/libdeskui/icon_map.c",
+    "status": "retained"
+  },
+  {
+    "icon": "media-flash",
+    "object": "device:flash",
+    "previous": "media-flash",
+    "previous_derived_sizes": [
+      48
+    ],
+    "previous_missing_runtime_sizes": [],
+    "source": "apps/libdeskui/icon_map.c",
+    "status": "retained"
+  },
+  {
+    "icon": "media-floppy",
+    "object": "device:floppy",
+    "previous": "media-floppy",
+    "previous_derived_sizes": [
+      48
+    ],
+    "previous_missing_runtime_sizes": [],
+    "source": "apps/libdeskui/icon_map.c",
+    "status": "retained"
+  },
+  {
+    "icon": "drive-harddisk",
+    "object": "device:harddisk",
+    "previous": "drive-harddisk",
+    "previous_derived_sizes": [
+      48
+    ],
+    "previous_missing_runtime_sizes": [],
+    "source": "apps/libdeskui/icon_map.c",
+    "status": "retained"
+  },
+  {
+    "icon": "input-gaming",
+    "object": "device:joystick",
+    "previous": "input-gaming",
+    "previous_derived_sizes": [
+      48
+    ],
+    "previous_missing_runtime_sizes": [],
+    "source": "apps/libdeskui/icon_map.c",
+    "status": "retained"
+  },
+  {
+    "icon": "input-keyboard",
+    "object": "device:keyboard",
+    "previous": "input-keyboard",
+    "previous_derived_sizes": [
+      48
+    ],
+    "previous_missing_runtime_sizes": [],
+    "source": "apps/libdeskui/icon_map.c",
+    "status": "retained"
+  },
+  {
+    "icon": "multimedia-player",
+    "object": "device:media-player",
+    "previous": "multimedia-player",
+    "previous_derived_sizes": [
+      48
+    ],
+    "previous_missing_runtime_sizes": [],
+    "source": "apps/libdeskui/icon_map.c",
+    "status": "retained"
+  },
+  {
+    "icon": "audio-input-microphone",
+    "object": "device:microphone",
+    "previous": "audio-input-microphone",
+    "previous_derived_sizes": [
+      48
+    ],
+    "previous_missing_runtime_sizes": [],
+    "source": "apps/libdeskui/icon_map.c",
+    "status": "retained"
+  },
+  {
+    "icon": "input-mouse",
+    "object": "device:mouse",
+    "previous": "input-mouse",
+    "previous_derived_sizes": [
+      48
+    ],
+    "previous_missing_runtime_sizes": [],
+    "source": "apps/libdeskui/icon_map.c",
+    "status": "retained"
+  },
+  {
+    "icon": "network-wired",
+    "object": "device:network",
+    "previous": "network-wired",
+    "previous_derived_sizes": [
+      48
+    ],
+    "previous_missing_runtime_sizes": [],
+    "source": "apps/libdeskui/icon_map.c",
+    "status": "retained"
+  },
+  {
+    "icon": "printer",
+    "object": "device:printer",
+    "previous": "printer",
+    "previous_derived_sizes": [
+      48
+    ],
+    "previous_missing_runtime_sizes": [],
+    "source": "apps/libdeskui/icon_map.c",
+    "status": "retained"
+  },
+  {
+    "icon": "drive-removable-media",
+    "object": "device:removable",
+    "previous": "drive-removable-media",
+    "previous_derived_sizes": [
+      48
+    ],
+    "previous_missing_runtime_sizes": [],
+    "source": "apps/libdeskui/icon_map.c",
+    "status": "retained"
+  },
+  {
+    "icon": "audio-card",
+    "object": "device:sound-card",
+    "previous": "audio-card",
+    "previous_derived_sizes": [
+      48
+    ],
+    "previous_missing_runtime_sizes": [],
+    "source": "apps/libdeskui/icon_map.c",
+    "status": "retained"
+  },
+  {
+    "icon": "camera-video",
+    "object": "device:video-camera",
+    "previous": "camera-video",
+    "previous_derived_sizes": [
+      48
+    ],
+    "previous_missing_runtime_sizes": [],
+    "source": "apps/libdeskui/icon_map.c",
+    "status": "retained"
+  },
+  {
+    "icon": "network-wireless",
+    "object": "device:wireless",
+    "previous": "network-wireless",
+    "previous_derived_sizes": [
+      48
+    ],
+    "previous_missing_runtime_sizes": [],
+    "source": "apps/libdeskui/icon_map.c",
+    "status": "retained"
+  },
+  {
+    "icon": "dialog-information",
+    "object": "dialog:*",
+    "previous": "dialog-information",
+    "previous_derived_sizes": [
+      48
+    ],
+    "previous_missing_runtime_sizes": [],
+    "source": "apps/libdeskui/icon_map.c",
+    "status": "generic fallback"
+  },
+  {
+    "icon": "dialog-error",
+    "object": "dialog:error",
+    "previous": "dialog-error",
+    "previous_derived_sizes": [
+      48
+    ],
+    "previous_missing_runtime_sizes": [],
+    "source": "apps/libdeskui/icon_map.c",
+    "status": "retained"
+  },
+  {
+    "icon": "dialog-information",
+    "object": "dialog:info",
+    "previous": "dialog-information",
+    "previous_derived_sizes": [
+      48
+    ],
+    "previous_missing_runtime_sizes": [],
+    "source": "apps/libdeskui/icon_map.c",
+    "status": "retained"
+  },
+  {
+    "icon": "help-browser",
+    "object": "dialog:question",
+    "previous": "help-browser",
+    "previous_derived_sizes": [
+      48
+    ],
+    "previous_missing_runtime_sizes": [],
+    "source": "apps/libdeskui/icon_map.c",
+    "status": "retained"
+  },
+  {
+    "icon": "dialog-warning",
+    "object": "dialog:warning",
+    "previous": "dialog-warning",
+    "previous_derived_sizes": [
+      48
+    ],
+    "previous_missing_runtime_sizes": [],
+    "source": "apps/libdeskui/icon_map.c",
+    "status": "retained"
+  },
+  {
+    "icon": "emblem-important",
+    "object": "emblem:*",
+    "previous": "emblem-important",
+    "previous_derived_sizes": [
+      48
+    ],
+    "previous_missing_runtime_sizes": [],
+    "source": "apps/libdeskui/icon_map.c",
+    "status": "generic fallback"
+  },
+  {
+    "icon": "emblem-favorite",
+    "object": "emblem:favorite",
+    "previous": "emblem-favorite",
+    "previous_derived_sizes": [
+      48
+    ],
+    "previous_missing_runtime_sizes": [],
+    "source": "apps/libdeskui/icon_map.c",
+    "status": "retained"
+  },
+  {
+    "icon": "emblem-important",
+    "object": "emblem:important",
+    "previous": "emblem-important",
+    "previous_derived_sizes": [
+      48
+    ],
+    "previous_missing_runtime_sizes": [],
+    "source": "apps/libdeskui/icon_map.c",
+    "status": "retained"
+  },
+  {
+    "icon": "emblem-photos",
+    "object": "emblem:photos",
+    "previous": "emblem-photos",
+    "previous_derived_sizes": [
+      48
+    ],
+    "previous_missing_runtime_sizes": [],
+    "source": "apps/libdeskui/icon_map.c",
+    "status": "retained"
+  },
+  {
+    "icon": "emblem-readonly",
+    "object": "emblem:readonly",
+    "previous": "emblem-readonly",
+    "previous_derived_sizes": [
+      48
+    ],
+    "previous_missing_runtime_sizes": [],
+    "source": "apps/libdeskui/icon_map.c",
+    "status": "retained"
+  },
+  {
+    "icon": "emblem-symbolic-link",
+    "object": "emblem:symlink",
+    "previous": "emblem-symbolic-link",
+    "previous_derived_sizes": [
+      48
+    ],
+    "previous_missing_runtime_sizes": [],
+    "source": "apps/libdeskui/icon_map.c",
+    "status": "retained"
+  },
+  {
+    "icon": "emblem-system",
+    "object": "emblem:system",
+    "previous": "emblem-system",
+    "previous_derived_sizes": [
+      48
+    ],
+    "previous_missing_runtime_sizes": [],
+    "source": "apps/libdeskui/icon_map.c",
+    "status": "retained"
+  },
+  {
+    "icon": "emblem-unreadable",
+    "object": "emblem:unreadable",
+    "previous": "emblem-unreadable",
+    "previous_derived_sizes": [
+      48
+    ],
+    "previous_missing_runtime_sizes": [],
+    "source": "apps/libdeskui/icon_map.c",
+    "status": "retained"
+  },
+  {
+    "icon": "application-x-executable",
+    "object": "menu:*",
+    "previous": "application-x-executable",
+    "previous_derived_sizes": [
+      48
+    ],
+    "previous_missing_runtime_sizes": [],
+    "source": "apps/libdeskui/icon_map.c",
+    "status": "generic fallback"
+  },
+  {
+    "icon": "ciuki",
+    "object": "menu:about",
+    "previous": "ciuki",
+    "previous_derived_sizes": [],
+    "previous_missing_runtime_sizes": [],
+    "source": "apps/libdeskui/icon_map.c",
+    "status": "retained"
+  },
+  {
+    "icon": "applications-accessories",
+    "object": "menu:accessories",
+    "previous": "applications-accessories",
+    "previous_derived_sizes": [
+      48
+    ],
+    "previous_missing_runtime_sizes": [],
+    "source": "apps/libdeskui/icon_map.c",
+    "status": "retained"
+  },
+  {
+    "icon": "preferences-desktop",
+    "object": "menu:control-panel",
+    "previous": "preferences-desktop",
+    "previous_derived_sizes": [
+      48
+    ],
+    "previous_missing_runtime_sizes": [],
+    "source": "apps/libdeskui/icon_map.c",
+    "status": "retained"
+  },
+  {
+    "icon": "applications-development",
+    "object": "menu:development",
+    "previous": "applications-development",
+    "previous_derived_sizes": [
+      48
+    ],
+    "previous_missing_runtime_sizes": [],
+    "source": "apps/libdeskui/icon_map.c",
+    "status": "retained"
+  },
+  {
+    "icon": "document-open",
+    "object": "menu:documents",
+    "previous": "document-open",
+    "previous_derived_sizes": [
+      48
+    ],
+    "previous_missing_runtime_sizes": [],
+    "source": "apps/libdeskui/icon_map.c",
+    "status": "retained"
+  },
+  {
+    "icon": "system-file-manager",
+    "object": "menu:files",
+    "previous": "system-file-manager",
+    "previous_derived_sizes": [
+      48
+    ],
+    "previous_missing_runtime_sizes": [],
+    "source": "apps/libdeskui/icon_map.c",
+    "status": "retained"
+  },
+  {
+    "icon": "system-search",
+    "object": "menu:find",
+    "previous": "system-search",
+    "previous_derived_sizes": [
+      48
+    ],
+    "previous_missing_runtime_sizes": [],
+    "source": "apps/libdeskui/icon_map.c",
+    "status": "retained"
+  },
+  {
+    "icon": "input-gaming",
+    "object": "menu:game",
+    "previous": "input-gaming",
+    "previous_derived_sizes": [
+      48
+    ],
+    "previous_missing_runtime_sizes": [],
+    "source": "apps/libdeskui/icon_map.c",
+    "status": "retained"
+  },
+  {
+    "icon": "applications-games",
+    "object": "menu:games",
+    "previous": "applications-games",
+    "previous_derived_sizes": [
+      48
+    ],
+    "previous_missing_runtime_sizes": [],
+    "source": "apps/libdeskui/icon_map.c",
+    "status": "retained"
+  },
+  {
+    "icon": "applications-graphics",
+    "object": "menu:graphics",
+    "previous": "applications-graphics",
+    "previous_derived_sizes": [
+      48
+    ],
+    "previous_missing_runtime_sizes": [],
+    "source": "apps/libdeskui/icon_map.c",
+    "status": "retained"
+  },
+  {
+    "icon": "help-browser",
+    "object": "menu:help",
+    "previous": "help-browser",
+    "previous_derived_sizes": [
+      48
+    ],
+    "previous_missing_runtime_sizes": [],
+    "source": "apps/libdeskui/icon_map.c",
+    "status": "retained"
+  },
+  {
+    "icon": "applications-internet",
+    "object": "menu:internet",
+    "previous": "applications-internet",
+    "previous_derived_sizes": [
+      48
+    ],
+    "previous_missing_runtime_sizes": [],
+    "source": "apps/libdeskui/icon_map.c",
+    "status": "retained"
+  },
+  {
+    "icon": "system-lock-screen",
+    "object": "menu:lock",
+    "previous": "system-lock-screen",
+    "previous_derived_sizes": [
+      48
+    ],
+    "previous_missing_runtime_sizes": [],
+    "source": "apps/libdeskui/icon_map.c",
+    "status": "retained"
+  },
+  {
+    "icon": "system-log-out",
+    "object": "menu:logout",
+    "previous": "system-log-out",
+    "previous_derived_sizes": [
+      48
+    ],
+    "previous_missing_runtime_sizes": [],
+    "source": "apps/libdeskui/icon_map.c",
+    "status": "retained"
+  },
+  {
+    "icon": "applications-multimedia",
+    "object": "menu:multimedia",
+    "previous": "applications-multimedia",
+    "previous_derived_sizes": [
+      48
+    ],
+    "previous_missing_runtime_sizes": [],
+    "source": "apps/libdeskui/icon_map.c",
+    "status": "retained"
+  },
+  {
+    "icon": "applications-office",
+    "object": "menu:office",
+    "previous": "applications-office",
+    "previous_derived_sizes": [
+      48
+    ],
+    "previous_missing_runtime_sizes": [],
+    "source": "apps/libdeskui/icon_map.c",
+    "status": "retained"
+  },
+  {
+    "icon": "applications-other",
+    "object": "menu:programs",
+    "previous": "applications-other",
+    "previous_derived_sizes": [
+      48
+    ],
+    "previous_missing_runtime_sizes": [],
+    "source": "apps/libdeskui/icon_map.c",
+    "status": "retained"
+  },
+  {
+    "icon": "view-refresh",
+    "object": "menu:restart",
+    "previous": "view-refresh",
+    "previous_derived_sizes": [
+      48
+    ],
+    "previous_missing_runtime_sizes": [],
+    "source": "apps/libdeskui/icon_map.c",
+    "status": "retained"
+  },
+  {
+    "icon": "go-jump",
+    "object": "menu:run",
+    "previous": "go-jump",
+    "previous_derived_sizes": [
+      48
+    ],
+    "previous_missing_runtime_sizes": [],
+    "source": "apps/libdeskui/icon_map.c",
+    "status": "retained"
+  },
+  {
+    "icon": "preferences-system",
+    "object": "menu:settings",
+    "previous": "preferences-system",
+    "previous_derived_sizes": [
+      48
+    ],
+    "previous_missing_runtime_sizes": [],
+    "source": "apps/libdeskui/icon_map.c",
+    "status": "retained"
+  },
+  {
+    "icon": "system-shutdown",
+    "object": "menu:shutdown",
+    "previous": "system-shutdown",
+    "previous_derived_sizes": [
+      48
+    ],
+    "previous_missing_runtime_sizes": [],
+    "source": "apps/libdeskui/icon_map.c",
+    "status": "retained"
+  },
+  {
+    "icon": "ciuki",
+    "object": "menu:start",
+    "previous": "ciuki",
+    "previous_derived_sizes": [],
+    "previous_missing_runtime_sizes": [],
+    "source": "apps/libdeskui/icon_map.c",
+    "status": "retained"
+  },
+  {
+    "icon": "applications-system",
+    "object": "menu:system-tools",
+    "previous": "applications-system",
+    "previous_derived_sizes": [
+      48
+    ],
+    "previous_missing_runtime_sizes": [],
+    "source": "apps/libdeskui/icon_map.c",
+    "status": "retained"
+  },
+  {
+    "icon": "utilities-system-monitor",
+    "object": "menu:tasks",
+    "previous": "utilities-system-monitor",
+    "previous_derived_sizes": [
+      48
+    ],
+    "previous_missing_runtime_sizes": [],
+    "source": "apps/libdeskui/icon_map.c",
+    "status": "retained"
+  },
+  {
+    "icon": "folder",
+    "object": "place:*",
+    "previous": "folder",
+    "previous_derived_sizes": [
+      48
+    ],
+    "previous_missing_runtime_sizes": [],
+    "source": "apps/libdeskui/icon_map.c",
+    "status": "generic fallback"
+  },
+  {
+    "icon": "applications-other",
+    "object": "place:applications",
+    "previous": "applications-other",
+    "previous_derived_sizes": [
+      48
+    ],
+    "previous_missing_runtime_sizes": [],
+    "source": "apps/libdeskui/icon_map.c",
+    "status": "retained"
+  },
+  {
+    "icon": "media-optical",
+    "object": "place:cdrom",
+    "previous": "media-optical",
+    "previous_derived_sizes": [
+      48
+    ],
+    "previous_missing_runtime_sizes": [],
+    "source": "apps/libdeskui/icon_map.c",
+    "status": "retained"
+  },
+  {
+    "icon": "ciuki",
+    "object": "place:computer",
+    "previous": "ciuki",
+    "previous_derived_sizes": [],
+    "previous_missing_runtime_sizes": [],
+    "source": "apps/libdeskui/icon_map.c",
+    "status": "retained"
+  },
+  {
+    "icon": "user-desktop",
+    "object": "place:desktop",
+    "previous": "user-desktop",
+    "previous_derived_sizes": [
+      48
+    ],
+    "previous_missing_runtime_sizes": [],
+    "source": "apps/libdeskui/icon_map.c",
+    "status": "retained"
+  },
+  {
+    "icon": "folder",
+    "object": "place:documents",
+    "previous": "folder",
+    "previous_derived_sizes": [
+      48
+    ],
+    "previous_missing_runtime_sizes": [],
+    "source": "apps/libdeskui/icon_map.c",
+    "status": "retained"
+  },
+  {
+    "icon": "media-flash",
+    "object": "place:flash",
+    "previous": "media-flash",
+    "previous_derived_sizes": [
+      48
+    ],
+    "previous_missing_runtime_sizes": [],
+    "source": "apps/libdeskui/icon_map.c",
+    "status": "retained"
+  },
+  {
+    "icon": "media-floppy",
+    "object": "place:floppy",
+    "previous": "media-floppy",
+    "previous_derived_sizes": [
+      48
+    ],
+    "previous_missing_runtime_sizes": [],
+    "source": "apps/libdeskui/icon_map.c",
+    "status": "retained"
+  },
+  {
+    "icon": "folder",
+    "object": "place:folder",
+    "previous": "folder",
+    "previous_derived_sizes": [
+      48
+    ],
+    "previous_missing_runtime_sizes": [],
+    "source": "apps/libdeskui/icon_map.c",
+    "status": "retained"
+  },
+  {
+    "icon": "drive-harddisk",
+    "object": "place:harddisk",
+    "previous": "drive-harddisk",
+    "previous_derived_sizes": [
+      48
+    ],
+    "previous_missing_runtime_sizes": [],
+    "source": "apps/libdeskui/icon_map.c",
+    "status": "retained"
+  },
+  {
+    "icon": "user-home",
+    "object": "place:home",
+    "previous": "user-home",
+    "previous_derived_sizes": [
+      48
+    ],
+    "previous_missing_runtime_sizes": [],
+    "source": "apps/libdeskui/icon_map.c",
+    "status": "retained"
+  },
+  {
+    "icon": "network-workgroup",
+    "object": "place:network",
+    "previous": "network-workgroup",
+    "previous_derived_sizes": [
+      48
+    ],
+    "previous_missing_runtime_sizes": [],
+    "source": "apps/libdeskui/icon_map.c",
+    "status": "retained"
+  },
+  {
+    "icon": "drive-optical",
+    "object": "place:optical",
+    "previous": "drive-optical",
+    "previous_derived_sizes": [
+      48
+    ],
+    "previous_missing_runtime_sizes": [],
+    "source": "apps/libdeskui/icon_map.c",
+    "status": "retained"
+  },
+  {
+    "icon": "folder-remote",
+    "object": "place:remote",
+    "previous": "folder-remote",
+    "previous_derived_sizes": [
+      48
+    ],
+    "previous_missing_runtime_sizes": [],
+    "source": "apps/libdeskui/icon_map.c",
+    "status": "retained"
+  },
+  {
+    "icon": "drive-removable-media",
+    "object": "place:removable",
+    "previous": "drive-removable-media",
+    "previous_derived_sizes": [
+      48
+    ],
+    "previous_missing_runtime_sizes": [],
+    "source": "apps/libdeskui/icon_map.c",
+    "status": "retained"
+  },
+  {
+    "icon": "folder-saved-search",
+    "object": "place:saved-search",
+    "previous": "folder-saved-search",
+    "previous_derived_sizes": [
+      48
+    ],
+    "previous_missing_runtime_sizes": [],
+    "source": "apps/libdeskui/icon_map.c",
+    "status": "retained"
+  },
+  {
+    "icon": "network-server",
+    "object": "place:server",
+    "previous": "network-server",
+    "previous_derived_sizes": [
+      48
+    ],
+    "previous_missing_runtime_sizes": [],
+    "source": "apps/libdeskui/icon_map.c",
+    "status": "retained"
+  },
+  {
+    "icon": "folder",
+    "object": "place:system",
+    "previous": "folder",
+    "previous_derived_sizes": [
+      48
+    ],
+    "previous_missing_runtime_sizes": [],
+    "source": "apps/libdeskui/icon_map.c",
+    "status": "retained"
+  },
+  {
+    "icon": "user-trash",
+    "object": "place:trash",
+    "previous": "user-trash",
+    "previous_derived_sizes": [
+      48
+    ],
+    "previous_missing_runtime_sizes": [],
+    "source": "apps/libdeskui/icon_map.c",
+    "status": "retained"
+  },
+  {
+    "icon": "user-trash-full",
+    "object": "place:trash-full",
+    "previous": "user-trash-full",
+    "previous_derived_sizes": [
+      48
+    ],
+    "previous_missing_runtime_sizes": [],
+    "source": "apps/libdeskui/icon_map.c",
+    "status": "retained"
+  },
+  {
+    "icon": "drive-harddisk",
+    "object": "place:volume",
+    "previous": "drive-harddisk",
+    "previous_derived_sizes": [
+      48
+    ],
+    "previous_missing_runtime_sizes": [],
+    "source": "apps/libdeskui/icon_map.c",
+    "status": "retained"
+  },
+  {
+    "icon": "application-x-executable",
+    "object": "program:*",
+    "previous": "application-x-executable",
+    "previous_derived_sizes": [
+      48
+    ],
+    "previous_missing_runtime_sizes": [],
+    "source": "apps/libdeskui/icon_map.c",
+    "status": "generic fallback"
+  },
+  {
+    "icon": "accessories-calculator",
+    "object": "program:calc",
+    "previous": "accessories-calculator",
+    "previous_derived_sizes": [
+      48
+    ],
+    "previous_missing_runtime_sizes": [],
+    "source": "apps/libdeskui/icon_map.c",
+    "status": "retained"
+  },
+  {
+    "icon": "media-optical",
+    "object": "program:cdplayer",
+    "previous": "media-optical",
+    "previous_derived_sizes": [
+      48
+    ],
+    "previous_missing_runtime_sizes": [],
+    "source": "apps/libdeskui/icon_map.c",
+    "status": "retained"
+  },
+  {
+    "icon": "accessories-character-map",
+    "object": "program:charmap",
+    "previous": "accessories-character-map",
+    "previous_derived_sizes": [
+      48
+    ],
+    "previous_missing_runtime_sizes": [],
+    "source": "apps/libdeskui/icon_map.c",
+    "status": "retained"
+  },
+  {
+    "icon": "applications-development",
+    "object": "program:ciukide",
+    "previous": "applications-development",
+    "previous_derived_sizes": [
+      48
+    ],
+    "previous_missing_runtime_sizes": [],
+    "source": "apps/libdeskui/icon_map.c",
+    "status": "retained"
+  },
+  {
+    "icon": "accessories-text-editor",
+    "object": "program:ciuknote",
+    "previous": "accessories-text-editor",
+    "previous_derived_sizes": [
+      48
+    ],
+    "previous_missing_runtime_sizes": [],
+    "source": "apps/libdeskui/icon_map.c",
+    "status": "retained"
+  },
+  {
+    "icon": "edit-paste",
+    "object": "program:clipbrd",
+    "previous": "edit-paste",
+    "previous_derived_sizes": [
+      48
+    ],
+    "previous_missing_runtime_sizes": [],
+    "source": "apps/libdeskui/icon_map.c",
+    "status": "retained"
+  },
+  {
+    "icon": "haiku-clock",
+    "object": "program:clock",
+    "previous": "appointment-new",
+    "previous_derived_sizes": [
+      48
+    ],
+    "previous_missing_runtime_sizes": [],
+    "source": "apps/libdeskui/icon_map.c",
+    "status": "replaced stand-in"
+  },
+  {
+    "icon": "preferences-desktop",
+    "object": "program:control",
+    "previous": "preferences-desktop",
+    "previous_derived_sizes": [
+      48
+    ],
+    "previous_missing_runtime_sizes": [],
+    "source": "apps/libdeskui/icon_map.c",
+    "status": "retained"
+  },
+  {
+    "icon": "input-keyboard",
+    "object": "program:demo",
+    "previous": "input-keyboard",
+    "previous_derived_sizes": [
+      48
+    ],
+    "previous_missing_runtime_sizes": [],
+    "source": "apps/libdeskui/icon_map.c",
+    "status": "retained"
+  },
+  {
+    "icon": "user-desktop",
+    "object": "program:desktop",
+    "previous": "user-desktop",
+    "previous_derived_sizes": [
+      48
+    ],
+    "previous_missing_runtime_sizes": [],
+    "source": "apps/libdeskui/icon_map.c",
+    "status": "retained"
+  },
+  {
+    "icon": "media-floppy",
+    "object": "program:dosbox",
+    "previous": "media-floppy",
+    "previous_derived_sizes": [
+      48
+    ],
+    "previous_missing_runtime_sizes": [],
+    "source": "apps/libdeskui/icon_map.c",
+    "status": "retained"
+  },
+  {
+    "icon": "system-file-manager",
+    "object": "program:files",
+    "previous": "system-file-manager",
+    "previous_derived_sizes": [
+      48
+    ],
+    "previous_missing_runtime_sizes": [],
+    "source": "apps/libdeskui/icon_map.c",
+    "status": "retained"
+  },
+  {
+    "icon": "applications-games",
+    "object": "program:freecell",
+    "previous": "face-glasses",
+    "previous_derived_sizes": [
+      48
+    ],
+    "previous_missing_runtime_sizes": [],
+    "source": "apps/libdeskui/icon_map.c",
+    "status": "replaced stand-in"
+  },
+  {
+    "icon": "video-display",
+    "object": "program:gfxdemo",
+    "previous": "video-display",
+    "previous_derived_sizes": [
+      48
+    ],
+    "previous_missing_runtime_sizes": [],
+    "source": "apps/libdeskui/icon_map.c",
+    "status": "retained"
+  },
+  {
+    "icon": "emblem-favorite",
+    "object": "program:hearts",
+    "previous": "emblem-favorite",
+    "previous_derived_sizes": [
+      48
+    ],
+    "previous_missing_runtime_sizes": [],
+    "source": "apps/libdeskui/icon_map.c",
+    "status": "retained"
+  },
+  {
+    "icon": "face-wink",
+    "object": "program:hello",
+    "previous": "face-wink",
+    "previous_derived_sizes": [
+      48
+    ],
+    "previous_missing_runtime_sizes": [],
+    "source": "apps/libdeskui/icon_map.c",
+    "status": "retained"
+  },
+  {
+    "icon": "help-browser",
+    "object": "program:help",
+    "previous": "help-browser",
+    "previous_derived_sizes": [
+      48
+    ],
+    "previous_missing_runtime_sizes": [],
+    "source": "apps/libdeskui/icon_map.c",
+    "status": "retained"
+  },
+  {
+    "icon": "preferences-desktop-peripherals",
+    "object": "program:hwreport",
+    "previous": "preferences-desktop-peripherals",
+    "previous_derived_sizes": [
+      48
+    ],
+    "previous_missing_runtime_sizes": [],
+    "source": "apps/libdeskui/icon_map.c",
+    "status": "retained"
+  },
+  {
+    "icon": "package-x-generic",
+    "object": "program:libc_smoke",
+    "previous": "package-x-generic",
+    "previous_derived_sizes": [
+      48
+    ],
+    "previous_missing_runtime_sizes": [],
+    "source": "apps/libdeskui/icon_map.c",
+    "status": "retained"
+  },
+  {
+    "icon": "haiku-log-viewer",
+    "object": "program:logview",
+    "previous": "x-office-spreadsheet",
+    "previous_derived_sizes": [
+      48
+    ],
+    "previous_missing_runtime_sizes": [],
+    "source": "apps/libdeskui/icon_map.c",
+    "status": "replaced stand-in"
+  },
+  {
+    "icon": "weather-clear-night",
+    "object": "program:lua",
+    "previous": "weather-clear-night",
+    "previous_derived_sizes": [
+      48
+    ],
+    "previous_missing_runtime_sizes": [],
+    "source": "apps/libdeskui/icon_map.c",
+    "status": "retained"
+  },
+  {
+    "icon": "haiku-mines",
+    "object": "program:mines",
+    "previous": "face-smile",
+    "previous_derived_sizes": [
+      48
+    ],
+    "previous_missing_runtime_sizes": [],
+    "source": "apps/libdeskui/icon_map.c",
+    "status": "replaced stand-in"
+  },
+  {
+    "icon": "audio-volume-high",
+    "object": "program:mixer",
+    "previous": "audio-volume-high",
+    "previous_derived_sizes": [
+      48
+    ],
+    "previous_missing_runtime_sizes": [],
+    "source": "apps/libdeskui/icon_map.c",
+    "status": "retained"
+  },
+  {
+    "icon": "preferences-system",
+    "object": "program:msconfig",
+    "previous": "preferences-system",
+    "previous_derived_sizes": [
+      48
+    ],
+    "previous_missing_runtime_sizes": [],
+    "source": "apps/libdeskui/icon_map.c",
+    "status": "retained"
+  },
+  {
+    "icon": "audio-x-generic",
+    "object": "program:music",
+    "previous": "audio-x-generic",
+    "previous_derived_sizes": [
+      48
+    ],
+    "previous_missing_runtime_sizes": [],
+    "source": "apps/libdeskui/icon_map.c",
+    "status": "retained"
+  },
+  {
+    "icon": "internet-web-browser",
+    "object": "program:netsurf",
+    "previous": "internet-web-browser",
+    "previous_derived_sizes": [
+      48
+    ],
+    "previous_missing_runtime_sizes": [],
+    "source": "apps/libdeskui/icon_map.c",
+    "status": "retained"
+  },
+  {
+    "icon": "applications-graphics",
+    "object": "program:paint",
+    "previous": "applications-graphics",
+    "previous_derived_sizes": [
+      48
+    ],
+    "previous_missing_runtime_sizes": [],
+    "source": "apps/libdeskui/icon_map.c",
+    "status": "retained"
+  },
+  {
+    "icon": "printer",
+    "object": "program:printers",
+    "previous": "printer",
+    "previous_derived_sizes": [
+      48
+    ],
+    "previous_missing_runtime_sizes": [],
+    "source": "apps/libdeskui/icon_map.c",
+    "status": "retained"
+  },
+  {
+    "icon": "audio-input-microphone",
+    "object": "program:recorder",
+    "previous": "audio-input-microphone",
+    "previous_derived_sizes": [
+      48
+    ],
+    "previous_missing_runtime_sizes": [],
+    "source": "apps/libdeskui/icon_map.c",
+    "status": "retained"
+  },
+  {
+    "icon": "haiku-registry",
+    "object": "program:regedit",
+    "previous": "x-office-address-book",
+    "previous_derived_sizes": [
+      48
+    ],
+    "previous_missing_runtime_sizes": [],
+    "source": "apps/libdeskui/icon_map.c",
+    "status": "replaced stand-in"
+  },
+  {
+    "icon": "haiku-resource-meter",
+    "object": "program:resmeter",
+    "previous": "applications-system",
+    "previous_derived_sizes": [
+      48
+    ],
+    "previous_missing_runtime_sizes": [],
+    "source": "apps/libdeskui/icon_map.c",
+    "status": "replaced stand-in"
+  },
+  {
+    "icon": "drive-harddisk",
+    "object": "program:scandisk",
+    "previous": "drive-harddisk",
+    "previous_derived_sizes": [
+      48
+    ],
+    "previous_missing_runtime_sizes": [],
+    "source": "apps/libdeskui/icon_map.c",
+    "status": "retained"
+  },
+  {
+    "icon": "x-office-calendar",
+    "object": "program:schedtask",
+    "previous": "x-office-calendar",
+    "previous_derived_sizes": [
+      48
+    ],
+    "previous_missing_runtime_sizes": [],
+    "source": "apps/libdeskui/icon_map.c",
+    "status": "retained"
+  },
+  {
+    "icon": "haiku-serial",
+    "object": "program:serial",
+    "previous": "network-wired",
+    "previous_derived_sizes": [
+      48
+    ],
+    "previous_missing_runtime_sizes": [],
+    "source": "apps/libdeskui/icon_map.c",
+    "status": "replaced stand-in"
+  },
+  {
+    "icon": "system-installer",
+    "object": "program:setup",
+    "previous": "system-installer",
+    "previous_derived_sizes": [
+      48
+    ],
+    "previous_missing_runtime_sizes": [],
+    "source": "apps/libdeskui/icon_map.c",
+    "status": "retained"
+  },
+  {
+    "icon": "applications-games",
+    "object": "program:solitaire",
+    "previous": "applications-games",
+    "previous_derived_sizes": [
+      48
+    ],
+    "previous_missing_runtime_sizes": [],
+    "source": "apps/libdeskui/icon_map.c",
+    "status": "retained"
+  },
+  {
+    "icon": "haiku-system-info",
+    "object": "program:sysinfo",
+    "previous": "document-properties",
+    "previous_derived_sizes": [
+      48
+    ],
+    "previous_missing_runtime_sizes": [],
+    "source": "apps/libdeskui/icon_map.c",
+    "status": "replaced stand-in"
+  },
+  {
+    "icon": "haiku-system-monitor",
+    "object": "program:sysmon",
+    "previous": "network-transmit-receive",
+    "previous_derived_sizes": [
+      48
+    ],
+    "previous_missing_runtime_sizes": [],
+    "source": "apps/libdeskui/icon_map.c",
+    "status": "replaced stand-in"
+  },
+  {
+    "icon": "utilities-system-monitor",
+    "object": "program:tasks",
+    "previous": "utilities-system-monitor",
+    "previous_derived_sizes": [
+      48
+    ],
+    "previous_missing_runtime_sizes": [],
+    "source": "apps/libdeskui/icon_map.c",
+    "status": "retained"
+  },
+  {
+    "icon": "text-x-script",
+    "object": "program:tcc",
+    "previous": "text-x-script",
+    "previous_derived_sizes": [
+      48
+    ],
+    "previous_missing_runtime_sizes": [],
+    "source": "apps/libdeskui/icon_map.c",
+    "status": "retained"
+  },
+  {
+    "icon": "utilities-terminal",
+    "object": "program:terminal",
+    "previous": "utilities-terminal",
+    "previous_derived_sizes": [
+      48
+    ],
+    "previous_missing_runtime_sizes": [],
+    "source": "apps/libdeskui/icon_map.c",
+    "status": "retained"
+  },
+  {
+    "icon": "image-x-generic",
+    "object": "program:viewer",
+    "previous": "image-x-generic",
+    "previous_derived_sizes": [
+      48
+    ],
+    "previous_missing_runtime_sizes": [],
+    "source": "apps/libdeskui/icon_map.c",
+    "status": "retained"
+  },
+  {
+    "icon": "x-office-document",
+    "object": "program:wordpad",
+    "previous": "x-office-document",
+    "previous_derived_sizes": [
+      48
+    ],
+    "previous_missing_runtime_sizes": [],
+    "source": "apps/libdeskui/icon_map.c",
+    "status": "retained"
+  },
+  {
+    "icon": "preferences-system",
+    "object": "settings:*",
+    "previous": "preferences-system",
+    "previous_derived_sizes": [
+      48
+    ],
+    "previous_missing_runtime_sizes": [],
+    "source": "apps/libdeskui/icon_map.c",
+    "status": "generic fallback"
+  },
+  {
+    "icon": "preferences-desktop-accessibility",
+    "object": "settings:accessibility",
+    "previous": "preferences-desktop-accessibility",
+    "previous_derived_sizes": [
+      48
+    ],
+    "previous_missing_runtime_sizes": [],
+    "source": "apps/libdeskui/icon_map.c",
+    "status": "retained"
+  },
+  {
+    "icon": "office-calendar",
+    "object": "settings:date-time",
+    "previous": "office-calendar",
+    "previous_derived_sizes": [
+      48
+    ],
+    "previous_missing_runtime_sizes": [],
+    "source": "apps/libdeskui/icon_map.c",
+    "status": "retained"
+  },
+  {
+    "icon": "preferences-desktop",
+    "object": "settings:desktop",
+    "previous": "preferences-desktop",
+    "previous_derived_sizes": [
+      48
+    ],
+    "previous_missing_runtime_sizes": [],
+    "source": "apps/libdeskui/icon_map.c",
+    "status": "retained"
+  },
+  {
+    "icon": "preferences-desktop-wallpaper",
+    "object": "settings:display",
+    "previous": "preferences-desktop-wallpaper",
+    "previous_derived_sizes": [
+      48
+    ],
+    "previous_missing_runtime_sizes": [],
+    "source": "apps/libdeskui/icon_map.c",
+    "status": "retained"
+  },
+  {
+    "icon": "preferences-desktop-font",
+    "object": "settings:fonts",
+    "previous": "preferences-desktop-font",
+    "previous_derived_sizes": [
+      48
+    ],
+    "previous_missing_runtime_sizes": [],
+    "source": "apps/libdeskui/icon_map.c",
+    "status": "retained"
+  },
+  {
+    "icon": "input-gaming",
+    "object": "settings:game-controllers",
+    "previous": "input-gaming",
+    "previous_derived_sizes": [
+      48
+    ],
+    "previous_missing_runtime_sizes": [],
+    "source": "apps/libdeskui/icon_map.c",
+    "status": "retained"
+  },
+  {
+    "icon": "system-installer",
+    "object": "settings:installer",
+    "previous": "system-installer",
+    "previous_derived_sizes": [
+      48
+    ],
+    "previous_missing_runtime_sizes": [],
+    "source": "apps/libdeskui/icon_map.c",
+    "status": "retained"
+  },
+  {
+    "icon": "input-keyboard",
+    "object": "settings:keyboard",
+    "previous": "input-keyboard",
+    "previous_derived_sizes": [
+      48
+    ],
+    "previous_missing_runtime_sizes": [],
+    "source": "apps/libdeskui/icon_map.c",
+    "status": "retained"
+  },
+  {
+    "icon": "preferences-desktop-locale",
+    "object": "settings:locale",
+    "previous": "preferences-desktop-locale",
+    "previous_derived_sizes": [
+      48
+    ],
+    "previous_missing_runtime_sizes": [],
+    "source": "apps/libdeskui/icon_map.c",
+    "status": "retained"
+  },
+  {
+    "icon": "input-mouse",
+    "object": "settings:mouse",
+    "previous": "input-mouse",
+    "previous_derived_sizes": [
+      48
+    ],
+    "previous_missing_runtime_sizes": [],
+    "source": "apps/libdeskui/icon_map.c",
+    "status": "retained"
+  },
+  {
+    "icon": "preferences-system-network-proxy",
+    "object": "settings:network",
+    "previous": "preferences-system-network-proxy",
+    "previous_derived_sizes": [
+      48
+    ],
+    "previous_missing_runtime_sizes": [],
+    "source": "apps/libdeskui/icon_map.c",
+    "status": "retained"
+  },
+  {
+    "icon": "preferences-desktop-peripherals",
+    "object": "settings:peripherals",
+    "previous": "preferences-desktop-peripherals",
+    "previous_derived_sizes": [
+      48
+    ],
+    "previous_missing_runtime_sizes": [],
+    "source": "apps/libdeskui/icon_map.c",
+    "status": "retained"
+  },
+  {
+    "icon": "preferences-desktop-remote-desktop",
+    "object": "settings:remote-desktop",
+    "previous": "preferences-desktop-remote-desktop",
+    "previous_derived_sizes": [
+      48
+    ],
+    "previous_missing_runtime_sizes": [],
+    "source": "apps/libdeskui/icon_map.c",
+    "status": "retained"
+  },
+  {
+    "icon": "preferences-desktop-screensaver",
+    "object": "settings:screensaver",
+    "previous": "preferences-desktop-screensaver",
+    "previous_derived_sizes": [
+      48
+    ],
+    "previous_missing_runtime_sizes": [],
+    "source": "apps/libdeskui/icon_map.c",
+    "status": "retained"
+  },
+  {
+    "icon": "preferences-system-session",
+    "object": "settings:session",
+    "previous": "preferences-system-session",
+    "previous_derived_sizes": [
+      48
+    ],
+    "previous_missing_runtime_sizes": [],
+    "source": "apps/libdeskui/icon_map.c",
+    "status": "retained"
+  },
+  {
+    "icon": "preferences-desktop-keyboard-shortcuts",
+    "object": "settings:shortcuts",
+    "previous": "preferences-desktop-keyboard-shortcuts",
+    "previous_derived_sizes": [
+      48
+    ],
+    "previous_missing_runtime_sizes": [],
+    "source": "apps/libdeskui/icon_map.c",
+    "status": "retained"
+  },
+  {
+    "icon": "audio-card",
+    "object": "settings:sound",
+    "previous": "audio-card",
+    "previous_derived_sizes": [
+      48
+    ],
+    "previous_missing_runtime_sizes": [],
+    "source": "apps/libdeskui/icon_map.c",
+    "status": "retained"
+  },
+  {
+    "icon": "preferences-system",
+    "object": "settings:system",
+    "previous": "preferences-system",
+    "previous_derived_sizes": [
+      48
+    ],
+    "previous_missing_runtime_sizes": [],
+    "source": "apps/libdeskui/icon_map.c",
+    "status": "retained"
+  },
+  {
+    "icon": "preferences-desktop-theme",
+    "object": "settings:theme",
+    "previous": "preferences-desktop-theme",
+    "previous_derived_sizes": [
+      48
+    ],
+    "previous_missing_runtime_sizes": [],
+    "source": "apps/libdeskui/icon_map.c",
+    "status": "retained"
+  },
+  {
+    "icon": "system-software-update",
+    "object": "settings:update",
+    "previous": "system-software-update",
+    "previous_derived_sizes": [
+      48
+    ],
+    "previous_missing_runtime_sizes": [],
+    "source": "apps/libdeskui/icon_map.c",
+    "status": "retained"
+  },
+  {
+    "icon": "system-users",
+    "object": "settings:users",
+    "previous": "system-users",
+    "previous_derived_sizes": [
+      48
+    ],
+    "previous_missing_runtime_sizes": [],
+    "source": "apps/libdeskui/icon_map.c",
+    "status": "retained"
+  },
+  {
+    "icon": "preferences-desktop-wallpaper",
+    "object": "settings:wallpaper",
+    "previous": "preferences-desktop-wallpaper",
+    "previous_derived_sizes": [
+      48
+    ],
+    "previous_missing_runtime_sizes": [],
+    "source": "apps/libdeskui/icon_map.c",
+    "status": "retained"
+  },
+  {
+    "icon": "preferences-system-windows",
+    "object": "settings:windows",
+    "previous": "preferences-system-windows",
+    "previous_derived_sizes": [
+      48
+    ],
+    "previous_missing_runtime_sizes": [],
+    "source": "apps/libdeskui/icon_map.c",
+    "status": "retained"
+  },
+  {
+    "icon": "dialog-information",
+    "object": "status:*",
+    "previous": "dialog-information",
+    "previous_derived_sizes": [
+      48
+    ],
+    "previous_missing_runtime_sizes": [],
+    "source": "apps/libdeskui/icon_map.c",
+    "status": "generic fallback"
+  },
+  {
+    "icon": "mail-attachment",
+    "object": "status:attachment",
+    "previous": "mail-attachment",
+    "previous_derived_sizes": [
+      48
+    ],
+    "previous_missing_runtime_sizes": [],
+    "source": "apps/libdeskui/icon_map.c",
+    "status": "retained"
+  },
+  {
+    "icon": "battery",
+    "object": "status:battery",
+    "previous": "battery",
+    "previous_derived_sizes": [
+      48
+    ],
+    "previous_missing_runtime_sizes": [],
+    "source": "apps/libdeskui/icon_map.c",
+    "status": "retained"
+  },
+  {
+    "icon": "battery-caution",
+    "object": "status:battery-low",
+    "previous": "battery-caution",
+    "previous_derived_sizes": [
+      48
+    ],
+    "previous_missing_runtime_sizes": [],
+    "source": "apps/libdeskui/icon_map.c",
+    "status": "retained"
+  },
+  {
+    "icon": "process-working-01",
+    "object": "status:busy",
+    "previous": "process-working-01",
+    "previous_derived_sizes": [
+      48
+    ],
+    "previous_missing_runtime_sizes": [],
+    "source": "apps/libdeskui/icon_map.c",
+    "status": "retained"
+  },
+  {
+    "icon": "dialog-error",
+    "object": "status:error",
+    "previous": "dialog-error",
+    "previous_derived_sizes": [
+      48
+    ],
+    "previous_missing_runtime_sizes": [],
+    "source": "apps/libdeskui/icon_map.c",
+    "status": "retained"
+  },
+  {
+    "icon": "image-loading",
+    "object": "status:image-loading",
+    "previous": "image-loading",
+    "previous_derived_sizes": [
+      48
+    ],
+    "previous_missing_runtime_sizes": [],
+    "source": "apps/libdeskui/icon_map.c",
+    "status": "retained"
+  },
+  {
+    "icon": "image-missing",
+    "object": "status:image-missing",
+    "previous": "image-missing",
+    "previous_derived_sizes": [
+      48
+    ],
+    "previous_missing_runtime_sizes": [],
+    "source": "apps/libdeskui/icon_map.c",
+    "status": "retained"
+  },
+  {
+    "icon": "emblem-important",
+    "object": "status:important",
+    "previous": "emblem-important",
+    "previous_derived_sizes": [
+      48
+    ],
+    "previous_missing_runtime_sizes": [],
+    "source": "apps/libdeskui/icon_map.c",
+    "status": "retained"
+  },
+  {
+    "icon": "dialog-information",
+    "object": "status:info",
+    "previous": "dialog-information",
+    "previous_derived_sizes": [
+      48
+    ],
+    "previous_missing_runtime_sizes": [],
+    "source": "apps/libdeskui/icon_map.c",
+    "status": "retained"
+  },
+  {
+    "icon": "network-error",
+    "object": "status:network-error",
+    "previous": "network-error",
+    "previous_derived_sizes": [
+      48
+    ],
+    "previous_missing_runtime_sizes": [],
+    "source": "apps/libdeskui/icon_map.c",
+    "status": "retained"
+  },
+  {
+    "icon": "network-idle",
+    "object": "status:network-idle",
+    "previous": "network-idle",
+    "previous_derived_sizes": [
+      48
+    ],
+    "previous_missing_runtime_sizes": [],
+    "source": "apps/libdeskui/icon_map.c",
+    "status": "retained"
+  },
+  {
+    "icon": "network-offline",
+    "object": "status:network-offline",
+    "previous": "network-offline",
+    "previous_derived_sizes": [
+      48
+    ],
+    "previous_missing_runtime_sizes": [],
+    "source": "apps/libdeskui/icon_map.c",
+    "status": "retained"
+  },
+  {
+    "icon": "network-receive",
+    "object": "status:network-receive",
+    "previous": "network-receive",
+    "previous_derived_sizes": [
+      48
+    ],
+    "previous_missing_runtime_sizes": [],
+    "source": "apps/libdeskui/icon_map.c",
+    "status": "retained"
+  },
+  {
+    "icon": "network-transmit",
+    "object": "status:network-transmit",
+    "previous": "network-transmit",
+    "previous_derived_sizes": [
+      48
+    ],
+    "previous_missing_runtime_sizes": [],
+    "source": "apps/libdeskui/icon_map.c",
+    "status": "retained"
+  },
+  {
+    "icon": "network-transmit-receive",
+    "object": "status:network-transmit-receive",
+    "previous": "network-transmit-receive",
+    "previous_derived_sizes": [
+      48
+    ],
+    "previous_missing_runtime_sizes": [],
+    "source": "apps/libdeskui/icon_map.c",
+    "status": "retained"
+  },
+  {
+    "icon": "network-wireless-encrypted",
+    "object": "status:network-wireless-encrypted",
+    "previous": "network-wireless-encrypted",
+    "previous_derived_sizes": [
+      48
+    ],
+    "previous_missing_runtime_sizes": [],
+    "source": "apps/libdeskui/icon_map.c",
+    "status": "retained"
+  },
+  {
+    "icon": "printer-error",
+    "object": "status:printer-error",
+    "previous": "printer-error",
+    "previous_derived_sizes": [
+      48
+    ],
+    "previous_missing_runtime_sizes": [],
+    "source": "apps/libdeskui/icon_map.c",
+    "status": "retained"
+  },
+  {
+    "icon": "software-update-available",
+    "object": "status:update-available",
+    "previous": "software-update-available",
+    "previous_derived_sizes": [
+      48
+    ],
+    "previous_missing_runtime_sizes": [],
+    "source": "apps/libdeskui/icon_map.c",
+    "status": "retained"
+  },
+  {
+    "icon": "software-update-urgent",
+    "object": "status:update-urgent",
+    "previous": "software-update-urgent",
+    "previous_derived_sizes": [
+      48
+    ],
+    "previous_missing_runtime_sizes": [],
+    "source": "apps/libdeskui/icon_map.c",
+    "status": "retained"
+  },
+  {
+    "icon": "audio-volume-high",
+    "object": "status:volume-high",
+    "previous": "audio-volume-high",
+    "previous_derived_sizes": [
+      48
+    ],
+    "previous_missing_runtime_sizes": [],
+    "source": "apps/libdeskui/icon_map.c",
+    "status": "retained"
+  },
+  {
+    "icon": "audio-volume-low",
+    "object": "status:volume-low",
+    "previous": "audio-volume-low",
+    "previous_derived_sizes": [
+      48
+    ],
+    "previous_missing_runtime_sizes": [],
+    "source": "apps/libdeskui/icon_map.c",
+    "status": "retained"
+  },
+  {
+    "icon": "audio-volume-medium",
+    "object": "status:volume-medium",
+    "previous": "audio-volume-medium",
+    "previous_derived_sizes": [
+      48
+    ],
+    "previous_missing_runtime_sizes": [],
+    "source": "apps/libdeskui/icon_map.c",
+    "status": "retained"
+  },
+  {
+    "icon": "audio-volume-muted",
+    "object": "status:volume-muted",
+    "previous": "audio-volume-muted",
+    "previous_derived_sizes": [
+      48
+    ],
+    "previous_missing_runtime_sizes": [],
+    "source": "apps/libdeskui/icon_map.c",
+    "status": "retained"
+  },
+  {
+    "icon": "dialog-warning",
+    "object": "status:warning",
+    "previous": "dialog-warning",
+    "previous_derived_sizes": [
+      48
+    ],
+    "previous_missing_runtime_sizes": [],
+    "source": "apps/libdeskui/icon_map.c",
+    "status": "retained"
+  },
+  {
+    "icon": "text-x-generic-template",
+    "object": "type:*",
+    "previous": "text-x-generic-template",
+    "previous_derived_sizes": [
+      48
+    ],
+    "previous_missing_runtime_sizes": [],
+    "source": "apps/libdeskui/icon_map.c",
+    "status": "generic fallback"
+  },
+  {
+    "icon": "text-x-generic",
+    "object": "type:.1st",
+    "previous": "text-x-generic",
+    "previous_derived_sizes": [
+      48
+    ],
+    "previous_missing_runtime_sizes": [],
+    "source": "apps/libdeskui/icon_map.c",
+    "status": "retained"
+  },
+  {
+    "icon": "package-x-generic",
+    "object": "type:.7z",
+    "previous": "package-x-generic",
+    "previous_derived_sizes": [
+      48
+    ],
+    "previous_missing_runtime_sizes": [],
+    "source": "apps/libdeskui/icon_map.c",
+    "status": "retained"
+  },
+  {
+    "icon": "audio-x-generic",
+    "object": "type:.aif",
+    "previous": "audio-x-generic",
+    "previous_derived_sizes": [
+      48
+    ],
+    "previous_missing_runtime_sizes": [],
+    "source": "apps/libdeskui/icon_map.c",
+    "status": "retained"
+  },
+  {
+    "icon": "package-x-generic",
+    "object": "type:.arj",
+    "previous": "package-x-generic",
+    "previous_derived_sizes": [
+      48
+    ],
+    "previous_missing_runtime_sizes": [],
+    "source": "apps/libdeskui/icon_map.c",
+    "status": "retained"
+  },
+  {
+    "icon": "text-x-generic",
+    "object": "type:.asc",
+    "previous": "text-x-generic",
+    "previous_derived_sizes": [
+      48
+    ],
+    "previous_missing_runtime_sizes": [],
+    "source": "apps/libdeskui/icon_map.c",
+    "status": "retained"
+  },
+  {
+    "icon": "text-x-script",
+    "object": "type:.asm",
+    "previous": "text-x-script",
+    "previous_derived_sizes": [
+      48
+    ],
+    "previous_missing_runtime_sizes": [],
+    "source": "apps/libdeskui/icon_map.c",
+    "status": "retained"
+  },
+  {
+    "icon": "audio-x-generic",
+    "object": "type:.au",
+    "previous": "audio-x-generic",
+    "previous_derived_sizes": [
+      48
+    ],
+    "previous_missing_runtime_sizes": [],
+    "source": "apps/libdeskui/icon_map.c",
+    "status": "retained"
+  },
+  {
+    "icon": "video-x-generic",
+    "object": "type:.avi",
+    "previous": "video-x-generic",
+    "previous_derived_sizes": [
+      48
+    ],
+    "previous_missing_runtime_sizes": [],
+    "source": "apps/libdeskui/icon_map.c",
+    "status": "retained"
+  },
+  {
+    "icon": "text-x-script",
+    "object": "type:.awk",
+    "previous": "text-x-script",
+    "previous_derived_sizes": [
+      48
+    ],
+    "previous_missing_runtime_sizes": [],
+    "source": "apps/libdeskui/icon_map.c",
+    "status": "retained"
+  },
+  {
+    "icon": "text-x-script",
+    "object": "type:.bas",
+    "previous": "text-x-script",
+    "previous_derived_sizes": [
+      48
+    ],
+    "previous_missing_runtime_sizes": [],
+    "source": "apps/libdeskui/icon_map.c",
+    "status": "retained"
+  },
+  {
+    "icon": "text-x-script",
+    "object": "type:.bat",
+    "previous": "text-x-script",
+    "previous_derived_sizes": [
+      48
+    ],
+    "previous_missing_runtime_sizes": [],
+    "source": "apps/libdeskui/icon_map.c",
+    "status": "retained"
+  },
+  {
+    "icon": "font-x-generic",
+    "object": "type:.bdf",
+    "previous": "font-x-generic",
+    "previous_derived_sizes": [
+      48
+    ],
+    "previous_missing_runtime_sizes": [],
+    "source": "apps/libdeskui/icon_map.c",
+    "status": "retained"
+  },
+  {
+    "icon": "image-x-generic",
+    "object": "type:.bmp",
+    "previous": "image-x-generic",
+    "previous_derived_sizes": [
+      48
+    ],
+    "previous_missing_runtime_sizes": [],
+    "source": "apps/libdeskui/icon_map.c",
+    "status": "retained"
+  },
+  {
+    "icon": "package-x-generic",
+    "object": "type:.bz2",
+    "previous": "package-x-generic",
+    "previous_derived_sizes": [
+      48
+    ],
+    "previous_missing_runtime_sizes": [],
+    "source": "apps/libdeskui/icon_map.c",
+    "status": "retained"
+  },
+  {
+    "icon": "text-x-script",
+    "object": "type:.c",
+    "previous": "text-x-script",
+    "previous_derived_sizes": [
+      48
+    ],
+    "previous_missing_runtime_sizes": [],
+    "source": "apps/libdeskui/icon_map.c",
+    "status": "retained"
+  },
+  {
+    "icon": "package-x-generic",
+    "object": "type:.cab",
+    "previous": "package-x-generic",
+    "previous_derived_sizes": [
+      48
+    ],
+    "previous_missing_runtime_sizes": [],
+    "source": "apps/libdeskui/icon_map.c",
+    "status": "retained"
+  },
+  {
+    "icon": "application-certificate",
+    "object": "type:.cer",
+    "previous": "application-certificate",
+    "previous_derived_sizes": [
+      48
+    ],
+    "previous_missing_runtime_sizes": [],
+    "source": "apps/libdeskui/icon_map.c",
+    "status": "retained"
+  },
+  {
+    "icon": "emblem-system",
+    "object": "type:.cfg",
+    "previous": "emblem-system",
+    "previous_derived_sizes": [
+      48
+    ],
+    "previous_missing_runtime_sizes": [],
+    "source": "apps/libdeskui/icon_map.c",
+    "status": "retained"
+  },
+  {
+    "icon": "font-x-generic",
+    "object": "type:.chr",
+    "previous": "font-x-generic",
+    "previous_derived_sizes": [
+      48
+    ],
+    "previous_missing_runtime_sizes": [],
+    "source": "apps/libdeskui/icon_map.c",
+    "status": "retained"
+  },
+  {
+    "icon": "text-x-script",
+    "object": "type:.cmd",
+    "previous": "text-x-script",
+    "previous_derived_sizes": [
+      48
+    ],
+    "previous_missing_runtime_sizes": [],
+    "source": "apps/libdeskui/icon_map.c",
+    "status": "retained"
+  },
+  {
+    "icon": "audio-x-generic",
+    "object": "type:.cmf",
+    "previous": "audio-x-generic",
+    "previous_derived_sizes": [
+      48
+    ],
+    "previous_missing_runtime_sizes": [],
+    "source": "apps/libdeskui/icon_map.c",
+    "status": "retained"
+  },
+  {
+    "icon": "application-x-executable",
+    "object": "type:.com",
+    "previous": "application-x-executable",
+    "previous_derived_sizes": [
+      48
+    ],
+    "previous_missing_runtime_sizes": [],
+    "source": "apps/libdeskui/icon_map.c",
+    "status": "retained"
+  },
+  {
+    "icon": "emblem-system",
+    "object": "type:.conf",
+    "previous": "emblem-system",
+    "previous_derived_sizes": [
+      48
+    ],
+    "previous_missing_runtime_sizes": [],
+    "source": "apps/libdeskui/icon_map.c",
+    "status": "retained"
+  },
+  {
+    "icon": "text-x-script",
+    "object": "type:.cpp",
+    "previous": "text-x-script",
+    "previous_derived_sizes": [
+      48
+    ],
+    "previous_missing_runtime_sizes": [],
+    "source": "apps/libdeskui/icon_map.c",
+    "status": "retained"
+  },
+  {
+    "icon": "application-certificate",
+    "object": "type:.crt",
+    "previous": "application-certificate",
+    "previous_derived_sizes": [
+      48
+    ],
+    "previous_missing_runtime_sizes": [],
+    "source": "apps/libdeskui/icon_map.c",
+    "status": "retained"
+  },
+  {
+    "icon": "x-office-spreadsheet",
+    "object": "type:.csv",
+    "previous": "x-office-spreadsheet",
+    "previous_derived_sizes": [
+      48
+    ],
+    "previous_missing_runtime_sizes": [],
+    "source": "apps/libdeskui/icon_map.c",
+    "status": "retained"
+  },
+  {
+    "icon": "media-optical",
+    "object": "type:.cue",
+    "previous": "media-optical",
+    "previous_derived_sizes": [
+      48
+    ],
+    "previous_missing_runtime_sizes": [],
+    "source": "apps/libdeskui/icon_map.c",
+    "status": "retained"
+  },
+  {
+    "icon": "text-x-generic",
+    "object": "type:.diz",
+    "previous": "text-x-generic",
+    "previous_derived_sizes": [
+      48
+    ],
+    "previous_missing_runtime_sizes": [],
+    "source": "apps/libdeskui/icon_map.c",
+    "status": "retained"
+  },
+  {
+    "icon": "application-x-executable",
+    "object": "type:.dll",
+    "previous": "application-x-executable",
+    "previous_derived_sizes": [
+      48
+    ],
+    "previous_missing_runtime_sizes": [],
+    "source": "apps/libdeskui/icon_map.c",
+    "status": "retained"
+  },
+  {
+    "icon": "x-office-document",
+    "object": "type:.doc",
+    "previous": "x-office-document",
+    "previous_derived_sizes": [
+      48
+    ],
+    "previous_missing_runtime_sizes": [],
+    "source": "apps/libdeskui/icon_map.c",
+    "status": "retained"
+  },
+  {
+    "icon": "application-x-executable",
+    "object": "type:.drv",
+    "previous": "application-x-executable",
+    "previous_derived_sizes": [
+      48
+    ],
+    "previous_missing_runtime_sizes": [],
+    "source": "apps/libdeskui/icon_map.c",
+    "status": "retained"
+  },
+  {
+    "icon": "media-floppy",
+    "object": "type:.dsk",
+    "previous": "media-floppy",
+    "previous_derived_sizes": [
+      48
+    ],
+    "previous_missing_runtime_sizes": [],
+    "source": "apps/libdeskui/icon_map.c",
+    "status": "retained"
+  },
+  {
+    "icon": "application-x-executable",
+    "object": "type:.elf",
+    "previous": "application-x-executable",
+    "previous_derived_sizes": [
+      48
+    ],
+    "previous_missing_runtime_sizes": [],
+    "source": "apps/libdeskui/icon_map.c",
+    "status": "retained"
+  },
+  {
+    "icon": "application-x-executable",
+    "object": "type:.exe",
+    "previous": "application-x-executable",
+    "previous_derived_sizes": [
+      48
+    ],
+    "previous_missing_runtime_sizes": [],
+    "source": "apps/libdeskui/icon_map.c",
+    "status": "retained"
+  },
+  {
+    "icon": "audio-x-generic",
+    "object": "type:.flac",
+    "previous": "audio-x-generic",
+    "previous_derived_sizes": [
+      48
+    ],
+    "previous_missing_runtime_sizes": [],
+    "source": "apps/libdeskui/icon_map.c",
+    "status": "retained"
+  },
+  {
+    "icon": "video-x-generic",
+    "object": "type:.flc",
+    "previous": "video-x-generic",
+    "previous_derived_sizes": [
+      48
+    ],
+    "previous_missing_runtime_sizes": [],
+    "source": "apps/libdeskui/icon_map.c",
+    "status": "retained"
+  },
+  {
+    "icon": "video-x-generic",
+    "object": "type:.fli",
+    "previous": "video-x-generic",
+    "previous_derived_sizes": [
+      48
+    ],
+    "previous_missing_runtime_sizes": [],
+    "source": "apps/libdeskui/icon_map.c",
+    "status": "retained"
+  },
+  {
+    "icon": "font-x-generic",
+    "object": "type:.fnt",
+    "previous": "font-x-generic",
+    "previous_derived_sizes": [
+      48
+    ],
+    "previous_missing_runtime_sizes": [],
+    "source": "apps/libdeskui/icon_map.c",
+    "status": "retained"
+  },
+  {
+    "icon": "font-x-generic",
+    "object": "type:.fon",
+    "previous": "font-x-generic",
+    "previous_derived_sizes": [
+      48
+    ],
+    "previous_missing_runtime_sizes": [],
+    "source": "apps/libdeskui/icon_map.c",
+    "status": "retained"
+  },
+  {
+    "icon": "image-x-generic",
+    "object": "type:.gif",
+    "previous": "image-x-generic",
+    "previous_derived_sizes": [
+      48
+    ],
+    "previous_missing_runtime_sizes": [],
+    "source": "apps/libdeskui/icon_map.c",
+    "status": "retained"
+  },
+  {
+    "icon": "package-x-generic",
+    "object": "type:.gz",
+    "previous": "package-x-generic",
+    "previous_derived_sizes": [
+      48
+    ],
+    "previous_missing_runtime_sizes": [],
+    "source": "apps/libdeskui/icon_map.c",
+    "status": "retained"
+  },
+  {
+    "icon": "text-x-script",
+    "object": "type:.h",
+    "previous": "text-x-script",
+    "previous_derived_sizes": [
+      48
+    ],
+    "previous_missing_runtime_sizes": [],
+    "source": "apps/libdeskui/icon_map.c",
+    "status": "retained"
+  },
+  {
+    "icon": "text-html",
+    "object": "type:.htm",
+    "previous": "text-html",
+    "previous_derived_sizes": [
+      48
+    ],
+    "previous_missing_runtime_sizes": [],
+    "source": "apps/libdeskui/icon_map.c",
+    "status": "retained"
+  },
+  {
+    "icon": "text-html",
+    "object": "type:.html",
+    "previous": "text-html",
+    "previous_derived_sizes": [
+      48
+    ],
+    "previous_missing_runtime_sizes": [],
+    "source": "apps/libdeskui/icon_map.c",
+    "status": "retained"
+  },
+  {
+    "icon": "image-x-generic",
+    "object": "type:.ico",
+    "previous": "image-x-generic",
+    "previous_derived_sizes": [
+      48
+    ],
+    "previous_missing_runtime_sizes": [],
+    "source": "apps/libdeskui/icon_map.c",
+    "status": "retained"
+  },
+  {
+    "icon": "x-office-calendar",
+    "object": "type:.ics",
+    "previous": "x-office-calendar",
+    "previous_derived_sizes": [
+      48
+    ],
+    "previous_missing_runtime_sizes": [],
+    "source": "apps/libdeskui/icon_map.c",
+    "status": "retained"
+  },
+  {
+    "icon": "media-floppy",
+    "object": "type:.ima",
+    "previous": "media-floppy",
+    "previous_derived_sizes": [
+      48
+    ],
+    "previous_missing_runtime_sizes": [],
+    "source": "apps/libdeskui/icon_map.c",
+    "status": "retained"
+  },
+  {
+    "icon": "media-floppy",
+    "object": "type:.img",
+    "previous": "media-floppy",
+    "previous_derived_sizes": [
+      48
+    ],
+    "previous_missing_runtime_sizes": [],
+    "source": "apps/libdeskui/icon_map.c",
+    "status": "retained"
+  },
+  {
+    "icon": "text-x-script",
+    "object": "type:.inc",
+    "previous": "text-x-script",
+    "previous_derived_sizes": [
+      48
+    ],
+    "previous_missing_runtime_sizes": [],
+    "source": "apps/libdeskui/icon_map.c",
+    "status": "retained"
+  },
+  {
+    "icon": "emblem-system",
+    "object": "type:.inf",
+    "previous": "emblem-system",
+    "previous_derived_sizes": [
+      48
+    ],
+    "previous_missing_runtime_sizes": [],
+    "source": "apps/libdeskui/icon_map.c",
+    "status": "retained"
+  },
+  {
+    "icon": "emblem-system",
+    "object": "type:.ini",
+    "previous": "emblem-system",
+    "previous_derived_sizes": [
+      48
+    ],
+    "previous_missing_runtime_sizes": [],
+    "source": "apps/libdeskui/icon_map.c",
+    "status": "retained"
+  },
+  {
+    "icon": "media-optical",
+    "object": "type:.iso",
+    "previous": "media-optical",
+    "previous_derived_sizes": [
+      48
+    ],
+    "previous_missing_runtime_sizes": [],
+    "source": "apps/libdeskui/icon_map.c",
+    "status": "retained"
+  },
+  {
+    "icon": "audio-x-generic",
+    "object": "type:.it",
+    "previous": "audio-x-generic",
+    "previous_derived_sizes": [
+      48
+    ],
+    "previous_missing_runtime_sizes": [],
+    "source": "apps/libdeskui/icon_map.c",
+    "status": "retained"
+  },
+  {
+    "icon": "image-x-generic",
+    "object": "type:.jpeg",
+    "previous": "image-x-generic",
+    "previous_derived_sizes": [
+      48
+    ],
+    "previous_missing_runtime_sizes": [],
+    "source": "apps/libdeskui/icon_map.c",
+    "status": "retained"
+  },
+  {
+    "icon": "image-x-generic",
+    "object": "type:.jpg",
+    "previous": "image-x-generic",
+    "previous_derived_sizes": [
+      48
+    ],
+    "previous_missing_runtime_sizes": [],
+    "source": "apps/libdeskui/icon_map.c",
+    "status": "retained"
+  },
+  {
+    "icon": "emblem-system",
+    "object": "type:.json",
+    "previous": "emblem-system",
+    "previous_derived_sizes": [
+      48
+    ],
+    "previous_missing_runtime_sizes": [],
+    "source": "apps/libdeskui/icon_map.c",
+    "status": "retained"
+  },
+  {
+    "icon": "image-x-generic",
+    "object": "type:.lbm",
+    "previous": "image-x-generic",
+    "previous_derived_sizes": [
+      48
+    ],
+    "previous_missing_runtime_sizes": [],
+    "source": "apps/libdeskui/icon_map.c",
+    "status": "retained"
+  },
+  {
+    "icon": "package-x-generic",
+    "object": "type:.lha",
+    "previous": "package-x-generic",
+    "previous_derived_sizes": [
+      48
+    ],
+    "previous_missing_runtime_sizes": [],
+    "source": "apps/libdeskui/icon_map.c",
+    "status": "retained"
+  },
+  {
+    "icon": "emblem-symbolic-link",
+    "object": "type:.lnk",
+    "previous": "emblem-symbolic-link",
+    "previous_derived_sizes": [
+      48
+    ],
+    "previous_missing_runtime_sizes": [],
+    "source": "apps/libdeskui/icon_map.c",
+    "status": "retained"
+  },
+  {
+    "icon": "text-x-generic",
+    "object": "type:.log",
+    "previous": "text-x-generic",
+    "previous_derived_sizes": [
+      48
+    ],
+    "previous_missing_runtime_sizes": [],
+    "source": "apps/libdeskui/icon_map.c",
+    "status": "retained"
+  },
+  {
+    "icon": "text-x-script",
+    "object": "type:.lua",
+    "previous": "text-x-script",
+    "previous_derived_sizes": [
+      48
+    ],
+    "previous_missing_runtime_sizes": [],
+    "source": "apps/libdeskui/icon_map.c",
+    "status": "retained"
+  },
+  {
+    "icon": "package-x-generic",
+    "object": "type:.lzh",
+    "previous": "package-x-generic",
+    "previous_derived_sizes": [
+      48
+    ],
+    "previous_missing_runtime_sizes": [],
+    "source": "apps/libdeskui/icon_map.c",
+    "status": "retained"
+  },
+  {
+    "icon": "audio-x-generic",
+    "object": "type:.m3u",
+    "previous": "audio-x-generic",
+    "previous_derived_sizes": [
+      48
+    ],
+    "previous_missing_runtime_sizes": [],
+    "source": "apps/libdeskui/icon_map.c",
+    "status": "retained"
+  },
+  {
+    "icon": "text-x-script",
+    "object": "type:.mak",
+    "previous": "text-x-script",
+    "previous_derived_sizes": [
+      48
+    ],
+    "previous_missing_runtime_sizes": [],
+    "source": "apps/libdeskui/icon_map.c",
+    "status": "retained"
+  },
+  {
+    "icon": "text-x-generic",
+    "object": "type:.md",
+    "previous": "text-x-generic",
+    "previous_derived_sizes": [
+      48
+    ],
+    "previous_missing_runtime_sizes": [],
+    "source": "apps/libdeskui/icon_map.c",
+    "status": "retained"
+  },
+  {
+    "icon": "text-x-generic",
+    "object": "type:.me",
+    "previous": "text-x-generic",
+    "previous_derived_sizes": [
+      48
+    ],
+    "previous_missing_runtime_sizes": [],
+    "source": "apps/libdeskui/icon_map.c",
+    "status": "retained"
+  },
+  {
+    "icon": "audio-x-generic",
+    "object": "type:.mid",
+    "previous": "audio-x-generic",
+    "previous_derived_sizes": [
+      48
+    ],
+    "previous_missing_runtime_sizes": [],
+    "source": "apps/libdeskui/icon_map.c",
+    "status": "retained"
+  },
+  {
+    "icon": "audio-x-generic",
+    "object": "type:.midi",
+    "previous": "audio-x-generic",
+    "previous_derived_sizes": [
+      48
+    ],
+    "previous_missing_runtime_sizes": [],
+    "source": "apps/libdeskui/icon_map.c",
+    "status": "retained"
+  },
+  {
+    "icon": "video-x-generic",
+    "object": "type:.mkv",
+    "previous": "video-x-generic",
+    "previous_derived_sizes": [
+      48
+    ],
+    "previous_missing_runtime_sizes": [],
+    "source": "apps/libdeskui/icon_map.c",
+    "status": "retained"
+  },
+  {
+    "icon": "audio-x-generic",
+    "object": "type:.mod",
+    "previous": "audio-x-generic",
+    "previous_derived_sizes": [
+      48
+    ],
+    "previous_missing_runtime_sizes": [],
+    "source": "apps/libdeskui/icon_map.c",
+    "status": "retained"
+  },
+  {
+    "icon": "video-x-generic",
+    "object": "type:.mov",
+    "previous": "video-x-generic",
+    "previous_derived_sizes": [
+      48
+    ],
+    "previous_missing_runtime_sizes": [],
+    "source": "apps/libdeskui/icon_map.c",
+    "status": "retained"
+  },
+  {
+    "icon": "audio-x-generic",
+    "object": "type:.mp3",
+    "previous": "audio-x-generic",
+    "previous_derived_sizes": [
+      48
+    ],
+    "previous_missing_runtime_sizes": [],
+    "source": "apps/libdeskui/icon_map.c",
+    "status": "retained"
+  },
+  {
+    "icon": "video-x-generic",
+    "object": "type:.mp4",
+    "previous": "video-x-generic",
+    "previous_derived_sizes": [
+      48
+    ],
+    "previous_missing_runtime_sizes": [],
+    "source": "apps/libdeskui/icon_map.c",
+    "status": "retained"
+  },
+  {
+    "icon": "video-x-generic",
+    "object": "type:.mpeg",
+    "previous": "video-x-generic",
+    "previous_derived_sizes": [
+      48
+    ],
+    "previous_missing_runtime_sizes": [],
+    "source": "apps/libdeskui/icon_map.c",
+    "status": "retained"
+  },
+  {
+    "icon": "video-x-generic",
+    "object": "type:.mpg",
+    "previous": "video-x-generic",
+    "previous_derived_sizes": [
+      48
+    ],
+    "previous_missing_runtime_sizes": [],
+    "source": "apps/libdeskui/icon_map.c",
+    "status": "retained"
+  },
+  {
+    "icon": "text-x-generic",
+    "object": "type:.nfo",
+    "previous": "text-x-generic",
+    "previous_derived_sizes": [
+      48
+    ],
+    "previous_missing_runtime_sizes": [],
+    "source": "apps/libdeskui/icon_map.c",
+    "status": "retained"
+  },
+  {
+    "icon": "x-office-drawing",
+    "object": "type:.odg",
+    "previous": "x-office-drawing",
+    "previous_derived_sizes": [
+      48
+    ],
+    "previous_missing_runtime_sizes": [],
+    "source": "apps/libdeskui/icon_map.c",
+    "status": "retained"
+  },
+  {
+    "icon": "x-office-presentation",
+    "object": "type:.odp",
+    "previous": "x-office-presentation",
+    "previous_derived_sizes": [
+      48
+    ],
+    "previous_missing_runtime_sizes": [],
+    "source": "apps/libdeskui/icon_map.c",
+    "status": "retained"
+  },
+  {
+    "icon": "x-office-spreadsheet",
+    "object": "type:.ods",
+    "previous": "x-office-spreadsheet",
+    "previous_derived_sizes": [
+      48
+    ],
+    "previous_missing_runtime_sizes": [],
+    "source": "apps/libdeskui/icon_map.c",
+    "status": "retained"
+  },
+  {
+    "icon": "x-office-document",
+    "object": "type:.odt",
+    "previous": "x-office-document",
+    "previous_derived_sizes": [
+      48
+    ],
+    "previous_missing_runtime_sizes": [],
+    "source": "apps/libdeskui/icon_map.c",
+    "status": "retained"
+  },
+  {
+    "icon": "audio-x-generic",
+    "object": "type:.ogg",
+    "previous": "audio-x-generic",
+    "previous_derived_sizes": [
+      48
+    ],
+    "previous_missing_runtime_sizes": [],
+    "source": "apps/libdeskui/icon_map.c",
+    "status": "retained"
+  },
+  {
+    "icon": "font-x-generic",
+    "object": "type:.otf",
+    "previous": "font-x-generic",
+    "previous_derived_sizes": [
+      48
+    ],
+    "previous_missing_runtime_sizes": [],
+    "source": "apps/libdeskui/icon_map.c",
+    "status": "retained"
+  },
+  {
+    "icon": "application-x-executable",
+    "object": "type:.ovl",
+    "previous": "application-x-executable",
+    "previous_derived_sizes": [
+      48
+    ],
+    "previous_missing_runtime_sizes": [],
+    "source": "apps/libdeskui/icon_map.c",
+    "status": "retained"
+  },
+  {
+    "icon": "text-x-script",
+    "object": "type:.pas",
+    "previous": "text-x-script",
+    "previous_derived_sizes": [
+      48
+    ],
+    "previous_missing_runtime_sizes": [],
+    "source": "apps/libdeskui/icon_map.c",
+    "status": "retained"
+  },
+  {
+    "icon": "image-x-generic",
+    "object": "type:.pcx",
+    "previous": "image-x-generic",
+    "previous_derived_sizes": [
+      48
+    ],
+    "previous_missing_runtime_sizes": [],
+    "source": "apps/libdeskui/icon_map.c",
+    "status": "retained"
+  },
+  {
+    "icon": "x-office-document",
+    "object": "type:.pdf",
+    "previous": "x-office-document",
+    "previous_derived_sizes": [
+      48
+    ],
+    "previous_missing_runtime_sizes": [],
+    "source": "apps/libdeskui/icon_map.c",
+    "status": "retained"
+  },
+  {
+    "icon": "application-certificate",
+    "object": "type:.pem",
+    "previous": "application-certificate",
+    "previous_derived_sizes": [
+      48
+    ],
+    "previous_missing_runtime_sizes": [],
+    "source": "apps/libdeskui/icon_map.c",
+    "status": "retained"
+  },
+  {
+    "icon": "emblem-system",
+    "object": "type:.pif",
+    "previous": "emblem-system",
+    "previous_derived_sizes": [
+      48
+    ],
+    "previous_missing_runtime_sizes": [],
+    "source": "apps/libdeskui/icon_map.c",
+    "status": "retained"
+  },
+  {
+    "icon": "text-x-script",
+    "object": "type:.pl",
+    "previous": "text-x-script",
+    "previous_derived_sizes": [
+      48
+    ],
+    "previous_missing_runtime_sizes": [],
+    "source": "apps/libdeskui/icon_map.c",
+    "status": "retained"
+  },
+  {
+    "icon": "image-x-generic",
+    "object": "type:.png",
+    "previous": "image-x-generic",
+    "previous_derived_sizes": [
+      48
+    ],
+    "previous_missing_runtime_sizes": [],
+    "source": "apps/libdeskui/icon_map.c",
+    "status": "retained"
+  },
+  {
+    "icon": "image-x-generic",
+    "object": "type:.ppm",
+    "previous": "image-x-generic",
+    "previous_derived_sizes": [
+      48
+    ],
+    "previous_missing_runtime_sizes": [],
+    "source": "apps/libdeskui/icon_map.c",
+    "status": "retained"
+  },
+  {
+    "icon": "x-office-presentation",
+    "object": "type:.ppt",
+    "previous": "x-office-presentation",
+    "previous_derived_sizes": [
+      48
+    ],
+    "previous_missing_runtime_sizes": [],
+    "source": "apps/libdeskui/icon_map.c",
+    "status": "retained"
+  },
+  {
+    "icon": "x-office-document",
+    "object": "type:.ps",
+    "previous": "x-office-document",
+    "previous_derived_sizes": [
+      48
+    ],
+    "previous_missing_runtime_sizes": [],
+    "source": "apps/libdeskui/icon_map.c",
+    "status": "retained"
+  },
+  {
+    "icon": "font-x-generic",
+    "object": "type:.psf",
+    "previous": "font-x-generic",
+    "previous_derived_sizes": [
+      48
+    ],
+    "previous_missing_runtime_sizes": [],
+    "source": "apps/libdeskui/icon_map.c",
+    "status": "retained"
+  },
+  {
+    "icon": "text-x-script",
+    "object": "type:.py",
+    "previous": "text-x-script",
+    "previous_derived_sizes": [
+      48
+    ],
+    "previous_missing_runtime_sizes": [],
+    "source": "apps/libdeskui/icon_map.c",
+    "status": "retained"
+  },
+  {
+    "icon": "drive-harddisk",
+    "object": "type:.qcow2",
+    "previous": "drive-harddisk",
+    "previous_derived_sizes": [
+      48
+    ],
+    "previous_missing_runtime_sizes": [],
+    "source": "apps/libdeskui/icon_map.c",
+    "status": "retained"
+  },
+  {
+    "icon": "package-x-generic",
+    "object": "type:.rar",
+    "previous": "package-x-generic",
+    "previous_derived_sizes": [
+      48
+    ],
+    "previous_missing_runtime_sizes": [],
+    "source": "apps/libdeskui/icon_map.c",
+    "status": "retained"
+  },
+  {
+    "icon": "emblem-system",
+    "object": "type:.reg",
+    "previous": "emblem-system",
+    "previous_derived_sizes": [
+      48
+    ],
+    "previous_missing_runtime_sizes": [],
+    "source": "apps/libdeskui/icon_map.c",
+    "status": "retained"
+  },
+  {
+    "icon": "audio-x-generic",
+    "object": "type:.rol",
+    "previous": "audio-x-generic",
+    "previous_derived_sizes": [
+      48
+    ],
+    "previous_missing_runtime_sizes": [],
+    "source": "apps/libdeskui/icon_map.c",
+    "status": "retained"
+  },
+  {
+    "icon": "x-office-document",
+    "object": "type:.rtf",
+    "previous": "x-office-document",
+    "previous_derived_sizes": [
+      48
+    ],
+    "previous_missing_runtime_sizes": [],
+    "source": "apps/libdeskui/icon_map.c",
+    "status": "retained"
+  },
+  {
+    "icon": "text-x-script",
+    "object": "type:.s",
+    "previous": "text-x-script",
+    "previous_derived_sizes": [
+      48
+    ],
+    "previous_missing_runtime_sizes": [],
+    "source": "apps/libdeskui/icon_map.c",
+    "status": "retained"
+  },
+  {
+    "icon": "audio-x-generic",
+    "object": "type:.s3m",
+    "previous": "audio-x-generic",
+    "previous_derived_sizes": [
+      48
+    ],
+    "previous_missing_runtime_sizes": [],
+    "source": "apps/libdeskui/icon_map.c",
+    "status": "retained"
+  },
+  {
+    "icon": "text-x-script",
+    "object": "type:.sh",
+    "previous": "text-x-script",
+    "previous_derived_sizes": [
+      48
+    ],
+    "previous_missing_runtime_sizes": [],
+    "source": "apps/libdeskui/icon_map.c",
+    "status": "retained"
+  },
+  {
+    "icon": "image-x-generic",
+    "object": "type:.svg",
+    "previous": "image-x-generic",
+    "previous_derived_sizes": [
+      48
+    ],
+    "previous_missing_runtime_sizes": [],
+    "source": "apps/libdeskui/icon_map.c",
+    "status": "retained"
+  },
+  {
+    "icon": "application-x-executable",
+    "object": "type:.sys",
+    "previous": "application-x-executable",
+    "previous_derived_sizes": [
+      48
+    ],
+    "previous_missing_runtime_sizes": [],
+    "source": "apps/libdeskui/icon_map.c",
+    "status": "retained"
+  },
+  {
+    "icon": "package-x-generic",
+    "object": "type:.tar",
+    "previous": "package-x-generic",
+    "previous_derived_sizes": [
+      48
+    ],
+    "previous_missing_runtime_sizes": [],
+    "source": "apps/libdeskui/icon_map.c",
+    "status": "retained"
+  },
+  {
+    "icon": "text-x-generic",
+    "object": "type:.text",
+    "previous": "text-x-generic",
+    "previous_derived_sizes": [
+      48
+    ],
+    "previous_missing_runtime_sizes": [],
+    "source": "apps/libdeskui/icon_map.c",
+    "status": "retained"
+  },
+  {
+    "icon": "image-x-generic",
+    "object": "type:.tga",
+    "previous": "image-x-generic",
+    "previous_derived_sizes": [
+      48
+    ],
+    "previous_missing_runtime_sizes": [],
+    "source": "apps/libdeskui/icon_map.c",
+    "status": "retained"
+  },
+  {
+    "icon": "package-x-generic",
+    "object": "type:.tgz",
+    "previous": "package-x-generic",
+    "previous_derived_sizes": [
+      48
+    ],
+    "previous_missing_runtime_sizes": [],
+    "source": "apps/libdeskui/icon_map.c",
+    "status": "retained"
+  },
+  {
+    "icon": "image-x-generic",
+    "object": "type:.tif",
+    "previous": "image-x-generic",
+    "previous_derived_sizes": [
+      48
+    ],
+    "previous_missing_runtime_sizes": [],
+    "source": "apps/libdeskui/icon_map.c",
+    "status": "retained"
+  },
+  {
+    "icon": "image-x-generic",
+    "object": "type:.tiff",
+    "previous": "image-x-generic",
+    "previous_derived_sizes": [
+      48
+    ],
+    "previous_missing_runtime_sizes": [],
+    "source": "apps/libdeskui/icon_map.c",
+    "status": "retained"
+  },
+  {
+    "icon": "emblem-system",
+    "object": "type:.toml",
+    "previous": "emblem-system",
+    "previous_derived_sizes": [
+      48
+    ],
+    "previous_missing_runtime_sizes": [],
+    "source": "apps/libdeskui/icon_map.c",
+    "status": "retained"
+  },
+  {
+    "icon": "font-x-generic",
+    "object": "type:.ttf",
+    "previous": "font-x-generic",
+    "previous_derived_sizes": [
+      48
+    ],
+    "previous_missing_runtime_sizes": [],
+    "source": "apps/libdeskui/icon_map.c",
+    "status": "retained"
+  },
+  {
+    "icon": "text-x-generic",
+    "object": "type:.txt",
+    "previous": "text-x-generic",
+    "previous_derived_sizes": [
+      48
+    ],
+    "previous_missing_runtime_sizes": [],
+    "source": "apps/libdeskui/icon_map.c",
+    "status": "retained"
+  },
+  {
+    "icon": "x-office-address-book",
+    "object": "type:.vcf",
+    "previous": "x-office-address-book",
+    "previous_derived_sizes": [
+      48
+    ],
+    "previous_missing_runtime_sizes": [],
+    "source": "apps/libdeskui/icon_map.c",
+    "status": "retained"
+  },
+  {
+    "icon": "media-floppy",
+    "object": "type:.vfd",
+    "previous": "media-floppy",
+    "previous_derived_sizes": [
+      48
+    ],
+    "previous_missing_runtime_sizes": [],
+    "source": "apps/libdeskui/icon_map.c",
+    "status": "retained"
+  },
+  {
+    "icon": "drive-harddisk",
+    "object": "type:.vhd",
+    "previous": "drive-harddisk",
+    "previous_derived_sizes": [
+      48
+    ],
+    "previous_missing_runtime_sizes": [],
+    "source": "apps/libdeskui/icon_map.c",
+    "status": "retained"
+  },
+  {
+    "icon": "audio-x-generic",
+    "object": "type:.voc",
+    "previous": "audio-x-generic",
+    "previous_derived_sizes": [
+      48
+    ],
+    "previous_missing_runtime_sizes": [],
+    "source": "apps/libdeskui/icon_map.c",
+    "status": "retained"
+  },
+  {
+    "icon": "audio-x-generic",
+    "object": "type:.wav",
+    "previous": "audio-x-generic",
+    "previous_derived_sizes": [
+      48
+    ],
+    "previous_missing_runtime_sizes": [],
+    "source": "apps/libdeskui/icon_map.c",
+    "status": "retained"
+  },
+  {
+    "icon": "video-x-generic",
+    "object": "type:.webm",
+    "previous": "video-x-generic",
+    "previous_derived_sizes": [
+      48
+    ],
+    "previous_missing_runtime_sizes": [],
+    "source": "apps/libdeskui/icon_map.c",
+    "status": "retained"
+  },
+  {
+    "icon": "x-office-spreadsheet",
+    "object": "type:.wk1",
+    "previous": "x-office-spreadsheet",
+    "previous_derived_sizes": [
+      48
+    ],
+    "previous_missing_runtime_sizes": [],
+    "source": "apps/libdeskui/icon_map.c",
+    "status": "retained"
+  },
+  {
+    "icon": "x-office-document",
+    "object": "type:.wri",
+    "previous": "x-office-document",
+    "previous_derived_sizes": [
+      48
+    ],
+    "previous_missing_runtime_sizes": [],
+    "source": "apps/libdeskui/icon_map.c",
+    "status": "retained"
+  },
+  {
+    "icon": "x-office-spreadsheet",
+    "object": "type:.xls",
+    "previous": "x-office-spreadsheet",
+    "previous_derived_sizes": [
+      48
+    ],
+    "previous_missing_runtime_sizes": [],
+    "source": "apps/libdeskui/icon_map.c",
+    "status": "retained"
+  },
+  {
+    "icon": "audio-x-generic",
+    "object": "type:.xm",
+    "previous": "audio-x-generic",
+    "previous_derived_sizes": [
+      48
+    ],
+    "previous_missing_runtime_sizes": [],
+    "source": "apps/libdeskui/icon_map.c",
+    "status": "retained"
+  },
+  {
+    "icon": "emblem-system",
+    "object": "type:.xml",
+    "previous": "emblem-system",
+    "previous_derived_sizes": [
+      48
+    ],
+    "previous_missing_runtime_sizes": [],
+    "source": "apps/libdeskui/icon_map.c",
+    "status": "retained"
+  },
+  {
+    "icon": "image-x-generic",
+    "object": "type:.xrgb",
+    "previous": "image-x-generic",
+    "previous_derived_sizes": [
+      48
+    ],
+    "previous_missing_runtime_sizes": [],
+    "source": "apps/libdeskui/icon_map.c",
+    "status": "retained"
+  },
+  {
+    "icon": "package-x-generic",
+    "object": "type:.xz",
+    "previous": "package-x-generic",
+    "previous_derived_sizes": [
+      48
+    ],
+    "previous_missing_runtime_sizes": [],
+    "source": "apps/libdeskui/icon_map.c",
+    "status": "retained"
+  },
+  {
+    "icon": "emblem-system",
+    "object": "type:.yaml",
+    "previous": "emblem-system",
+    "previous_derived_sizes": [
+      48
+    ],
+    "previous_missing_runtime_sizes": [],
+    "source": "apps/libdeskui/icon_map.c",
+    "status": "retained"
+  },
+  {
+    "icon": "emblem-system",
+    "object": "type:.yml",
+    "previous": "emblem-system",
+    "previous_derived_sizes": [
+      48
+    ],
+    "previous_missing_runtime_sizes": [],
+    "source": "apps/libdeskui/icon_map.c",
+    "status": "retained"
+  },
+  {
+    "icon": "package-x-generic",
+    "object": "type:.zip",
+    "previous": "package-x-generic",
+    "previous_derived_sizes": [
+      48
+    ],
+    "previous_missing_runtime_sizes": [],
+    "source": "apps/libdeskui/icon_map.c",
+    "status": "retained"
+  },
+  {
+    "icon": "package-x-generic",
+    "object": "type:.zoo",
+    "previous": "package-x-generic",
+    "previous_derived_sizes": [
+      48
+    ],
+    "previous_missing_runtime_sizes": [],
+    "source": "apps/libdeskui/icon_map.c",
+    "status": "retained"
+  },
+  {
+    "icon": "application-x-executable",
+    "object": "type:executable",
+    "previous": "application-x-executable",
+    "previous_derived_sizes": [
+      48
+    ],
+    "previous_missing_runtime_sizes": [],
+    "source": "apps/libdeskui/icon_map.c",
+    "status": "retained"
+  },
+  {
+    "icon": "folder",
+    "object": "type:folder",
+    "previous": "folder",
+    "previous_derived_sizes": [
+      48
+    ],
+    "previous_missing_runtime_sizes": [],
+    "source": "apps/libdeskui/icon_map.c",
+    "status": "retained"
+  },
+  {
+    "icon": "folder-drag-accept",
+    "object": "type:folder-drop",
+    "previous": "folder-drag-accept",
+    "previous_derived_sizes": [
+      48
+    ],
+    "previous_missing_runtime_sizes": [],
+    "source": "apps/libdeskui/icon_map.c",
+    "status": "retained"
+  },
+  {
+    "icon": "folder-open",
+    "object": "type:folder-open",
+    "previous": "folder-open",
+    "previous_derived_sizes": [
+      48
+    ],
+    "previous_missing_runtime_sizes": [],
+    "source": "apps/libdeskui/icon_map.c",
+    "status": "retained"
+  },
+  {
+    "icon": "folder-remote",
+    "object": "type:folder-remote",
+    "previous": "folder-remote",
+    "previous_derived_sizes": [
+      48
+    ],
+    "previous_missing_runtime_sizes": [],
+    "source": "apps/libdeskui/icon_map.c",
+    "status": "retained"
+  },
+  {
+    "icon": "text-x-generic-template",
+    "object": "type:unknown",
+    "previous": "text-x-generic-template",
+    "previous_derived_sizes": [
+      48
+    ],
+    "previous_missing_runtime_sizes": [],
+    "source": "apps/libdeskui/icon_map.c",
+    "status": "generic fallback"
+  },
+  {
+    "icon": "window-new",
+    "object": "wm:*",
+    "previous": "window-new",
+    "previous_derived_sizes": [
+      48
+    ],
+    "previous_missing_runtime_sizes": [],
+    "source": "apps/libdeskui/icon_map.c",
+    "status": "generic fallback"
+  },
+  {
+    "icon": "process-stop",
+    "object": "wm:close",
+    "previous": "process-stop",
+    "previous_derived_sizes": [
+      48
+    ],
+    "previous_missing_runtime_sizes": [],
+    "source": "apps/libdeskui/icon_map.c",
+    "status": "retained"
+  },
+  {
+    "icon": "view-fullscreen",
+    "object": "wm:maximize",
+    "previous": "view-fullscreen",
+    "previous_derived_sizes": [
+      48
+    ],
+    "previous_missing_runtime_sizes": [],
+    "source": "apps/libdeskui/icon_map.c",
+    "status": "retained"
+  },
+  {
+    "icon": "go-bottom",
+    "object": "wm:minimize",
+    "previous": "go-bottom",
+    "previous_derived_sizes": [
+      48
+    ],
+    "previous_missing_runtime_sizes": [],
+    "source": "apps/libdeskui/icon_map.c",
+    "status": "retained"
+  },
+  {
+    "icon": "window-new",
+    "object": "wm:new-window",
+    "previous": "window-new",
+    "previous_derived_sizes": [
+      48
+    ],
+    "previous_missing_runtime_sizes": [],
+    "source": "apps/libdeskui/icon_map.c",
+    "status": "retained"
+  }
+]

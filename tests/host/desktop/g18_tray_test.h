@@ -22,6 +22,19 @@ static void row_g18_tray(unsigned m)
     int i=wm_v3_window(0,-1,60,100,260,180); assert(i>=0);
     int j=wm_v3_window(0,-1,340,120,180,140); assert(j>=0);
     step("two Win32 windows"); int focus=d.focus;
+    /* fx-exeicons DESK_V3_WINDOW_ICON: a 32 px icon also gives the 16 px one
+     * (2x2 average) until the program sends its own; size 0 drops both. The
+     * window ends without icons, so this row's frames stay as they were. */
+    unsigned icon_fd=(unsigned)take_fd(); fake_surface((int)icon_fd,32,32,0xff2040c0u);
+    uint32_t big[]={32},small[]={16},none[]={0};
+    assert(!g18_request(i,DESK_V3_WINDOW_ICON,big,1,NULL,(int)icon_fd));
+    assert(d.clients[i].v3_icon_mask==7 && d.clients[i].v3_icon32[0]==0xff2040c0u && d.clients[i].v3_icon16[255]==0xff2040c0u);
+    assert(desk_shell_window_icon(&d,i,16)==d.clients[i].v3_icon16 && desk_shell_window_icon(&d,i,32)==d.clients[i].v3_icon32);
+    icon_fd=(unsigned)take_fd(); fake_surface((int)icon_fd,16,16,0xff10e010u);
+    assert(!g18_request(i,DESK_V3_WINDOW_ICON,small,1,NULL,(int)icon_fd));
+    assert(d.clients[i].v3_icon_mask==3 && d.clients[i].v3_icon16[0]==0xff10e010u && d.clients[i].v3_icon32[0]==0xff2040c0u);
+    assert(!g18_request(i,DESK_V3_WINDOW_ICON,none,1,NULL,-1));
+    assert(!d.clients[i].v3_icon_mask && desk_shell_window_icon(&d,i,16)!=d.clients[i].v3_icon16);
     uint32_t flag[]={1};
     assert(!g18_request(i,DESK_V3_FLASH,flag,1,NULL,-1));
     assert(d.clients[i].flash && d.focus==focus); step("background task flashes without activation");

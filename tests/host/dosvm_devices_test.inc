@@ -110,7 +110,9 @@ static void test_device_input(void)
     e.code=0x1E; CHECK(dosvm_input_event(key,&e)); e.value=2; CHECK(dosvm_input_event(key,&e));
     CHECK(v->kbd.count==2); /* host typematic, not duplicate makes */
     e.type=CIUKI_INPUT_TEXT; e.code='a'; CHECK(dosvm_input_event(key,&e) && v->kbd.count==2);
+    e=(struct ciuki_input_event){.type=CIUKI_INPUT_MOTION,.value=10,.value2=10}; CHECK(dosvm_input_event(key,&e));
     e=(struct ciuki_input_event){.type=CIUKI_INPUT_BUTTON,.code=1,.value=1}; CHECK(dosvm_input_event(key,&e));
+    CHECK(v->mouse_captured && v->mouse.buttons==1);
     CHECK(dosvm_input_focus(dosvm_key(w),true)); CHECK(!dosvm_input_event(key,&e));
     CHECK(!v->mouse.buttons && v->kbd.count==4);
     CHECK(device_in(v,0x60)==0x9D && device_in(v,0x60)==0x9E && device_in(v,0x60)==0xE0 && device_in(v,0x60)==0x9D);
@@ -311,6 +313,13 @@ static void test_device_irq_delivery(void)
     guest_op(v,&f,0xFA); CHECK(!v->monitor.vif && f.tf.eip==resume+1);
     f.tf.eip+=7; guest_op(v,&f,0xFB); CHECK(v->monitor.vif && v->monitor.shadow);
     f.tf.eip+=2; CHECK(device_trap(v,&f,1) && !v->monitor.shadow);
+    /* Activate window mouse input before the guest resets/installs its
+     * handler. The later measured motion remains 17,8 mickeys. */
+    struct ciuki_input_event capture={.type=CIUKI_INPUT_MOTION,.value=10,.value2=10};
+    CHECK(dosvm_input_event(key,&capture));
+    capture=(struct ciuki_input_event){.type=CIUKI_INPUT_BUTTON,.code=1,.value=1};
+    CHECK(dosvm_input_event(key,&capture));
+    capture.value=0; CHECK(dosvm_input_event(key,&capture));
     guest_int33(v,&f,0); CHECK((uint16_t)f.tf.eax==0xFFFF && (uint16_t)f.tf.ebx==3);
     const uint8_t retf=0xCB; CHECK(!dosvm_write(v,0x2F00,&retf,1));
     f.es=0x200; f.tf.ecx=0x7F; f.tf.edx=0xF00; guest_int33(v,&f,0x0C);
@@ -322,7 +331,7 @@ static void test_device_irq_delivery(void)
     uint64_t edges=v->pit.edges; uint32_t halt=f.tf.eip;
     device_hook_arm(v,50,device_pointer); CHECK(device_insn(v,&f,0,&hlt,1));
     CHECK(!sleep_hook && v->pit.edges>=edges+48 && (v->monitor.pic[0].irr&1) && !v->monitor.stats.delivered[0]);
-    CHECK((uint16_t)f.tf.eax==3 && (uint16_t)f.tf.ebx==1 && (uint16_t)f.tf.ecx==336 && (uint16_t)f.tf.edx==96 &&
+    CHECK((uint16_t)f.tf.eax==3 && (uint16_t)f.tf.ebx==1 && (uint16_t)f.tf.ecx==24 && (uint16_t)f.tf.edx==0 &&
           (uint16_t)f.tf.esi==17 && (uint16_t)f.tf.edi==8);
     guest_callback(v,&f,&g,halt+1); CHECK(f.tf.cs==0x200);
     /* Pass 2: button held. The focus release becomes pending while IF is clear,

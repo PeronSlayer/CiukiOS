@@ -82,6 +82,7 @@ static void irq_restore(uint32_t f)
 void crit_label(const char *name)
 { CHECK(!(cpu_flags & 0x200) && (!strcmp(name,"dosvm_perf_snapshot") || !strcmp(name,"dosvm_serial_snapshot") || !strcmp(name,"record_publish"))); labels++; }
 static uint64_t read_tsc_serialized(void) { return fake_tsc; }
+static uint64_t read_tsc_unserialized(void) { return fake_tsc; } /* fx-doomwin stamps */
 static bool dosvm_in_irq(const struct dosvm *v) { (void)v; return false; }
 #ifndef F186_BUDGET
 void rec_diag_disk_bootlog(const char *probe, const char *fmt, ...)
@@ -196,9 +197,11 @@ int main(void)
     for (unsigned i=0;i<DOSVM_IDLE_REASONS;i++)
         CHECK(vm.idle.count[i]==1+i+(i==DOSVM_IDLE_HLT ? 2u : 0u) && !vm.perf.last_idle_count[i]);
     CHECK(!vm.perf.last_idle_blocks);
+    vm.perf.dac_counted=767;
     g_ticks=5000; dosvm_perf_report(&vm);
     CHECK(vm.perf.sample_count==1 && rows && periodic_rows==2);
     CHECK(vm.perf.sample[0].ms==5000 && vm.perf.sample[0].exits[0]==18);
+    CHECK(vm.perf.sample[0].dac_counted==767);
     CHECK(vm.perf.sample[0].top_port[0].id==0x334);
     CHECK(vm.perf.sample[0].idle_blocks==12 && vm.perf.sample[0].idle_reasons==15);
     for (unsigned i=0;i<DOSVM_IDLE_REASONS;i++)
@@ -209,6 +212,7 @@ int main(void)
     CHECK(strstr(periodic,"busy_pm=0 idle_2f=0 idle_28=0 idle_16=0 idle_hlt=0\n"));
     g_ticks=10000; dosvm_perf_report(&vm);
     CHECK(vm.perf.sample_count==2 && !vm.perf.sample[1].idle_blocks && !vm.perf.sample[1].idle_reasons);
+    CHECK(!vm.perf.sample[1].dac_counted);
     CHECK(vm.idle.blocks==12 && vm.idle.reasons==15 && !vm.idle.busy_permille);
     for (unsigned i=0;i<DOSVM_IDLE_REASONS;i++) {
         CHECK(!vm.perf.sample[1].idle_count[i]);

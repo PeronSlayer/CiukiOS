@@ -1,0 +1,33 @@
+# sec-user-01: SYSTEM account service and store
+
+- **Written:** 2026-10-26 11:24 by the lead. Implementer: Codex gpt-6.1-sol, effort xhigh. Base: wt/sec-contract 3ddc9de88.
+- **Specification:** `docs/design/user-security-contract.md` sections 3 (accounts, password policy, v2 format, serialization/recovery, account/owner commit and bootstrap handshake), 4.1 (service interfaces), 6.3 (G32 conversion inputs) and the "Implementation plan" row 2B (sec-user-01) with acceptance H03/RUS; kernel mechanics in `docs/design/user-security-kernel.md`. Lead/owner decisions: `docs/directives/sec-lead-decisions.md`.
+- **Parallel work:** sec-k01 (kernel credentials, SYS_SECURITY=101, abi.h, libc wrappers) is being implemented at the same time in another worktree. **Do not edit** src/kernel/include/ciuki/abi.h, src/kernel/proc/*, common syscall tables, the SDK ABI copies or shared test scripts. Code the service against the frozen call-101 interface through one small private adapter (a header with the calls you need and a host fake), so the lead can bind it to the real k01 implementation at integration. Same for the k02 owner service: use the specified owner-service adapter and a fault-injecting backend; the service must refuse live publication until that backend is real.
+
+## Scope
+The sealed SYSTEM account service: private account IPC, the v2 store codec, PBKDF2-HMAC-SHA-256 verifiers (10,000 iterations, per-record count stored), password policy (8-63 printable bytes, the single ready-image CiukiUser blank exception), entropy-backed machine SID bootstrap, one KDF and one pending request at a time with the 1000 ms retry backoff, identity rules (ids never reused, 500/501/1000+, last-administrator and active-account EBUSY rules), durable reservation, stale-generation and crash-lock recovery, no rollback of an acknowledged password change, and the migration adapter from G32 `users.dat` (apps/desktop/users*: read-only import into the enrollment flow; do not change the current desktop logon behaviour, which sec-user-03 replaces later). No logon UI here.
+
+## Tests
+H03 and RUS as defined in the contract, with fault injection (entropy failure, OOM, disk full, power cut at every write/flush, corrupt/truncated store, concurrent clients), constant-time verifier comparison, buffer wiping, and the G32 import cases. Run one at a time with nice -n 19.
+
+Report to build/codex/sec-user-01-report.md. Leave changes uncommitted.
+
+## Lead amendment 1 (2026-10-26 12:15): contract cross-review round 1
+
+Your work is committed (sec-user-01 commit on wt/sec-user01); the lead's run outside the sandbox of test_accounts.py passes 10/10. The contract changed after a cross-review; it is merged into your branch (wt/sec-contract HEAD). Apply every row of "Delta for sec-k01 and sec-user-01" in docs/design/user-security-contract.md that names sec-user-01 (and the shared environment row): the auto_logon_retired bit and blank-CiukiUser transitions, the batch account/owner transaction (160+128*N request, 96+32*N reply, key (SID,volume,G), lifetime STATUS receipts, COMMIT_REQUIRED recovery, three-account bootstrap and sixteen-profile migration fixtures), the exact CIUKISEE seed records and the 160-byte CIUKIBST bootstrap codec/state table (shared with sec-user-02), the endpoint operation/body codecs of section 4.1, and auth outcomes bound to consumed attempts and UI/console/account generations. Kernel calls (operations 8-14, roles, SERVICE_CONNECT/ACCEPT/CANCEL) are being added to sec-k01 in parallel: keep using your private adapter, updated to the new operations and records exactly as frozen in docs/design/user-security-kernel.md. Do not edit kernel/ABI files. Add the new tests to H03/H10 as the delta says. Update your report with a "Review round 1" section. Leave changes uncommitted.
+
+## Lead amendment 2 (2026-10-26 13:14): contract round 2
+
+Amendment 1 is committed; the lead's run outside the sandbox passes all security and users tests (18). The contract's round 2 is merged into your branch (wt/sec-contract 15dba44b5). Apply every sec-user-01 row of the round-2 delta in docs/design/user-security-contract.md: the full challenge exchange with the account selector, the LOGON->ACCOUNT autologon route for the retained ready tuple, the ENROLL flow, best-effort cancellation with the durable caller-authorized STATUS keyed by a client operation id, OWNER resolving and reserving CREATE roots (ACCOUNT never supplies a destination identity), metadata-only self-service updates outside owner transactions plus the receipt checkpoint/compaction protocol and reservation counting ABORTED receipts, password-first CiukiUser replacement (no atomic replacement operation: this answers your report question), and the profile query fields. Keep the private kernel adapter in step with the frozen operations. Tests as the delta names. Update your report with "Review round 2". Leave changes uncommitted.
+
+## Lead amendment 3 (2026-10-26 14:45): code review round 1
+
+Amendment 2 is committed (81858a48d); the lead's run outside the sandbox passes all 31 tests. A Codex xhigh review found one P1 and six P2, each reproduced with production-linked probes; full text in build/codex/sec-user01-review1.md. Fix all seven with a regression each:
+1. P1 queued authentication after a storage fault: service.c:373 dispatches queued AUTH before the availability check set at :340 (ENOSPC password change -> AUTHENTICATED with the old password). Reject queued authentication when faulted, invalidate outstanding attempts, require recovery first.
+2. P2 interrupted OWNER checkpoint (checkpoint.c:100/:66): journal the exact pending checkpoint request before sending it and recover that pair before admitting changes.
+3. P2 CREATE vs numeric roots retained by imported profiles (service.c:273, store.c:89): detect occupied roots, durably skip conflicting ids, retry allocation, never fault the service.
+4. P2 final enrollment rejected (enrollment.c:189 vs logon.c:97): validate a committed enrollment against its resulting generation while keeping the original challenge correlation and the zero-credential requirement.
+5. P2 attempt ids reset by a LOGON restart (logon.c:37 vs auth.c:97): unique across respawns, for example the registered LOGON generation plus a bounded counter.
+6. P2 retained handles compared as identities (auth.c:161, logon.c:79): compare the guaranteed link identity/generations (user-security-kernel.md:1225), or add an explicit same-link adapter operation that sec-k01 can implement; say which.
+7. P2 intent recovery copies before the bound check (store.c:425): enforce intent_bytes <= 64 + ACCT_FILE_MAX before copying.
+Add "Review round 3" to the report. Leave changes uncommitted.

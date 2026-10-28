@@ -175,6 +175,26 @@ class LoaderMenuTests(unittest.TestCase):
         menu.poll(1,'H')
         self.assertFalse(menu.hardware_check)
 
+    def test_self_test_replaces_cfg_preserves_safe_and_fw_priority(self):
+        for key in ('t', 'T'):
+            menu = BootMenu(safe=True, request='f0:core run=12345678')
+            menu.poll(1, key)
+            self.assertEqual(menu.state, 'done')
+            self.assertTrue(menu.self_test and menu.safe)
+            self.assertFalse(menu.hardware_check)
+            self.assertIsNone(menu.request)
+            self.assertFalse(menu.screen_quiet)
+            self.assertEqual(menu.output[-2:], ['L:SELFTEST=1', 'L:SELECT_SOURCE=menu'])
+        menu = BootMenu(request='f0:core run=12345678', source='fw_cfg')
+        menu.poll(1, 'T')
+        self.assertFalse(menu.self_test)
+        source = (ROOT / 'src/boot/ciukldr/menu.inc').read_text()
+        selftest = source.split('.selftest:', 1)[1].split('.probe:', 1)[0]
+        self.assertIn('call .cancel_cfg', selftest)
+        self.assertIn('CBI_F_SELF_TEST >> 16', selftest)
+        self.assertNotIn('CBI_F_SAFE_MODE', selftest)
+        self.assertIn("selftest_selected db 'L:SELFTEST=1',13,10,0", source)
+
     def test_production_safe_stage_returns_through_full_deadline_restart(self):
         source = (ROOT / 'src/boot/ciukldr/menu.inc').read_text()
         menu = source.split('boot_menu:', 1)[1].split('source_menu db', 1)[0]

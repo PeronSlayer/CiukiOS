@@ -124,11 +124,13 @@ static void app_answer_pings(void)
 static struct fake_app *last_app;
 static int next_size_w, next_size_h;
 static unsigned find_launches;
+static char last_launch_arg[DESK_ARG_MAX+1];
 /* d->launch: the fx-8 asynchronous launcher (desktop.c launch_program):
  * the slot exists at once, AppStarting shows, the process comes later. */
 static int fake_launch(struct desktop *dd, const struct desk_program *program)
 {
     if (!strcmp(program->name,"files") && dd->launch_arg && !strcmp(dd->launch_arg,"find:")) find_launches++;
+    snprintf(last_launch_arg,sizeof(last_launch_arg),"%s",dd->launch_arg ? dd->launch_arg : "");
     int k=0; while (k<DESK_CLIENTS && apps[k].stage!=APP_FREE) k++;
     if (k==DESK_CLIENTS || fds_left()<8) { errno=EAGAIN; return -1; }
     struct fake_app *a=&apps[k]; memset(a,0,sizeof(*a));
@@ -342,7 +344,7 @@ static int vfs_write(void *ctx, int fd, const void *in, unsigned n) { (void)ctx;
 static int vfs_fd(void *ctx, int fd) { (void)ctx; (void)fd; return 0; }
 static int vfs_metadata(void *ctx, const char *path, const struct fm_meta *meta) { (void)ctx; (void)path; (void)meta; return -EROFS; }
 static const struct fm_vfs wm_vfs={NULL,vfs_list,vfs_stat,vfs_refuse_path,vfs_refuse_rename,vfs_refuse_path,vfs_refuse_path,
-    vfs_open,vfs_read,vfs_write,vfs_fd,vfs_fd,vfs_metadata};
+    vfs_open,vfs_read,vfs_write,vfs_fd,vfs_fd,vfs_metadata,NULL};
 /* ---- input as the hardware delivers it (desk_input) ---- */
 static void pointer_to(int x, int y)
 {
@@ -719,6 +721,120 @@ static struct fake_app *app_open(const char *name, int w, int h, int x, int y)
     if (x>=0) desk_move(&d,a->slot,x,y);
     app_paint(a,0,0,(unsigned)a->w,(unsigned)a->h,a->salt);
     return a;
+}
+/* fx-launchfb: production cursor/lifecycle and presentation on every backend. */
+static void feedback_at(int x,int y,unsigned expected)
+{
+    pointer_to(x,y); desk_cursor_update(&d);
+    assert(d.cursor_shape==expected);
+}
+static void row_feedback_native(unsigned m)
+{
+    row_name="launch feedback native"; wm_begin(m,1);
+    assert(!desk_task_launch(&d,"calc",NULL)); struct fake_app *a=last_app;
+    step("request"); feedback_at(600,430,DESK_CURSOR_ARROW_BUSY);
+    app_spawned(a); app_create_window(a); step("window before damage");
+    assert(d.cursor_shape==DESK_CURSOR_ARROW_BUSY);
+    app_paint(a,0,0,a->w,a->h,a->salt);
+    feedback_at(600,430,DESK_CURSOR_ARROW_BUSY); /* damage is not presentation */
+    step("first successful presentation");
+    feedback_at(600,430,DESK_CURSOR_ARROW); step("feedback ended"); wm_end();
+}
+static void row_feedback_dos(unsigned m)
+{
+    row_name="launch feedback DOS"; wm_begin(m,1);
+    assert(!desk_task_launch(&d,"dosbox","C:\\GAME.COM")); struct fake_app *a=last_app;
+    step("DOS Box queued"); feedback_at(600,430,DESK_CURSOR_ARROW_BUSY);
+    app_spawned(a); app_create_window(a); app_paint(a,0,0,a->w,a->h,a->salt);
+    step("DOS Box presented"); feedback_at(600,430,DESK_CURSOR_ARROW); step("ended"); wm_end();
+}
+static void row_feedback_failure(unsigned m)
+{
+    row_name="launch feedback failure"; wm_begin(m,1);
+    assert(!desk_task_launch(&d,"calc",NULL)); struct fake_app *a=last_app;
+    step("queued"); feedback_at(600,430,DESK_CURSOR_ARROW_BUSY);
+    desk_drop_client(&d,a->slot); step("spawn failure drops reserved slot");
+    feedback_at(600,430,DESK_CURSOR_ARROW);
+    assert(desk_task_launch(&d,"missing",NULL)==-ENOENT); step("lookup failure");
+    assert(d.cursor_shape==DESK_CURSOR_ARROW); wm_end();
+}
+static void row_feedback_timeout(unsigned m)
+{
+    row_name="launch feedback timeout"; wm_begin(m,1);
+    assert(!desk_task_launch(&d,"calc",NULL));
+    step("queued"); feedback_at(600,430,DESK_CURSOR_ARROW_BUSY);
+    turn(5000000000ull); step("spawn still pending after timeout");
+    feedback_at(600,430,DESK_CURSOR_ARROW); wm_end();
+}
+static void row_feedback_overlap(unsigned m)
+{
+    row_name="launch feedback overlap"; wm_begin(m,1);
+    assert(!desk_task_launch(&d,"calc",NULL)); struct fake_app *a=last_app;
+    assert(!desk_task_launch(&d,"dosbox",NULL)); struct fake_app *b=last_app;
+    step("two pending"); feedback_at(600,430,DESK_CURSOR_ARROW_BUSY);
+    app_spawned(a); app_create_window(a); app_paint(a,0,0,a->w,a->h,a->salt);
+    step("one presented"); feedback_at(600,430,DESK_CURSOR_ARROW_BUSY);
+    desk_drop_client(&d,b->slot); step("second process exits before window");
+    feedback_at(600,430,DESK_CURSOR_ARROW); step("ended"); wm_end();
+}
+static void row_feedback_precedence(unsigned m)
+{
+    row_name="launch feedback cursor precedence"; wm_begin(m,1);
+    struct fake_app *a=app_open("files",240,160,160,70); step("existing window");
+    assert(!desk_task_launch(&d,"calc",NULL)); step("new launch");
+    struct desk_client *c=&d.clients[a->slot]; struct desk_box b=desk_content(c);
+    feedback_at(b.x+20,b.y+20,DESK_CURSOR_ARROW_BUSY); step("over default arrow");
+    c->cursor=DESK_CURSOR_TEXT;
+    feedback_at(b.x+20,b.y+20,DESK_CURSOR_TEXT); step("application text wins");
+    c->cursor=DESK_CURSOR_HAND;
+    feedback_at(b.x+20,b.y+20,DESK_CURSOR_HAND); step("application link wins");
+    c->cursor=DESK_CURSOR_BUSY;
+    feedback_at(b.x+20,b.y+20,DESK_CURSOR_BUSY); step("application busy wins");
+    feedback_at(c->frame.x+60,c->frame.y+8,DESK_CURSOR_ARROW_BUSY); step("over system title bar");
+    feedback_at(c->frame.x+2,c->frame.y+c->frame.h/2,DESK_CURSOR_RESIZE_EW); step("resize wins");
+    int v=wm_v3_window(DESK_V3_OVERLAPPED,-1,160,70,240,160); assert(v>=0);
+    c=&d.clients[v]; b=desk_content(c);
+    c->cursor=DESK_CURSOR_ARROW; c->v3_cursor=1; c->v3_cursor_valid=1;
+    for (unsigned k=0;k<1024;k++) c->v3_cursor_pixels[0][k]=0xff804020u;
+    feedback_at(b.x+20,b.y+20,DESK_CURSOR_ARROW);
+    assert(d.v3_cursor_id==1 && !d.v3_cursor_hidden); step("custom visible cursor wins");
+    c->v3_visibility=-1;
+    feedback_at(b.x+20,b.y+20,DESK_CURSOR_ARROW);
+    assert(d.v3_cursor_id==1 && d.v3_cursor_hidden); step("custom hidden cursor wins");
+    c->v3_cursor=0;
+    feedback_at(b.x+20,b.y+20,DESK_CURSOR_ARROW);
+    assert(!d.v3_cursor_id && d.v3_cursor_hidden); step("negative visibility wins");
+    c->v3_visibility=0; c->v3_pointer=DESK_V3_HIDDEN;
+    feedback_at(b.x+20,b.y+20,DESK_CURSOR_ARROW);
+    assert(d.v3_cursor_hidden); step("hidden pointer flag wins");
+    c->v3_pointer=0;
+    feedback_at(b.x+20,b.y+20,DESK_CURSOR_ARROW_BUSY);
+    assert(!d.v3_cursor_id && !d.v3_cursor_hidden); step("default arrow resumes feedback");
+    d.v3_lease_state=1;
+    feedback_at(b.x+20,b.y+20,DESK_CURSOR_ARROW); /* no startup cursor while full screen owns the display */
+    feedback_at(600,430,DESK_CURSOR_ARROW);
+    d.v3_lease_state=0;
+    feedback_at(600,430,DESK_CURSOR_ARROW_BUSY); step("feedback resumes after full-screen ownership");
+    wm_end();
+}
+static void feedback_presented(struct desktop *dd,uint32_t pid)
+{
+    (void)pid; dd->launch_remote_count=0; dd->launch_remote_until=0;
+}
+static void row_feedback_win32(unsigned m)
+{
+    row_name="launch feedback Win32"; wm_begin(m,1);
+    d.launch_remote_count=1; d.launch_remote_until=d.now_ns+5000000000ull;
+    step("kernel reports child before USER connects"); feedback_at(600,430,DESK_CURSOR_ARROW_BUSY);
+    struct fake_app *a=app_open("netsurf",240,160,160,70);
+    struct desk_client *c=&d.clients[a->slot]; c->launch_feedback_remote=1;
+    d.launch_presented=feedback_presented;
+    feedback_at(600,430,DESK_CURSOR_ARROW_BUSY); step("Win32 first window presented");
+    feedback_at(600,430,DESK_CURSOR_ARROW); step("kernel completion observed");
+    d.launch_remote_count=1; d.launch_remote_until=d.now_ns+5000000000ull;
+    step("another child"); feedback_at(600,430,DESK_CURSOR_ARROW_BUSY);
+    d.launch_remote_count=0; step("child exits or first input idle");
+    feedback_at(600,430,DESK_CURSOR_ARROW); wm_end();
 }
 static void row_create(unsigned m)
 {
@@ -2054,6 +2170,108 @@ static void row_resume_password(unsigned m)
     step("unchanged counters, disabled option and default profile do not lock");
     wm_end();
 }
+/* --- sec-user-04: a LOGON session's protected saver and Stand by reach the
+ * trusted gate (SESSION_EVENT SAVER/STANDBY to LOGON) before the desktop is
+ * restored or the firmware sleeps; a failure keeps the saver or refuses Stand
+ * by; preferences and a password-less owner never produce a false lock. --- */
+#include "../../../apps/logon/logon_proto.h"
+#include "session_prefs.h"
+static unsigned lock_notices[16], lock_count, lock_flags, lock_standbys;
+static int lock_error, lock_dpms;
+static int lock_secure(struct desktop *dd, unsigned notice, unsigned *flags)
+{
+    (void)dd;
+    if (notice==LGN_NOTICE_SAVER) assert(d.saver_active || (lock_dpms && !d.monitor_off));   /* still concealed */
+    if (lock_count<16) lock_notices[lock_count]=notice;
+    lock_count++;
+    if (flags) *flags=lock_flags;
+    return lock_error;
+}
+static int lock_standby(void) { assert(lock_count && lock_notices[0]==LGN_NOTICE_STANDBY && (lock_flags&(LGN_EVENT_LOCKED|LGN_EVENT_BLANK))); lock_standbys++; return 0; }
+static void lock_reset(unsigned flags, int error) { lock_count=0; lock_flags=flags; lock_error=error; }
+static void row_logon_locks(unsigned m)
+{
+    row_name="sec-user-04 LOGON saver and resume locks"; wm_begin(m,1);
+    (void)app_open("files",260,180,60,60);
+    d.now_ns=wm_clock+=3000000000ull;
+    d.logon_session=1; d.session_secure=lock_secure; strcpy(d.sh.profile.name,"Alice");
+    struct ciuki_input_event motion={.type=CIUKI_INPUT_MOTION,.value=1};
+    d.sh.cfg.saver_enabled=1; d.sh.cfg.saver_seconds=1;
+    lock_reset(LGN_EVENT_LOCKED,0);
+    d.saver_idle=d.now_ns-2000000000ull; desk_saver_tick(&d); assert(d.saver_active && !d.saver_preview);
+    desk_input(&d,&motion);
+    assert(!d.saver_active && !d.sh.user_gate && lock_count==1 && lock_notices[0]==LGN_NOTICE_SAVER);
+    step("protected saver dismissal asks LOGON for the trusted gate first");
+    lock_reset(0,-ESRCH);
+    d.saver_idle=d.now_ns-2000000000ull; desk_saver_tick(&d); assert(d.saver_active);
+    desk_input(&d,&motion); assert(d.saver_active && lock_count==1);
+    step("LOGON unreachable: the saver keeps concealing");
+    lock_reset(LGN_EVENT_LOCKED,0); desk_input(&d,&motion); assert(!d.saver_active && lock_count==1);
+    step("next input retries and dismisses after the gate");
+    lock_reset(LGN_EVENT_BLANK,0);
+    d.saver_idle=d.now_ns-2000000000ull; desk_saver_tick(&d); desk_input(&d,&motion);
+    assert(!d.saver_active && lock_count==1 && !d.sh.notification.active);
+    step("a password-less owner: no false lock, no guidance");
+    assert(!desk_secure_store(d.sh.cfg.extra,sizeof(d.sh.cfg.extra),DESK_SECURE_SAVER,0));
+    lock_reset(LGN_EVENT_LOCKED,0);
+    d.saver_idle=d.now_ns-2000000000ull; desk_saver_tick(&d); desk_input(&d,&motion);
+    assert(!d.saver_active && !lock_count);
+    assert(!desk_saver_start(&d,0)); desk_input(&d,&motion); assert(!lock_count);
+    step("saver protection off and Preview never lock");
+    assert(!desk_secure_store(d.sh.cfg.extra,sizeof(d.sh.cfg.extra),DESK_SECURE_SAVER,1));
+    d.sh.cfg.saver_enabled=0;
+    /* DPMS: the monitor wakes first (black frame), then the gate; a failure
+     * keeps a blank concealment instead of the desktop. */
+    d.monitor_power=saver_monitor; saver_monitor_error=0; d.sh.cfg.monitor_seconds=1; lock_dpms=1;
+    d.saver_idle=d.now_ns-2000000000ull; desk_saver_tick(&d); assert(d.monitor_off && !d.saver_active);
+    d.sh.cfg.monitor_seconds=0;
+    lock_reset(0,-ESRCH); desk_input(&d,&motion);
+    assert(!d.monitor_off && d.saver_active && !d.saver_kind && lock_count==1);
+    step("DPMS wake with LOGON unreachable keeps a blank concealment");
+    lock_reset(LGN_EVENT_LOCKED,0); desk_input(&d,&motion); assert(!d.saver_active && lock_count==1);
+    step("the next input passes the gate, then the desktop returns");
+    lock_dpms=0;
+    /* Stand by: armed (LOCKED) before the call; pending waits; failures refuse. */
+    d.sh.power_can_standby=1; d.power_standby=lock_standby; lock_standbys=0;
+    lock_reset(0,0); unsigned n=d.pbt.standbys; d.sh.want_standby=1;
+    for (unsigned tick=0;tick<30;tick++) desk_power_policy_tick(&d);
+    assert(d.pbt.standbys==n && !lock_standbys && lock_count>1 && lock_notices[0]==LGN_NOTICE_STANDBY && lock_notices[1]==LGN_NOTICE_QUERY);
+    lock_flags=LGN_EVENT_LOCKED;
+    for (unsigned tick=0;tick<10 && d.pbt.standbys==n;tick++) desk_power_policy_tick(&d);
+    assert(d.pbt.standbys==n+1 && lock_standbys==1 && !d.pbt.standby_error && !d.resume_arming);
+    step("Stand by waits for LOGON's gate, then sleeps");
+    d.sh.notification.active=0; for (unsigned tick=0;tick<4;tick++) desk_power_policy_tick(&d);
+    lock_reset(0,-EIO); n=d.pbt.standbys; d.sh.want_standby=1;
+    for (unsigned tick=0;tick<20 && d.pbt.standbys==n;tick++) desk_power_policy_tick(&d);
+    assert(d.pbt.standbys==n+1 && lock_standbys==1 && d.pbt.standby_error==EIO);
+    step("a gate that cannot be raised refuses Stand by");
+    d.sh.notification.active=0; for (unsigned tick=0;tick<4;tick++) desk_power_policy_tick(&d);
+    lock_reset(0,0); n=d.pbt.standbys; d.sh.want_standby=1;
+    for (unsigned tick=0;tick<40 && d.pbt.standbys==n;tick++) { d.now_ns+=200000000ull; desk_power_policy_tick(&d); }
+    assert(d.pbt.standbys==n+1 && lock_standbys==1 && d.pbt.standby_error==ETIMEDOUT);
+    step("the bounded wait expires: Stand by refused");
+    d.sh.notification.active=0; for (unsigned tick=0;tick<4;tick++) desk_power_policy_tick(&d);
+    assert(!desk_secure_store(d.sh.cfg.extra,sizeof(d.sh.cfg.extra),DESK_SECURE_RESUME,0));
+    lock_reset(0,0); n=d.pbt.standbys; d.sh.want_standby=1; d.power_standby=row_standby;
+    for (unsigned tick=0;tick<20 && d.pbt.standbys==n;tick++) desk_power_policy_tick(&d);
+    assert(d.pbt.standbys==n+1 && !lock_count && !d.pbt.standby_error);
+    step("resume protection off: Stand by without the gate");
+    assert(!desk_secure_store(d.sh.cfg.extra,sizeof(d.sh.cfg.extra),DESK_SECURE_RESUME,1));
+    /* A firmware resume the desktop did not arm locks at once. */
+    d.sh.notification.active=0; for (unsigned tick=0;tick<4;tick++) desk_power_policy_tick(&d);
+    struct ciuki_power_events e={.version=CIUKI_POWER_EVENTS_VERSION,.size=sizeof(e),.resumes=1};
+    lock_reset(LGN_EVENT_LOCKED,0); d.sh.power_events_valid=0;
+    desk_shell_power_events(&d,&e,CIUKI_POWER_CAN_STANDBY); assert(!lock_count);
+    e.resumes++; desk_shell_power_events(&d,&e,CIUKI_POWER_CAN_STANDBY);
+    assert(lock_count==1 && lock_notices[0]==LGN_NOTICE_STANDBY && !d.sh.user_gate);
+    step("an unarmed firmware resume locks through LOGON");
+    d.logon_session=0; d.session_secure=NULL; d.sh.profile.name[0]=0; d.sh.power_cfg.password=0;
+    static int reported;
+    if (!reported++) puts("PASS sec-user-04 LOGON saver/resume locks: gate before the saver or DPMS returns, fail-closed concealment, "
+                          "Stand by armed (bounded wait, refusals), preferences, blank owner, unarmed firmware resume");
+    wm_end();
+}
+/* --- end sec-user-04 --- */
 /* G22B, appended after every existing scenario. Render the actual Volume
  * Control client, send only its toolkit damage, then compare each presenter. */
 static struct ciuki_mixer_line wm_lines[2][6];
@@ -2585,6 +2803,43 @@ static void row_g26c_launch_error(unsigned m)
     app_paint(a,0,218,360,22,0x832170);step("desktop late launch refusal status without opener navigation");
     wm_end();
 }
+/* fx-q3vise: ShellExecute(Ex) of a folder by a Win32 program (the VISE
+ * installer opens each Start-menu folder it filled): a window that carries a
+ * Win32 HWND may open Files on an absolute folder path, nothing else. */
+#include "browser_launch.h"
+static int folder_launch(int window,const char *title,const char *arg)
+{
+    struct desk_client *c=&d.clients[window];struct ciuki_message request;
+    unsigned t=(unsigned)strlen(title),n=(unsigned)strlen(arg);
+    v3msg(&request,DESK_V3_LAUNCH,8+t+n,c->v3_id,c->v3_generation);
+    desk_put32(request.data+16,t);memcpy(request.data+20,title,t);
+    desk_put32(request.data+20+t,n);memcpy(request.data+24+t,arg,n);
+    last_app=NULL;last_launch_arg[0]=0;
+    return desk_v3_receive(&d,v3_root,&request);
+}
+static void row_q3vise_folder(unsigned m)
+{
+    row_name="fx-q3vise Win32 folder opens Files";wm_begin(m,1);
+    int program=wm_v3_window(DESK_V3_POPUP,-1,40,60,1,1);assert(program>=0);
+    const char *folder="/WINDOWS/Start Menu/Programs/Quake 3 Arena Demo";
+    strcpy(d.clients[v3_root].application,"setup");   /* a Win32 program, not the browser of the G26C rows */
+    d.clients[program].v3_win32_hwnd=0;
+    assert(folder_launch(program,"files",folder)==-EPERM && !last_app);step("a window without a Win32 HWND is refused");
+    d.clients[program].v3_win32_hwnd=0x1234;
+    const char *refused[]={"--open=/Documents","--file-action=348:/Documents/a.txt","Documents","/","/Documents/../system",
+        "/Documents/./x","/Documents//x"};
+    for (unsigned k=0;k<sizeof(refused)/sizeof(*refused);k++) assert(folder_launch(program,"files",refused[k])==-EPERM && !last_app);
+    assert(folder_launch(program,"ciuknote","/Documents")==-EPERM && !last_app);
+    assert(folder_launch(program,"control","/Documents")==-EPERM && !last_app);
+    /* A control character never parses (the desktop ends that connection); the rule refuses it too. */
+    assert(!desk_folder_argument("/Documents/a\001b") && desk_folder_argument(folder));
+    char longest[DESK_ARG_MAX+2]="/"; memset(longest+1,'a',DESK_ARG_MAX); longest[DESK_ARG_MAX+1]=0;
+    assert(!desk_folder_argument(longest)); longest[DESK_ARG_MAX]=0; assert(desk_folder_argument(longest));
+    step("options, relative, traversal and other programs refused");
+    assert(!folder_launch(program,"files",folder) && last_app && !strcmp(last_launch_arg,folder));
+    struct fake_app *files=last_app;app_spawned(files);app_create_window(files);step("Files opens on the folder");
+    app_close(files);step("Files closes");wm_end();
+}
 /* G16B: append after all existing scenarios; actual toolkit pixels travel
  * through the same client DAMAGE route as an application window. */
 static int common_lister(void *ctx,const char *path,struct du_file_entry *out,unsigned cap,unsigned *count)
@@ -2722,7 +2977,10 @@ static void (*const rows[])(unsigned)={row_create,row_stretched,row_scroll_overl
     row_g30b_performance, row_g30b_schedule, row_g30b_network, row_g26c_print, row_g26c_download,
     row_g26c_programs, row_g26c_launch_error, row_common_files, row_common_script,
     row_common_folder_rename, row_g27b_statistics, row_g27b_viewer_save, row_g27b_terminal,
-    row_g27b_serial, row_protected_saver, row_resume_password};
+    row_g27b_serial, row_protected_saver, row_resume_password,
+    row_feedback_native, row_feedback_win32, row_feedback_dos, row_feedback_failure,
+    row_feedback_timeout, row_feedback_overlap, row_feedback_precedence, row_q3vise_folder,
+    row_logon_locks /* sec-user-04 */};
 static void wm_rows(unsigned m)
 {
     /* WM_ROW=<index> runs one row (the per-row evidence against older code).

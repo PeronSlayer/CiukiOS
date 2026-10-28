@@ -1,4 +1,5 @@
 /* SPDX-License-Identifier: GPL-2.0-only */
+#include <ciuki/kheap_limits.h>
 /* Actual VMM/uaddr loops; synthetic physical frame IDs avoid a 3 GiB host
  * allocation when walking the architectural maximum. No policy is copied. */
 #include <stdio.h>
@@ -30,8 +31,8 @@ void task_sleep_ms(uint32_t ms) { (void)ms; abort(); }
 void kpreempt_point(void) { if (points) { service_points++; charge(200); boundary(); if (on_point) on_point(); } }
 void pmm_free(uint32_t pa) { unsigned p=pa/4096; CHECK(p<sizeof(freed) && !freed[p]); freed[p]=1; releases++; charge(6000); }
 uint32_t pmm_alloc(void) { abort(); }
-void *kmalloc(size_t n) { return malloc(n); }
-void *kzalloc(size_t n) { return calloc(1,n); }
+void *(kmalloc)(size_t n) { if (n > KHEAP_MAX_REQUEST) return 0; return malloc(n); }
+void *(kzalloc)(size_t n) { if (n > KHEAP_MAX_REQUEST) return 0; return calloc(1,n); }
 void kfree(void *p) { free(p); }
 void ww_cancel(void *p,uint64_t g,uint32_t b,uint32_t e) { (void)p;(void)g;(void)b;(void)e; }
 void panic(const char *fmt,...) { fprintf(stderr,"panic %s\n",fmt); abort(); }

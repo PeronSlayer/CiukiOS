@@ -83,6 +83,7 @@ static void shader_precision3d(void) {
                 struct render3d_fence f; FULL_CHECK(!render3d_submit(services[side],7,contexts[side],&q,sizeof(q),&f));
                 while (services[side]->queued) FULL_CHECK(render3d_step(services[side])==1);
                 FULL_CHECK(!render3d_wait(services[side],7,contexts[side],f,0));
+                sync3d(services[side]);
                 uint32_t *pixels=services[side]->contexts[0].resources[0].shadow;
                 uint16_t *depth=services[side]->contexts[0].resources[1].shadow;
                 for (unsigned y=0;y<32;y++) for (unsigned x=0;x<32;x++) {
@@ -128,6 +129,7 @@ static void shader_precision3d(void) {
             struct render3d_fence f; FULL_CHECK(!render3d_submit(services[side],7,contexts[side],&q,sizeof(q),&f));
             while (services[side]->queued) FULL_CHECK(render3d_step(services[side])==1);
             FULL_CHECK(!render3d_wait(services[side],7,contexts[side],f,0));
+            sync3d(services[side]);
         }
         FULL_CHECK(!memcmp(scratch3d.contexts[0].resources[0].shadow,reference3d.contexts[0].resources[0].shadow,32*32*4));
         FULL_CHECK(!memcmp(scratch3d.contexts[0].resources[1].shadow,reference3d.contexts[0].resources[1].shadow,32*32*2));

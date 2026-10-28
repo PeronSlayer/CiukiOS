@@ -1,5 +1,6 @@
 /* SPDX-License-Identifier: MIT */
 #include "terminal.h"
+#include "../desktop/profile.h" /* sec-user-04: My Documents is per user */
 #include <ciuki/net.h>
 #include <ciuki/audio.h>
 #include <ciuki/proc.h>
@@ -110,7 +111,7 @@ int main(int argc,char **argv)
     if(term_attach(&x->app,&x->ui,&h)) { du_window_destroy(&x->window); free(x); return 1; }
     x->window.user=x; x->window.message=message; x->window.close_request=close_request;
     x->window.query_end_session=query_end_session;
-    if(chdir("/Documents"))term_printf(&x->app,"Working directory: %s\n",strerror(errno));
+    if(chdir(profile_home()))term_printf(&x->app,"Working directory: %s\n",strerror(errno));
     if(script) { x->app.busy=1; int r=term_lua(&x->app,script,0,NULL); x->app.busy=0; if(r)term_printf(&x->app,"Lua: %s\n",strerror(-r)); }
     int r=du_run(&x->window,NULL,NULL); term_detach(&x->app); du_window_destroy(&x->window); free(x); return r<0 ? 1 : 0;
 }

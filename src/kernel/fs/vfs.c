@@ -795,6 +795,7 @@ void vfs_ro_expire_locked(struct vfs *v, unsigned d)
 {
     vfs_reserve_locked(v,vfs_drive_mask(d));
     if (d >= 26 || !v->ro_volumes[d]) return;
+    if(v->policy[d]) { v->policy[d]->ready=false; v->policy[d]=0; }
     struct fs_ro_volume *ro = v->ro_volumes[d];
     if (px_volume_detached) px_volume_detached(v, d);
     VFS_IO_VOID(v,fs_ro_unmount(ro)); v->ro_volumes[d] = 0; v->generation[d]++; namespace_changed();
@@ -802,6 +803,53 @@ void vfs_ro_expire_locked(struct vfs *v, unsigned d)
         memcpy(v->tables[i]->cwd[d], "/", 2); v->tables[i]->cwd_cluster[d] = 0;
     }
 }
+/* ---- sec-k03: legacy-table subjects and authorization ---------------- */
+/* Weak: the standalone F1 harnesses link no credential implementation; a
+ * subject table then cannot be bound and every subject check denies. */
+extern int security_subject_get(struct security_subject *) __attribute__((weak));
+extern void security_subject_put(struct security_subject *) __attribute__((weak));
+extern bool security_subject_live(const struct security_subject *) __attribute__((weak));
+int vfs_table_init_subject(struct vfs *v, struct vfs_table *t, unsigned d, struct security_subject *s) {
+    if (!s || !security_subject_get || !security_subject_put) return -FS_EACCES;
+    int e=security_subject_get(s); if (e) return e;
+    e=vfs_table_init(v,t,d);
+    if (e) { security_subject_put(s); return e; }
+    t->subject=s; return 0;
+}
+int vfs_table_bind_subject(struct vfs_table *t, struct security_subject *s) {
+    if (!t || !t->vfs || !s || !security_subject_get || !security_subject_put) return -FS_EINVAL;
+    struct vfs *v=t->vfs; vfs_lock(v,0); int e=t->subject ? -FS_EBUSY : 0;
+    for (unsigned i=0;!e && i<VFS_HANDLES;i++) if (t->handles[i]) e=-FS_EBUSY;
+    if (!e) e=security_subject_get(s);
+    if (!e) t->subject=s;
+    vfs_unlock(v); return e;
+}
+/* A stopping process or closing session gets no fresh I/O through its
+ * table; close and commit still release what it owns. */
+static int table_live(const struct vfs_table *t) {
+    return !t->subject ? 0 : security_subject_live && security_subject_live(t->subject) ? 0 : -FS_EACCES;
+}
+static int table_authorize(struct vfs_table *t, const char *path, unsigned flags, unsigned access,
+                           struct vfs_policy_target *out) {
+    memset(out,0,sizeof(*out));
+    if (!t->subject) return 0;
+    if (!px_table_authorize_locked) return -FS_EACCES;
+    return px_table_authorize_locked(t,path,flags,access,out);
+}
+/* The authorized object is the one the legacy lookup reached. */
+static bool target_matches(const struct vfs_table *t, const struct vfs_policy_target *g, struct fat_volume *vol,
+                           const struct fat_entry *ent, uint32_t directory) {
+    if (!t->subject || g->ro) return true;
+    if (g->volume!=vol) return false;
+    if (!ent) return !g->exists && g->directory==directory;
+    if (!g->exists) return false;
+    return ent->index==UINT32_MAX ? g->index==UINT32_MAX && g->directory==ent->first :
+        g->parent==ent->parent && g->index==ent->index;
+}
+#define TABLE_ATTEMPTS 3u
+/* Kernel-only interfaces (logs, pagefile) never accept a user table. */
+static int kernel_table(const struct vfs_table *t) { return t->subject ? -FS_EACCES : 0; }
+/* ---- end sec-k03 ------------------------------------------------------ */
 static int ro_target(struct vfs_table *t, const char *path)
 {
     unsigned d = t->drive;
@@ -850,7 +898,9 @@ static int ro_open(struct vfs_table *t, const char *path, unsigned flags, unsign
 {
     struct vfs *v = t->vfs; int admission=path_lock(t,path,0,0); if (admission) return admission;
     struct fs_ro_node ent; unsigned drive; int e;
+    struct vfs_policy_target grant;
     if (flags & (VFS_WRITE | VFS_CREATE | VFS_TRUNCATE)) { e = -FS_EROFS; goto out; }
+    if ((e = table_authorize(t, path, 0, POLICY_READ, &grant))) goto out; /* sec-k03 */
     e = ro_path(t, path, &drive, &ent, 0); if (e) goto out;
     if (flags&VFS_FAIL_EXISTING) { e=-FS_EEXIST; goto out; }
     if (ent.attr & FS_RO_DIRECTORY) { e = -FS_EISDIR; goto out; }
@@ -880,7 +930,7 @@ static int ro_open(struct vfs_table *t, const char *path, unsigned flags, unsign
         node->ro = v->ro_volumes[drive]; node->ro_id = ent.id; node->ro_size = ent.size;
         node->drive = drive; node->generation = v->generation[drive]; ro_entry(&ent, &node->entry);
     }
-    node->refs++; *desc = (struct vfs_description){ .node = node, .refs = 1, .access = VFS_READ, .deny = mode==0 ? VFS_DENY_WRITE : deny, .owner=t->owner, .owner_type=t->owner_type, .dos_mode=mode };
+    node->refs++; *desc = (struct vfs_description){ .node = node, .refs = 1, .access = VFS_READ, .deny = mode==0 ? VFS_DENY_WRITE : deny, .owner=t->owner, .owner_type=t->owner_type, .dos_mode=mode, .granted=grant.granted };
     t->handles[h] = desc; if (status) *status=1; e = h;
 out: vfs_unlock(v); return e;
 }
@@ -897,6 +947,7 @@ int vfs_detach_locked(struct vfs *v, unsigned d) {
         struct fs_ro_volume *ro = v->ro_volumes[d];
         for (unsigned i=0; i<VFS_NODES; i++) if (v->nodes[i].refs && v->nodes[i].ro==ro && v->nodes[i].generation==v->generation[d]) return -FS_EBUSY;
         if (px_ro_busy && px_ro_busy(v,ro)) return -FS_EBUSY;
+        if(v->policy[d]) { v->policy[d]->ready=false; v->policy[d]=0; }
         if (px_volume_detached) px_volume_detached(v,d);
         VFS_IO_VOID(v,fs_ro_unmount(ro)); v->ro_volumes[d]=0; v->generation[d]++; namespace_changed();
         for (unsigned i=0; i<VFS_TABLES; i++) if (v->tables[i]) { memcpy(v->tables[i]->cwd[d],"/",2); v->tables[i]->cwd_cluster[d]=0; }
@@ -909,6 +960,7 @@ int vfs_detach_locked(struct vfs *v, unsigned d) {
     if (!e && vfs_identity_busy(v,vol)) e=-FS_EBUSY;
     if (!e) e=VFS_IO(v,fat_unmount(vol));
     if (!e) {
+        if(v->policy[d]) { v->policy[d]->ready=false; v->policy[d]=0; }
         if (px_volume_detached) px_volume_detached(v,d);
         vfs_identity_expire(v,vol); vol->identity_changed=0; vol->identity_ctx=0;
         vol->io_window=0; vol->io_window_ctx=0;
@@ -993,14 +1045,18 @@ void vfs_table_destroy(struct vfs_table *t) {
     vfs_reserve_locked(v,mask);
     for (unsigned i=0;i<VFS_HANDLES;i++) close_handle(t,i);
     for (unsigned i=0;i<VFS_TABLES;i++) if (v->tables[i]==t) v->tables[i]=0;
-    t->vfs=0; vfs_unlock(v);
+    struct security_subject *subject=t->subject; /* sec-k03 */
+    t->vfs=0; t->subject=0; vfs_unlock(v);
+    if (subject && security_subject_put) security_subject_put(subject);
 }
 static int normalize(struct vfs_table *t, const char *s, unsigned *drive, char out[FS_PATH_BYTES]) {
     if (!s || !*s) return -FS_EINVAL;
     unsigned d=t->vfs->default_drive;
     if (s[1]==':') { d=(unsigned)(path_upper((uint8_t)s[0])-'A'); if (d>=26) return -FS_EINVAL; }
     int e=path_normalize(s,d,t->cwd[d],drive,out); if (e) return e;
-    return t->vfs->volumes[*drive] ? 0 : -FS_ENOENT;
+    if (t->vfs->volumes[*drive]) return 0;
+    /* fx-emptydrive: an empty CD-ROM or floppy drive is "not ready". */
+    return !t->vfs->ro_volumes[*drive] && vfs_drive_slot(t->vfs,*drive) ? -FS_ENXIO : -FS_ENOENT;
 }
 /* f1-89 writer turn. One FAT-mutating operation per letter plans and
  * publishes at a time (no spurious EAGAIN, no lost FSInfo/free-count
@@ -1674,10 +1730,27 @@ int vfs_open_claim(struct vfs_table *t, const char *path, unsigned flags, enum v
     struct vfs *v=t->vfs; uint32_t turn=0;
     int admission=flags&(VFS_CREATE|VFS_TRUNCATE) ? path_lock_writer(t,path,0,0,&turn) : path_lock_op(t,path,0,0,"open");
     if (admission) return admission; vfs_tag_locked(t->vfs,flags&VFS_TRUNCATE ? "truncate" : flags&VFS_CREATE ? "create" : "open");
-    struct resolved r; struct fat_entry ent; int e=lookup(t,path,&r,&ent);
-    bool create=e==-FS_ENOENT && (flags&VFS_CREATE);
-    /* A missing ancestor is distinguished by resolving again before create. */
-    if (create) e=resolve(t,path,&r);
+    struct resolved r; struct fat_entry ent; int e; bool create;
+    /* sec-k03: the subject's resolver authorizes the object (READ, WRITE for
+     * write/truncate) or ADD on the actual parent before any side effect. */
+    struct vfs_policy_target grant;
+    for (unsigned attempt=0;;attempt++) {
+        /* Authorized before the legacy lookup reads anything on its behalf. */
+        e=table_authorize(t,path,flags&VFS_CREATE ? VFS_POLICY_MISSING : 0,
+            POLICY_READ|(flags&(VFS_WRITE|VFS_TRUNCATE) ? POLICY_WRITE : 0),&grant);
+        create=false;
+        if (!e) {
+            e=lookup(t,path,&r,&ent);
+            create=e==-FS_ENOENT && (flags&VFS_CREATE);
+            /* A missing ancestor is distinguished by resolving again before create. */
+            if (create) e=resolve(t,path,&r);
+        }
+        if (!e && (create ? grant.exists : 0)) e=-FS_EAGAIN;
+        if (!e && !target_matches(t,&grant,v->volumes[r.drive],create ? 0 : &ent,r.parent)) e=-FS_EAGAIN;
+        /* Kernel tables keep the legacy result unchanged (no retry). */
+        if (e!=-FS_EAGAIN || !t->subject) break;
+        if (attempt+1==TABLE_ATTEMPTS) { e=-FS_EBUSY; break; }
+    }
     if (e) goto out;
     if (flags&VFS_FAIL_EXISTING) { e=-FS_EEXIST; goto out; }
     if (!create && (flags&(VFS_CREATE|VFS_EXCLUSIVE))==(VFS_CREATE|VFS_EXCLUSIVE)) { e=-FS_EEXIST; goto out; }
@@ -1712,6 +1785,7 @@ int vfs_open_claim(struct vfs_table *t, const char *path, unsigned flags, enum v
     if (create && (attr&FAT_ATTR_DIR)) { e=-FS_EISDIR; goto out; }
     node->refs++; d->refs=1; d->node=node; t->handles[h]=d;
     d->access=flags&3; d->deny=(unsigned)deny; d->dos_mode=mode; d->owner=t->owner; d->owner_type=t->owner_type;
+    d->granted=grant.granted; /* sec-k03 */
     if (node->refs==1) { node->volume=vol; node->drive=r.drive; node->generation=v->generation[r.drive]; }
     if (create) {
         if ((e=vfs_fat_transaction_locked(v,vol,(struct fat_transaction_args){.op=FAT_TX_CREATE,.directory=r.parent,.name=r.name,.attr=attr,.entry=&node->entry}))) goto undo;
@@ -1727,6 +1801,7 @@ int vfs_open_claim(struct vfs_table *t, const char *path, unsigned flags, enum v
         if (e) goto undo;
     }
     d->node=node; d->position=0; d->cursor=(struct fat_cursor){0}; d->access=flags&3; d->deny=(unsigned)deny; t->handles[h]=d; d->dos_mode=mode; d->owner=t->owner; d->owner_type=t->owner_type;
+    d->granted=grant.granted;
     if (status) *status=create ? 2 : flags&VFS_TRUNCATE ? 3 : 1; e=h;
     goto out;
 undo: t->handles[h]=0; if (!--node->refs) { vfs_identity_put(v,node->identity); memset(node,0,sizeof(*node)); } memset(d,0,sizeof(*d));
@@ -2033,10 +2108,12 @@ void vfs_version_unpin(struct vfs_version_pin *pin) {
 }
 int vfs_handle_times(struct vfs_table *t,int h,uint16_t date,uint16_t time) {
     uint32_t turn;
-    int e=handle_lock_writer(t,h,&turn); if (e) return e;
+    int e=table_live(t); if (e) return e; /* sec-k03 */
+    e=handle_lock_writer(t,h,&turn); if (e) return e;
     struct vfs_description *d=get(t,h);
     e=!d ? -FS_EBADF : (d->node->generation!=t->vfs->generation[d->node->drive] ||
-        !vfs_identity_live(t->vfs,d->node->identity)) ? -FS_EIO : d->node->ro ? -FS_EROFS : 0;
+        !vfs_identity_live(t->vfs,d->node->identity)) ? -FS_EIO : d->node->ro ? -FS_EROFS :
+        t->subject && !(d->granted&POLICY_META) ? -FS_EACCES : 0;
     if (!e) {
         struct fat_entry before=d->node->entry;
         struct fat_times times=before.times; times.write_date=date; times.write_time=time;
@@ -2123,7 +2200,8 @@ int vfs_description_lock_locked(struct vfs *v,struct vfs_description *d,struct v
     return 0;
 }
 int vfs_lock_range(struct vfs_table *t,int h,uint32_t start,uint32_t length,bool unlock) {
-    int e=handle_lock(t,h); if (e) return e;
+    int e=unlock ? 0 : table_live(t); if (e) return e; /* sec-k03 */
+    e=handle_lock(t,h); if (e) return e;
     struct vfs_description *d=get(t,h);
     e=!d ? -FS_EBADF : (uint64_t)start+length>UINT32_MAX ? -FS_EINVAL :
         vfs_description_lock_locked(t->vfs,d,(struct vfs_lock_owner){t->owner_type,t->owner},start,length,true,unlock);
@@ -2152,6 +2230,8 @@ int vfs_close(struct vfs_table *t, int h) {
 }
 int vfs_dup(struct vfs_table *src, int h, struct vfs_table *dst, int target) {
     if (src->vfs!=dst->vfs || target< -1 || target>=(int)VFS_HANDLES) return -FS_EINVAL;
+    /* sec-k03: a description never crosses subjects (or kernel/user tables). */
+    if (src->subject!=dst->subject) return -FS_EACCES;
     for (;;) {
         vfs_lock(src->vfs,0);
         uint32_t mask=handle_mask(src,h)|handle_mask(dst,target);
@@ -2183,6 +2263,7 @@ int vfs_dup(struct vfs_table *src, int h, struct vfs_table *dst, int target) {
 }
 int vfs_read(struct vfs_table *t, int h, void *buf, size_t n, size_t *done) {
     if (!done) return -FS_EINVAL; *done=0;
+    int live=table_live(t); if (live) return live; /* sec-k03 */
     struct vfs *v=t->vfs;
     uint32_t start=fs_now_ms(); uint64_t begin=t->request ? t->request->now(t->request->arg) : 0;
     struct file_wait_evidence evidence={0};
@@ -2242,11 +2323,12 @@ int vfs_read(struct vfs_table *t, int h, void *buf, size_t n, size_t *done) {
 int vfs_write(struct vfs_table *t, int h, const void *buf, size_t n, size_t *done) {
     uint32_t turn;
     if (!done) return -FS_EINVAL; *done=0;
+    int live=table_live(t); if (live) return live; /* sec-k03 */
     int admission=handle_lock_writer(t,h,&turn); if (admission) return admission; operation_tag(t->vfs,"write"); struct vfs_description *d=get(t,h); int e;
     if (!d) e=-FS_EBADF;
     else if (d->node->generation!=t->vfs->generation[d->node->drive] || !vfs_identity_live(t->vfs,d->node->identity)) e=-FS_EIO;
     else if (d->node->ro) { e=ro_handle(t->vfs,d->node); if (!e) e=-FS_EROFS; }
-    else if (!(d->access&VFS_WRITE)) e=-FS_EACCES;
+    else if (!(d->access&VFS_WRITE) || (t->subject && !(d->granted&POLICY_WRITE))) e=-FS_EACCES;
     else if (d->node->volume->readonly) e=-FS_EROFS;
     else if (!buf && n) e=-FS_EINVAL;
     else if (d->position>UINT32_MAX || n>UINT32_MAX-d->position) e=-FS_EFBIG;
@@ -2306,8 +2388,10 @@ int vfs_seek(struct vfs_table *t, int h, int64_t off, enum vfs_whence whence, ui
 }
 int vfs_truncate(struct vfs_table *t, int h, uint64_t size) {
     uint32_t turn;
+    int live=table_live(t); if (live) return live; /* sec-k03 */
     int admission=handle_lock_writer(t,h,&turn); if (admission) return admission; operation_tag(t->vfs,"truncate"); struct vfs_description *d=get(t,h);
-    int e=!d ? -FS_EBADF : (d->node->generation!=t->vfs->generation[d->node->drive] || !vfs_identity_live(t->vfs,d->node->identity)) ? -FS_EIO : d->node->ro ? ro_handle(t->vfs,d->node) : !(d->access&VFS_WRITE) ? -FS_EACCES : 0;
+    int e=!d ? -FS_EBADF : (d->node->generation!=t->vfs->generation[d->node->drive] || !vfs_identity_live(t->vfs,d->node->identity)) ? -FS_EIO : d->node->ro ? ro_handle(t->vfs,d->node) :
+        !(d->access&VFS_WRITE) || (t->subject && !(d->granted&POLICY_WRITE)) ? -FS_EACCES : 0;
     if (d && d->node->ro && !e) e=-FS_EROFS;
     if (d && d->node->log_capacity && !e) e=-FS_EBUSY;
     if (!e) {
@@ -2352,6 +2436,7 @@ int vfs_flush_drive(struct vfs_table *t,unsigned drive) {
 }
 static int log_handle(struct vfs_table *t, int h, struct vfs_description **out) {
     struct vfs_description *d=get(t,h); *out=d;
+    if (kernel_table(t)) return -FS_EACCES; /* sec-k03: kernel boot-log sink only */
     if (!d) return -FS_EBADF;
     if (d->node->ro) return -FS_EROFS;
     if (!(d->access&VFS_WRITE) || !(d->deny&VFS_DENY_WRITE)) return -FS_EACCES;
@@ -2408,6 +2493,7 @@ int vfs_log_publish(struct vfs_table *t, int h, bool finish) {
  * Data is never read through the cache and live clusters never move. */
 static int pagefile_handle(struct vfs_table *t, int h, struct vfs_description **out) {
     struct vfs_description *d=get(t,h); *out=d;
+    if (kernel_table(t)) return -FS_EACCES; /* sec-k03: SYSTEM pagefile only */
     if (!d) return -FS_EBADF;
     if (d->node->ro || !d->node->volume) return -FS_EROFS;
     if ((d->access&(VFS_READ|VFS_WRITE))!=(VFS_READ|VFS_WRITE) || d->deny!=VFS_DENY_ALL ||
@@ -2504,20 +2590,35 @@ int vfs_pagefile_map(struct vfs_table *t, int h, struct vfs_pagefile_cursor *c, 
 }
 int vfs_stat(struct vfs_table *t, const char *path, struct fat_entry *out) {
     int ro=ro_target(t,path); if (ro<0) return ro;
+    struct vfs_policy_target grant; /* sec-k03: READ through the subject's resolver */
     if (ro) {
         int admission=path_lock(t,path,0,0); if (admission) return admission; operation_tag(t->vfs,"stat"); struct fs_ro_node n; unsigned d;
-        int e=ro_path(t,path,&d,&n,0); if (!e && n.size>UINT32_MAX) e=-FS_EFBIG;
+        int e=table_authorize(t,path,0,POLICY_READ,&grant);
+        if (!e) e=ro_path(t,path,&d,&n,0);
+        if (!e && n.size>UINT32_MAX) e=-FS_EFBIG;
         if (!e) ro_entry(&n,out); vfs_unlock(t->vfs); return e;
     }
-    int admission=path_lock_op(t,path,0,0,"stat"); if (admission) return admission; struct resolved r; int e=lookup(t,path,&r,out);
+    int admission=path_lock_op(t,path,0,0,"stat"); if (admission) return admission; struct resolved r; int e;
+    for (unsigned attempt=0;;attempt++) {
+        e=table_authorize(t,path,0,POLICY_READ,&grant);
+        if (!e) e=lookup(t,path,&r,out);
+        if (!e && !target_matches(t,&grant,t->vfs->volumes[r.drive],out,0)) e=-FS_EAGAIN;
+        /* Kernel tables keep the legacy result unchanged (no retry). */
+        if (e!=-FS_EAGAIN || !t->subject) break;
+        if (attempt+1==TABLE_ATTEMPTS) { e=-FS_EBUSY; break; }
+    }
     if (!e) { struct vfs_node *n=node_find(t->vfs,t->vfs->volumes[r.drive],out); if (n) *out=n->entry; }
     vfs_unlock(t->vfs); return e;
 }
 static int metadata(struct vfs_table *t, const char *path, int attr, const struct fat_times *times) {
     int ro=ro_target(t,path); if (ro<0) return ro;
     if (ro) return -FS_EROFS;
-    uint32_t turn; int admission=path_lock_writer(t,path,0,0,&turn); if (admission) return admission; operation_tag(t->vfs,"attrib"); struct resolved r; struct fat_entry ent; int e=lookup(t,path,&r,&ent);
+    uint32_t turn; int admission=path_lock_writer(t,path,0,0,&turn); if (admission) return admission; operation_tag(t->vfs,"attrib"); struct resolved r; struct fat_entry ent;
+    struct vfs_policy_target grant; /* sec-k03: MODIFY_METADATA, FAT RO clear included */
+    int e=table_authorize(t,path,0,POLICY_META,&grant);
+    if (!e) e=lookup(t,path,&r,&ent);
     if (!e && ent.index==UINT32_MAX) e=-FS_EACCES;
+    if (!e && !target_matches(t,&grant,t->vfs->volumes[r.drive],&ent,0)) e=-FS_EBUSY;
     if (!e) {
         struct fat_volume *vol=t->vfs->volumes[r.drive]; struct vfs_node *n=node_find(t->vfs,vol,&ent);
         if (n) ent=n->entry;
@@ -2592,18 +2693,27 @@ int vfs_find_first(struct vfs_table *t, const char *p, uint8_t mask, struct vfs_
             if (strlen(leaf)>=sizeof(f->pattern)) { vfs_unlock(t->vfs); return -FS_ENAMETOOLONG; }
             memset(f,0,sizeof(*f)); memcpy(f->pattern,leaf,strlen(leaf)+1);
             if (leaf==parent) memcpy(parent,".",2); else if (leaf-parent==3 && parent[1]==':') *leaf=0; else leaf[-1]=0;
-            struct fs_ro_node dir; e=ro_path(t,parent,&f->drive,&dir,0);
+            struct vfs_policy_target grant; /* sec-k03 */
+            struct fs_ro_node dir; e=table_authorize(t,p,VFS_POLICY_DIRECTORY,POLICY_READ,&grant);
+            if (!e) e=ro_path(t,parent,&f->drive,&dir,0);
             if (!e) { f->ro=true; f->ro_directory=dir.id; f->generation=t->vfs->generation[f->drive]; f->attr_mask=mask; e=find_next(t,f,ent); }
         }
         vfs_unlock(t->vfs); return e;
     }
 
-    int admission=path_lock_op(t,p,0,0,"find"); if (admission) return admission; struct resolved r; int e=resolve(t,p,&r);
+    int admission=path_lock_op(t,p,0,0,"find"); if (admission) return admission; struct resolved r;
+    /* sec-k03: enumeration needs READ on the actual directory; the open
+     * search then behaves as a retained directory description. */
+    struct vfs_policy_target grant;
+    int e=table_authorize(t,p,VFS_POLICY_DIRECTORY,POLICY_READ,&grant);
+    if (!e) e=resolve(t,p,&r);
     if (!e && !r.name[0]) e=-FS_EINVAL;
+    if (!e && !grant.ro && t->subject && (!grant.exists || grant.volume!=t->vfs->volumes[r.drive] || grant.directory!=r.parent)) e=-FS_EBUSY;
     if (!e) { memset(f,0,sizeof(*f)); f->drive=r.drive; f->directory=r.parent; f->generation=t->vfs->generation[r.drive]; f->attr_mask=mask; memcpy(f->pattern,r.name,strlen(r.name)+1); e=find_next(t,f,ent); }
     vfs_unlock(t->vfs); return e;
 }
 int vfs_find_next(struct vfs_table *t, struct vfs_find *f, struct fat_entry *ent) {
+    int live=table_live(t); if (live) return live; /* sec-k03 */
     /* Tagged before the reservation: a find is admitted beside readers. */
     int admission=vfs_admit(t->vfs,0,t->request); if (admission) return admission; operation_tag(t->vfs,"find");
     admission=reserve_request(t->vfs,vfs_drive_mask(f->drive),t->request);
@@ -2657,8 +2767,12 @@ static __attribute__((noinline)) int remove_announced(struct vfs *v,struct fat_v
 static int remove_path(struct vfs_table *t, const char *path, bool dir) {
     int ro=ro_target(t,path); if (ro<0) return ro;
     if (ro) return -FS_EROFS;
-    uint32_t turn; int admission=path_lock_writer(t,path,0,0,&turn); if (admission) return admission; operation_tag(t->vfs,"unlink"); struct resolved r; struct fat_entry ent; int e=lookup(t,path,&r,&ent);
+    uint32_t turn; int admission=path_lock_writer(t,path,0,0,&turn); if (admission) return admission; operation_tag(t->vfs,"unlink"); struct resolved r; struct fat_entry ent;
+    struct vfs_policy_target grant; /* sec-k03: REMOVE on the object, OWNER lease */
+    int e=table_authorize(t,path,0,POLICY_REMOVE,&grant);
+    if (!e) e=lookup(t,path,&r,&ent);
     if (!e && !r.name[0]) e=-FS_EACCES;
+    if (!e && !target_matches(t,&grant,t->vfs->volumes[r.drive],&ent,0)) e=-FS_EBUSY;
     if (!e) {
         struct fat_volume *v=t->vfs->volumes[r.drive];
         if (!(e=busy(t->vfs,v,&ent))) e=remove_announced(t->vfs,v,&ent,dir);
@@ -2673,6 +2787,7 @@ int vfs_log_rotate(struct vfs_table *t, const char *current, const char *previou
     bool present[3]={false};
     unsigned drive=26; uint32_t parent=0;
     struct vfs *v=t->vfs;
+    if (kernel_table(t)) return -FS_EACCES; /* sec-k03 */
     uint32_t turn; int admission=path_lock_writer(t,current,previous,oldest,&turn); if (admission) return admission; operation_tag(t->vfs,"rename");
     int e=capacity ? 0 : -FS_EINVAL;
     /* Preflight every entry before changing any name or reservation. */
@@ -2710,18 +2825,30 @@ int vfs_rmdir(struct vfs_table *t, const char *p) { return remove_path(t,p,true)
 int vfs_mkdir(struct vfs_table *t, const char *p, uint8_t attr) {
     int ro=ro_target(t,p); if (ro<0) return ro;
     if (ro) return -FS_EROFS;
-    uint32_t turn; int admission=path_lock_writer(t,p,0,0,&turn); if (admission) return admission; operation_tag(t->vfs,"mkdir"); struct resolved r; int e=resolve(t,p,&r); struct fat_entry ent;
+    uint32_t turn; int admission=path_lock_writer(t,p,0,0,&turn); if (admission) return admission; operation_tag(t->vfs,"mkdir"); struct resolved r; struct fat_entry ent;
+    struct vfs_policy_target grant; /* sec-k03: ADD on the actual parent and the name's rule */
+    int e=table_authorize(t,p,VFS_POLICY_MISSING,0,&grant);
+    if (!e && t->subject && grant.exists) e=-FS_EEXIST;
+    if (!e) e=resolve(t,p,&r);
     if (!e && !r.name[0]) e=-FS_EEXIST;
+    if (!e && !target_matches(t,&grant,t->vfs->volumes[r.drive],0,r.parent)) e=-FS_EBUSY;
     if (!e) e=vfs_fat_transaction_locked(t->vfs,t->vfs->volumes[r.drive],(struct fat_transaction_args){.op=FAT_TX_CREATE,.directory=r.parent,.name=r.name,.attr=attr|FAT_ATTR_DIR,.entry=&ent});
     writer_unlock(t->vfs,turn); return e;
 }
 int vfs_rename(struct vfs_table *t, const char *from, const char *to) {
     int ro=ro_target(t,from); if (ro<0) return ro; if (ro) return -FS_EROFS;
     ro=ro_target(t,to); if (ro<0) return ro; if (ro) return -FS_EROFS;
-    uint32_t turn; int admission=path_lock_writer(t,from,to,0,&turn); if (admission) return admission; operation_tag(t->vfs,"rename"); struct resolved a,b; struct fat_entry ent; int e=lookup(t,from,&a,&ent);
+    uint32_t turn; int admission=path_lock_writer(t,from,to,0,&turn); if (admission) return admission; operation_tag(t->vfs,"rename"); struct resolved a,b; struct fat_entry ent;
+    /* sec-k03: both endpoints, a replaced object and the policy boundary,
+     * decided before the legacy lookups read anything. */
+    struct vfs_policy_target source={0}, target={0}; int e=0;
+    if (t->subject) e=px_table_rename_locked ? px_table_rename_locked(t,from,to,&source,&target) : -FS_EACCES;
+    if (!e) e=lookup(t,from,&a,&ent);
     if (!e) e=resolve(t,to,&b);
     if (!e && (!a.name[0] || !b.name[0])) e=-FS_EACCES;
     if (!e && a.drive!=b.drive) e=-FS_EXDEV;
+    if (!e && t->subject && (!target_matches(t,&source,t->vfs->volumes[a.drive],&ent,0) ||
+        (!target.exists && !target_matches(t,&target,t->vfs->volumes[b.drive],0,b.parent)))) e=-FS_EBUSY;
     if (!e) {
         struct fat_volume *v=t->vfs->volumes[a.drive]; e=busy(t->vfs,v,&ent);
         if (!e && (ent.attr&FAT_ATTR_DIR)) { e=contains(t->vfs,v,ent.first,b.parent); if (e>0) e=-FS_EINVAL; }
@@ -2737,13 +2864,20 @@ int vfs_chdir(struct vfs_table *t, const char *p) {
     int ro=ro_target(t,p); if (ro<0) return ro;
     if (ro) {
         int admission=path_lock(t,p,0,0); if (admission) return admission; char canonical[FS_PATH_BYTES]; struct fs_ro_node n; unsigned d;
-        int e=ro_path(t,p,&d,&n,canonical); if (!e && !(n.attr&FS_RO_DIRECTORY)) e=-FS_ENOTDIR;
+        struct vfs_policy_target grant; /* sec-k03 */
+        int e=table_authorize(t,p,0,POLICY_TRAVERSE,&grant);
+        if (!e) e=ro_path(t,p,&d,&n,canonical);
+        if (!e && !(n.attr&FS_RO_DIRECTORY)) e=-FS_ENOTDIR;
         if (!e) memcpy(t->cwd[d],canonical,strlen(canonical)+1);
         vfs_unlock(t->vfs); return e;
     }
 
-    int admission=path_lock_op(t,p,0,0,"chdir"); if (admission) return admission; struct resolved r; struct fat_entry ent; int e=lookup(t,p,&r,&ent);
+    int admission=path_lock_op(t,p,0,0,"chdir"); if (admission) return admission; struct resolved r; struct fat_entry ent;
+    struct vfs_policy_target grant; /* sec-k03: traverse the new cwd as the subject */
+    int e=table_authorize(t,p,0,POLICY_TRAVERSE,&grant);
+    if (!e) e=lookup(t,p,&r,&ent);
     if (!e && !(ent.attr&FAT_ATTR_DIR)) e=-FS_ENOTDIR;
+    if (!e && !target_matches(t,&grant,t->vfs->volumes[r.drive],&ent,0)) e=-FS_EBUSY;
     if (!e) {
         char full[FS_PATH_BYTES], canonical[FS_PATH_BYTES]; unsigned d; e=normalize(t,p,&d,full);
         if (!e) {

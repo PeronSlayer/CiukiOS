@@ -5,8 +5,86 @@
 #include <ciuki/work.h>
 #endif
 #ifdef FS_HOST
+#include <ciuki/memory_limits.h>
 unsigned fs_host_contig_fail, fs_host_contig_live;
 unsigned fs_host_page_fail;
+/* Physical ownership, not the host malloc arena, limits parser/cache pages.
+ * Private host metadata records runs without adding a kernel table limit
+ * or weakening ASan redzones. Buffers retain alignment and zero fill. */
+#define HOST_PAGE_SIZE PAGE_SIZE
+static pthread_mutex_t memory_mutex=PTHREAD_MUTEX_INITIALIZER;
+static uint8_t memory_used[PMM_MAX_PAGES];
+static unsigned memory_normal=PMM_MAX_PAGES-PMM_NORMAL_START_PFN;
+static unsigned memory_dma=PMM_NORMAL_START_PFN-PMM_DMA_START_PFN;
+static unsigned memory_live;
+struct host_memory_run { void *pointer; unsigned pfn, pages; bool contiguous; struct host_memory_run *next; };
+static struct host_memory_run *memory_runs;
+void fs_host_memory_configure(unsigned normal, unsigned dma) {
+    pthread_mutex_lock(&memory_mutex);
+    if (memory_live || normal>PMM_MAX_PAGES-PMM_NORMAL_START_PFN ||
+        dma>PMM_NORMAL_START_PFN-PMM_DMA_START_PFN) abort();
+    memset(memory_used,0,sizeof(memory_used)); memory_normal=normal; memory_dma=dma;
+    pthread_mutex_unlock(&memory_mutex);
+}
+unsigned fs_host_memory_live(void) {
+    pthread_mutex_lock(&memory_mutex); unsigned n=memory_live;
+    pthread_mutex_unlock(&memory_mutex); return n;
+}
+unsigned fs_host_memory_pfn(const void *p) {
+    pthread_mutex_lock(&memory_mutex); unsigned pfn=0;
+    for (struct host_memory_run *r=memory_runs;r;r=r->next) if (r->pointer==p) { pfn=r->pfn; break; }
+    pthread_mutex_unlock(&memory_mutex); return pfn;
+}
+static void *memory_alloc(size_t bytes, bool normal_only, bool contiguous) {
+    if (!bytes || bytes>(size_t)(PMM_MAX_PAGES-PMM_NORMAL_START_PFN)*HOST_PAGE_SIZE) return NULL;
+    unsigned pages=(unsigned)((bytes+HOST_PAGE_SIZE-1)/HOST_PAGE_SIZE), found=0;
+    pthread_mutex_lock(&memory_mutex);
+    for (unsigned pass=0;pass<(normal_only ? 1u : 2u) && !found;pass++) {
+        unsigned lo=pass ? PMM_DMA_START_PFN : PMM_NORMAL_START_PFN;
+        unsigned count=pass ? memory_dma : memory_normal;
+        if (pages>count) continue;
+        for (unsigned first=lo;first<=lo+count-pages;first++) {
+            unsigned n=0; while (n<pages && !memory_used[first+n]) n++;
+            if (n!=pages) { first+=n; continue; }
+            found=first; break;
+        }
+    }
+    struct host_memory_run *run=found ? malloc(sizeof(*run)) : NULL;
+    void *allocation=run ? aligned_alloc(HOST_PAGE_SIZE,(size_t)pages*HOST_PAGE_SIZE) : NULL;
+    if (allocation) {
+        memset(memory_used+found,1,pages); memory_live+=pages;
+        *run=(struct host_memory_run){allocation,found,pages,contiguous,memory_runs}; memory_runs=run;
+        if (contiguous) __atomic_add_fetch(&fs_host_contig_live,1,__ATOMIC_RELAXED);
+    } else free(run);
+    pthread_mutex_unlock(&memory_mutex);
+    if (!allocation) return NULL;
+    memset(allocation,0,(size_t)pages*HOST_PAGE_SIZE); return allocation;
+}
+static void memory_free(void *p) {
+    if (!p) return;
+    pthread_mutex_lock(&memory_mutex);
+    struct host_memory_run **slot=&memory_runs;
+    while (*slot && (*slot)->pointer!=p) slot=&(*slot)->next;
+    if (!*slot) abort();
+    struct host_memory_run *run=*slot; *slot=run->next;
+    memset(memory_used+run->pfn,0,run->pages); memory_live-=run->pages;
+    if (run->contiguous) __atomic_sub_fetch(&fs_host_contig_live,1,__ATOMIC_RELAXED);
+    pthread_mutex_unlock(&memory_mutex); free(p); free(run);
+}
+void *fs_page_alloc(void) {
+    if (fs_host_page_fail && !--fs_host_page_fail) return NULL;
+    return memory_alloc(HOST_PAGE_SIZE,false,false);
+}
+void *fs_normal_page_alloc(void) {
+    if (fs_host_page_fail && !--fs_host_page_fail) return NULL;
+    return memory_alloc(HOST_PAGE_SIZE,true,false);
+}
+void fs_page_free(void *p) { memory_free(p); }
+void *fs_contig_alloc(size_t n) {
+    if (fs_host_contig_fail && !--fs_host_contig_fail) return NULL;
+    return memory_alloc(n,false,true);
+}
+void fs_contig_free(void *p,size_t n) { (void)n; memory_free(p); }
 /* Shared across translation units, so fake transports can assert that their
  * caller released namespace/cache bookkeeping before issuing I/O. */
 static pthread_mutex_t classes_mutex=PTHREAD_MUTEX_INITIALIZER;
@@ -190,28 +268,9 @@ bool fs_rtc_write(const struct fs_rtc_writer *w,void *ctx,uint16_t date,uint16_t
 }
 
 #ifndef FS_HOST
-/* UP platform service, sole native CMOS accessor. Software policy leaves NMI
- * enabled (shadow bit 7 = 0); never read port 70h to infer this write-only
- * policy. IRQ8 remains masked, register C is never read, port 71h never
- * written except by the checked SET transaction. NMI diagnostics do not access CMOS. Each complete sample is one
- * short irq-save section, not the UIP wait. */
-static uint32_t rtc_flags;
-static const uint8_t rtc_nmi_shadow = 0;
-static void rtc_begin(void *ctx) { (void)ctx; rtc_flags = irq_save(); }
-static void rtc_end(void *ctx) { (void)ctx; irq_restore(rtc_flags); }
-static uint8_t rtc_read(void *ctx, uint8_t reg)
-{
-    (void)ctx; outb(0x70, rtc_nmi_shadow | reg); return inb(0x71);
-}
-uint8_t fs_floppy_cmos_types(void)
-{ rtc_begin(0); uint8_t types=rtc_read(0,0x10); rtc_end(0); return types; }
-/* fx-26: one byte of the standard 128-byte CMOS bank (the ThinkPad EC
- * driver's NVRAM key watch reads 60h every 100 ms); read only, same short
- * irq-save section as a calendar sample. */
-uint8_t fs_cmos_read(uint8_t reg)
-{ rtc_begin(0); uint8_t value=rtc_read(0,reg&0x7f); rtc_end(0); return value; }
-static void rtc_write(void *ctx,uint8_t reg,uint8_t value)
-{ (void)ctx; outb(0x70,rtc_nmi_shadow|reg); outb(0x71,value); }
+/* Each sample holds the UP RTC lock briefly, never across a UIP wait.
+ * Native calendar code does not read register C; IRQ8 remains masked. */
+#include "fs_cmos.inc"
 static uint32_t rtc_now(void *ctx) { (void)ctx; return fs_now_ms(); }
 static bool rtc_pause(void *ctx) { (void)ctx; return !udelay(100); }
 static bool rtc_calendar(uint16_t *date, uint16_t *time, uint8_t *tenths)

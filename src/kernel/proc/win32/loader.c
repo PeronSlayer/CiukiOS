@@ -15,12 +15,29 @@ bool w32_refuse_image_name(struct process *p,const char *name){
     }
     return false;
 }
+/* sec-k03: weak only for the personality RAM fixtures, which model their
+ * own image store; the kernel links fdtable.c (H04 checks it). */
+extern int file_image_open_as(struct px_node *, const struct security_subject *, const char *, bool,
+                              struct ciuki_file *) __attribute__((weak));
+extern int file_image_authorize(struct px_node *, const struct security_subject *, const char *) __attribute__((weak));
+static int loader_native_path(struct process *p, const char *name, char path[CIUKI_PATH_MAX]);
+/* Every image/DLL open is authorized as the loading process (READ|EXEC on
+ * the resolved object) before a snapshot exists. */
 int w32_loader_open(struct process *p, const char *name, struct ciuki_file *out) {
     if(w32_refuse_image_name(p,name))return -ENOSYS;
     const struct ciuki_file_ops *ops = proc_get_file_ops();
     if (!ops)
         return -ENOENT;
-    char path[CIUKI_PATH_MAX], cwd[CIUKI_PATH_MAX], normal[FS_PATH_BYTES];
+    char path[CIUKI_PATH_MAX];
+    int err = loader_native_path(p, name, path);
+    if (err)
+        return err;
+    if (file_image_open_as)
+        return file_image_open_as(p->cwd, p->subject, path, false, out);
+    return ops->open(p->cwd, path, out);
+}
+static int loader_native_path(struct process *p, const char *name, char path[CIUKI_PATH_MAX]) {
+    char cwd[CIUKI_PATH_MAX], normal[FS_PATH_BYTES];
     unsigned drive = p->cwd ? ((struct px_node *)p->cwd)->drive : 2;
     if (drive >= 26)
         drive = 2;
@@ -49,7 +66,7 @@ int w32_loader_open(struct process *p, const char *name, struct ciuki_file *out)
         at = 6;
     }
     for (const char *q = normal; *q;) {
-        if (at + 1 >= sizeof(path))
+        if (at + 1 >= CIUKI_PATH_MAX)
             return -ENAMETOOLONG;
         path[at++] = '/';
         while (*q == '/')
@@ -60,13 +77,13 @@ int w32_loader_open(struct process *p, const char *name, struct ciuki_file *out)
         unsigned n = (unsigned)(q - start);
         while (n && (start[n - 1] == ' ' || start[n - 1] == '.'))
             n--;
-        if (at + n >= sizeof(path))
+        if (at + n >= CIUKI_PATH_MAX)
             return -ENAMETOOLONG;
         memcpy(path + at, start, n);
         at += n;
     }
     path[at] = 0;
-    return ops->open(p->cwd, path, out);
+    return 0;
 }
 struct loader_snapshot {
     struct uaddr *u;
@@ -129,6 +146,13 @@ uint32_t w32_loader_call(struct proc_thread *t, struct ciuki_w32_loader_args *a)
     if (path[n - 1])
         return W32_STATUS_INVALID_PARAMETER;
     if (p->w32_source && !strncmp(path, p->w32_source_name, sizeof(p->w32_source_name))) {
+        /* sec-k03: the retained source snapshot is bytes, not a grant: the
+         * path is authorized again as this process before it is handed out. */
+        char native[CIUKI_PATH_MAX];
+        err = w32_refuse_image_name(p, path) ? -ENOSYS : loader_native_path(p, path, native);
+        if (!err && file_image_authorize) err = file_image_authorize(p->cwd, p->subject, native);
+        if (err)
+            return w32_status(err);
         a->address = p->w32_source;
         a->bytes = p->w32_source_bytes;
         p->w32_source = 0;

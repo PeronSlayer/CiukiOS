@@ -23,6 +23,7 @@ static uint8_t kbd_pop(struct dosvm *v)
     k->head = (k->head + 1) % DOSVM_KBD_BYTES; k->count--; k->last = b;
     k->reads++;
     v->monitor.pic[0].irr &= ~2u;
+    v->irq.owed &= ~2u;
     kbd_signal(v);
     return b;
 }
@@ -69,6 +70,7 @@ void dosvm_kbd_release(struct dosvm *v)
     /* Whole sequences fit even with all valid ordinary/extended keys held. */
     v->kbd.head = v->kbd.count = 0;
     v->monitor.pic[0].irr &= ~2u;
+    v->irq.owed &= ~2u;
     v->kbd.bios_prefix = 0;
     v->kbd.alt_value=0; v->kbd.alt_digits=false;
     for (unsigned code = 1; code < 512; code++) if (v->kbd.held[code >> 3] & (1u << (code & 7)))

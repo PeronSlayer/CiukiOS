@@ -392,10 +392,13 @@ static void error_tests(bool continuation) {
     static const struct {int fs;unsigned code;} cases[]={
         {FS_EOPNOTSUPP,1},{FS_EINVAL,87},{FS_ENAMETOOLONG,87},{FS_EILSEQ,87},{FS_ELOOP,87},
         {FS_ENOENT,2},{FS_ENOTDIR,3},{FS_EMFILE,4},{FS_EBADF,6},{FS_ENOMEM,8},{FS_EXDEV,17},
-        {FS_EROFS,19},{FS_EIO,30},{FS_EUCLEAN,30},{FS_EQUARANTINED,30},{FS_EAGAIN,21},
+        {FS_EROFS,19},{FS_EIO,30},{FS_EUCLEAN,30},{FS_EQUARANTINED,30},{FS_EAGAIN,21},{FS_ENXIO,21},
         {FS_EBUSY,32},{VFS_ESHARE,32},{VFS_ECRITICAL_SHARE,32},{VFS_ELOCK,33},{VFS_ELOCKFULL,36},
         {FS_ENOSPC,39},{FS_EFBIG,39},{FS_EEXIST,80},{FS_EACCES,5},{FS_EISDIR,5},{FS_ENOTEMPTY,5}};
     for (unsigned i=0;i<sizeof(cases)/sizeof(cases[0]);i++) { struct dos_file_error e; dos_file_error_from_fs(&e,-cases[i].fs,false); CHECK(e.code==cases[i].code && e.class_ && e.action && e.locus); }
+    /* fx-emptydrive: an empty CD-ROM/floppy letter is "drive not ready" (15h,
+     * media class 0Bh, retry after user intervention 07h, block device 02h). */
+    { struct dos_file_error e; dos_file_error_from_fs(&e,-FS_ENXIO,false); CHECK(e.code==21 && e.class_==11 && e.action==7 && e.locus==2); }
     path_set("C:/EXTENDED.DAT"); struct dos_file_frame f=frame(0x3d40); f.dx=0x100;
     fail_read=1; CHECK(dos_file_dispatch(&bridge,&f,DOS_FILE_V86,0x21)==DOS_FILE_PENDING); CHECK(callbacks && callback_token);
     CHECK(bridge.callback.cs==0x7000 && bridge.callback.ip==0x1234 && bridge.callback.sp==0x7fe2);

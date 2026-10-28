@@ -9,11 +9,16 @@
 #include <ciuki/power_sleep.h>
 #include <ciuki/apm_ports.h>
 #include <ciuki/registry.h>
+#include <ciuki/selftest.h>
 #include "apm.h"
 
 /* fx-18: the ACPI layer supplies the FADT blocks and the legacy-EC hold;
  * weak so that builds and host tests without ACPI link. */
 int acpi_pm_blocks(struct apm_pm_blocks *) __attribute__((weak));
+/* sec-wire: the read-only FADT blocks of the power code (core/power_acpi_s5.c)
+ * when the inventory loaded no tables; weak for builds and host tests
+ * without it. */
+int power_firmware_pm_blocks(struct apm_pm_blocks *) __attribute__((weak));
 int acpi_ec_firmware_hold(unsigned ms) __attribute__((weak));
 void acpi_ec_firmware_release(void) __attribute__((weak));
 bool registry_smi_snapshot(struct registry_smi *) __attribute__((weak));
@@ -215,6 +220,12 @@ static void install_window(void)
 {
     struct apm_pm_blocks fadt;
     bool have_fadt = acpi_pm_blocks && !acpi_pm_blocks(&fadt);
+    /* sec-wire: SeaBIOS (QEMU) keeps its tables in E820 reserved RAM, which
+     * the ACPI inventory does not map; its APM Set Power State Off writes
+     * SLP_EN to the FADT's PM1a_CNT (SeaBIOS src/apm.c apm_shutdown, port
+     * from src/fw/biostables.c find_acpi_features). The same FADT, read by
+     * the power code's parser, bounds the window by the same fx-18 rule. */
+    if (!have_fadt && power_firmware_pm_blocks) have_fadt = !power_firmware_pm_blocks(&fadt);
     struct registry_smi chip;
     bool have_chip = registry_smi_snapshot && registry_smi_snapshot(&chip) && chip.decoded && chip.base;
     apm_port_window_build(&window, have_fadt ? &fadt : NULL, have_chip ? chip.base : 0, have_chip ? 128 : 0);
@@ -353,10 +364,29 @@ static void service_once(void)
         }
     }
 }
+/* fx-selftest: discovery finished (connected or not) and its outcome. */
+static bool discovery_done;
+static int discovery_error;
+static const char *discovery_reason;
+void apm_platform_selftest(struct apm_selftest *out)
+{
+    uint32_t f = irq_save();
+    *out = (struct apm_selftest){.attempted = attempted, .finished = discovery_done,
+        .connected = backend.state == APM_CONNECTED, .capabilities_valid = backend.capabilities_valid,
+        .state = backend.state, .version = backend.version, .flags = backend.flags,
+        .capabilities = backend.capabilities, .last_function = backend.last_function,
+        .bios_error = backend.bios_error, .units = backend.units,
+        .error = discovery_error, .transport_error = backend.transport_error,
+        .reason = discovery_reason};
+    irq_restore(f);
+}
 static void worker(void *unused)
 {
     (void)unused;
-    if (discover()) return;
+    int found = discover();
+    discovery_error = found; discovery_reason = reason(found);
+    __atomic_store_n(&discovery_done, true, __ATOMIC_RELEASE);
+    if (found) return;
     while (backend.state == APM_CONNECTED) {
         service_once();
         task_sleep_ms(10);

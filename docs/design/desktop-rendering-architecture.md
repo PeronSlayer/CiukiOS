@@ -1,5 +1,67 @@
 # F2-50 desktop rendering architecture
 
+## Launch feedback (fx-launchfb, 2026-10-26)
+
+Microsoft's [STARTUPINFO reference](https://learn.microsoft.com/en-us/windows/win32/api/processthreadsapi/ns-processthreadsapi-startupinfoa)
+specifies FORCEONFEEDBACK (0x40), FORCEOFFFEEDBACK (0x80), staged 2/5/5-second
+startup timing and termination on GetMessage. The original Microsoft February
+2003 SDK [STARTUPINFO page](https://is.muni.cz/el/1433/jaro2010/PB167/um/cv5/startupinfo_str.pdf)
+documents these flags alongside explicit Windows 95/98/Me exclusions for other
+flags; it lists no such exclusion for feedback. Microsoft's
+[cursor reference](https://learn.microsoft.com/en-us/windows/win32/menurc/about-cursors)
+distinguishes IDC_APPSTARTING (32650) from IDC_WAIT (32514). The Windows 98
+Resource Kit, `build/rskt/wrkapph_3.htm` (read in the main checkout), confirms
+configurable pointers and the animated hourglass; it does not specify launch
+timing. These sources do not establish byte-for-byte Windows 98 timing.
+
+The directive chooses a bounded five-second shell policy: show the existing
+theme's arrow+busy from the launch request until successful first-window
+presentation, exit, failure or timeout. Pending requests are independent, so
+finishing one leaves the others active. Startup feedback decorates only the
+visible default arrow, including desktop-owned surfaces and window chrome.
+Application-selected shapes, custom cursors and hidden cursors take precedence;
+full-screen leases suppress startup feedback. Native/DOS launches retain their
+existing launch slots. Win32 processes retain kernel-owned startup deadlines,
+queried by the delegated desktop; FORCEOFF suppresses that child's feedback,
+FORCEON enables it, and GetMessage ends it. The desktop reports successful
+presentation back by PID. This also covers CreateProcess children before they
+have connected to the desktop. No cursor or Ciuki identity artwork changes.
+
+The window-model replay adds these rows on all five presenters:
+
+| Case | Production behavior checked |
+| --- | --- |
+| Native | Feedback begins at request; damage alone does not complete it; successful presentation does. |
+| Win32 | A child without a USER connection still contributes feedback; presentation, exit or input idle removes it. |
+| DOS | DOS Box startup uses the same request and first-presentation lifecycle. |
+| Failure | A failed reserved spawn and an unsuccessful lookup leave no feedback. |
+| Timeout | A spawn that has not returned also stops contributing after five seconds. |
+| Overlap | Presenting one launch leaves another pending launch active; its exit removes the last contribution. |
+| Cursor precedence | Default arrows receive feedback; text, link, resize, busy, custom and hidden cursors retain precedence; full screen suppresses feedback. |
+| Remote first-frame wait | A Win32 client that never presents cannot hold scripted input, enable legacy 1 ms startup polling or accelerate unrelated small damage; the event loop waits on its existing channels and completion wakeups. |
+| Link queue overlap | A queued, busy or unconsumed completed Link request rejects another Link request; completion preserves pending Run feedback and the next accepted Link re-arms its own deadline. |
+
+Review round 1 (2026-10-26): Microsoft's
+[SetCursor reference](https://learn.microsoft.com/en-us/windows/win32/api/winuser/nf-winuser-setcursor)
+assigns client-area/captured pointer shape to the application, including a null
+cursor; [ShowCursor](https://learn.microsoft.com/en-us/windows/win32/api/winuser/nf-winuser-showcursor)
+documents hiding with a negative display count. Preserve that ownership when
+decorating the system arrow. Full-screen suppression and the five-second bound
+are the lead's policy, not claims of exact Windows 98 timing. The Win32 first
+frame still completes feedback after successful presentation, but its
+`launch_feedback_remote` flag excludes it from native test-script readiness
+holds and the legacy short-wait helper. The current `desktop_pause_ns` loop
+already waits on input/client channels and the completion descriptor and has
+no launch-feedback polling deadline. A pending remote frame also leaves
+unrelated small-damage pacing unchanged; real first-frame damage still requests
+presentation through `launch_frame_pending`. Existing Link admission guards already
+serialize queued, busy and completed requests; regressions pin those guards
+and independent Run feedback, so no additional queue policy is needed.
+
+The production Win32 kernel tests separately exercise default, FORCEON,
+FORCEOFF and both flags; native record admission, desktop authority, independent
+children, presentation completion, GetMessage completion, exit and timeout.
+
 Research and implementation contract, 2026-10-13. The existing desktop wire
 protocol, client painting, themes, approved Ciuki portrait and pixel goldens
 remain unchanged. Qualification on the T23 belongs to the lead.

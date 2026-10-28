@@ -1,6 +1,7 @@
 /* Bounded shell records; no shell interpreter. SPDX-License-Identifier: MIT */
 #include "win32_adapter.h"
 #include "../dosbox/autorun.h"
+#include "exe_kind.h"
 #include <errno.h>
 #include <stdio.h>
 #include <string.h>
@@ -18,20 +19,50 @@ int desk_w32_native_path(const char *path, char *out, size_t cap)
     for (size_t i=0;i<=n;i++) out[i]=path[i+skip]=='\\' ? '/' : path[i+skip];
     return 0;
 }
+/* fx-autorun: the Windows name of a native path, the inverse of the
+ * namespace the kernel loader uses (src/kernel/proc/win32/loader.c): C: is
+ * the root, D: to Z: (and A:/B:) are /mnt/<letter>. On Windows a program's
+ * GetModuleFileName and command line name its image "D:\\SETUP.EXE"; with
+ * that name the kernel's IS5 admission finds SETUP.INS next to the stub
+ * whatever the program's current drive is (a POSIX "/mnt/d/..." name is
+ * read relative to the current drive by the Win32 loader namespace). */
+int desk_w32_windows_path(const char *path, char *out, size_t cap)
+{
+    if (!path || !out || !cap) return -EINVAL;
+    char drive='C'; const char *rest=path;
+    if (path[0] && path[0]!='/' && path[1]==':' && (path[2]=='/' || path[2]=='\\' || !path[2])) {
+        if (!((path[0]>='A' && path[0]<='Z') || (path[0]>='a' && path[0]<='z'))) return -EINVAL;
+        drive=(char)(path[0]&~32); rest=path+2;
+    } else if (path[0]!='/') return -EINVAL;
+    else if (!strncmp(path,"/mnt/",5) && path[5]>='a' && path[5]<='z' && (path[6]=='/' || !path[6])) {
+        drive=(char)(path[5]-'a'+'A'); rest=path+6;
+    }
+    while (*rest=='/' || *rest=='\\') rest++;
+    size_t n=strlen(rest);
+    if (n+4>cap) return -ENAMETOOLONG;
+    out[0]=drive; out[1]=':'; out[2]='\\';
+    for (size_t i=0;i<=n;i++) out[3+i]=rest[i]=='/' ? '\\' : rest[i];
+    return 0;
+}
+/* fx-autorun: Start > Run, Files and My Computer, desktop shortcuts, the
+ * Startup folder and AutoPlay all reach this classification. PE images and
+ * 16-bit Windows (NE) programs go to the Win32 personality, whose spawn
+ * admission starts the InstallShield 5 bootstrap for an IS5 setup stub and
+ * refuses any other 16-bit Windows program with its own dialog; every other
+ * MZ program (plain DOS, LE/LX DOS-extended, NE for OS/2) runs in the DOS
+ * Box. The rule is exe_kind.h's (Wine get_image_params). */
 int desk_w32_identify(const char *path)
 {
     FILE *f=fopen(path,"rb");if(!f)return -errno;
-    uint8_t h[64];size_t n=fread(h,1,sizeof(h),f);
+    uint8_t h[DESK_EXE_HEADER];size_t n=fread(h,1,sizeof(h),f);
     size_t suffix=strlen(path);
     int result=suffix>=4&&!strcasecmp(path+suffix-4,".msi")?DESK_W32_PE:-ENOEXEC;
     if(n>=4 && !memcmp(h,"\177ELF",4)) result=DESK_W32_ELF;
     else if(n>=2 && h[0]=='M' && h[1]=='Z') {
-        result=DESK_W32_DOS;
-        if(n==sizeof(h)) {
-            uint32_t at=desk_get32(h+60);uint8_t sig[4];
-            if(at>=64 && at<=16*1024*1024 && !fseek(f,(long)at,SEEK_SET) &&
-                fread(sig,1,4,f)==4 && !memcmp(sig,"PE\0\0",4)) result=DESK_W32_PE;
-        }
+        uint32_t at=desk_exe_lfanew(h,n);uint8_t next[DESK_EXE_HEADER];size_t got=0;
+        if(at && !fseek(f,(long)at,SEEK_SET)) got=fread(next,1,sizeof(next),f);
+        int kind=desk_exe_classify(h,n,got ? next : NULL,got);
+        result=kind==DESK_EXE_WIN32 || kind==DESK_EXE_WIN16 ? DESK_W32_PE : DESK_W32_DOS;
     } else {
         size_t len=strlen(path);
         if (len>=4 && (!strcasecmp(path+len-4,".com") || !strcasecmp(path+len-4,".bat")) && n) result=DESK_W32_DOS;

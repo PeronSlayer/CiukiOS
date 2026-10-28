@@ -80,6 +80,59 @@ static void dde(void)
     assert(rpc(10,W32R_PROGMAN_CLOSE,c,0,0,0,"","",NULL,0,&r,NULL,0)==6);
     puts("PASS DDE command transcripts malformed ownership timeout exact link encoder");
 }
+/* sec-user-05: Windows XP common and personal program groups. */
+extern void ws_profile(void *,const char *);
+static void mkdirs(const char *path)
+{char p[2048];snprintf(p,sizeof(p),"%s",path);for(char *s=p+1;;s++){if(*s&&*s!='/')continue;char c=*s;*s=0;mkdir(p,0700);*s=c;if(!c)break;}}
+static int dir_at(const char *base,const char *name)
+{char p[2048];int dir=0;uint64_t n;snprintf(p,sizeof(p),"%s/%s",base,name);return !fs.stat(fs.opaque,p,&dir,&n)&&dir;}
+static void groups(void)
+{
+    char profile[1100],personal[1200],out[4096],target[1500],command[4096];struct w32r_reply r;
+    snprintf(profile,sizeof(profile),"%s/Profiles/u00000003",root);snprintf(personal,sizeof(personal),"%s/Start Menu/Programs",profile);
+    mkdirs(personal);char games[1100];snprintf(games,sizeof(games),"%s/Games",programs);mkdirs(games);
+    snprintf(target,sizeof(target),"%s/tool.exe",root);file("tool.exe","MZ");
+    /* A Standard user: groups are personal, CommonGroupFlag 1 included. */
+    ws_profile(shell,profile);
+    unsigned a=open_conv(10,"PROGMAN","PROGMAN");
+    exec(10,a,"[CreateGroup(Mine)]",0x8000);assert(dir_at(personal,"Mine")&&!dir_at(programs,"Mine"));
+    snprintf(command,sizeof(command),"[AddItem(\"%s\",Tool)]",target);exec(10,a,command,0x8000);
+    char link[2048];snprintf(link,sizeof(link),"%s/Mine/Tool.lnk",personal);int dir;uint64_t n;assert(!fs.stat(fs.opaque,link,&dir,&n));
+    exec(10,a,"[CreateGroup(Shared,1)]",0x8000);assert(dir_at(personal,"Shared")&&!dir_at(programs,"Shared"));
+    exec(10,a,"[CreateGroup(Bad,2)]",0);
+    /* Groups merges the personal and the All Users groups, once each. */
+    exec(10,a,"[CreateGroup(Games,0)]",0x8000);
+    assert(!rpc(10,W32R_PROGMAN_REQUEST,a,0,0,0,"","Groups",NULL,0,&r,out,sizeof(out)));
+    assert(!strcmp(out,"Games\r\nMine\r\nShared\r\n"));
+    exec(10,a,"[DeleteGroup(Games,0)]",0x8000);assert(dir_at(programs,"Games"));
+    assert(!rpc(10,W32R_PROGMAN_REQUEST,a,0,0,0,"","Mine",NULL,0,&r,out,sizeof(out)));
+    char spelled[1300];snprintf(spelled,sizeof(spelled),"\"Mine\",C:%s/Mine,1,3\r\n",personal);
+    for(char *p=spelled;*p;p++)if(*p=='/')*p='\\';
+    assert(!strncmp(out,spelled,strlen(spelled)));
+    assert(!rpc(10,W32R_PROGMAN_REQUEST,a,0,0,0,"","Games",NULL,0,&r,out,sizeof(out)));
+    assert(strstr(out,"C:\\WINDOWS\\Start Menu\\Programs\\Games,0,3"));
+    /* ShowGroup with the flag selects that folder only; AddItem follows the selection. */
+    exec(10,a,"[ShowGroup(Mine,1,1)]",0);exec(10,a,"[ShowGroup(Games,1,1)]",0x8000);
+    exec(10,a,"[ShowGroup(Mine,1,0)][DeleteItem(Tool)]",0x8000);assert(fs.stat(fs.opaque,link,&dir,&n));
+    puts("PASS sec-user-05 Standard user: personal groups, CommonGroupFlag ignored, merged Groups, personal group path");
+    /* An administrator: groups are common unless CommonGroupFlag is 0. */
+    ws_set_administrator(shell,1);ws_profile(shell,profile);
+    a=open_conv(10,"PROGMAN","PROGMAN");
+    exec(10,a,"[CreateGroup(Apps)]",0x8000);assert(dir_at(programs,"Apps")&&!dir_at(personal,"Apps"));
+    snprintf(command,sizeof(command),"[AddItem(\"%s\",Tool)]",target);exec(10,a,command,0x8000);
+    snprintf(link,sizeof(link),"%s/Apps/Tool.lnk",programs);assert(!fs.stat(fs.opaque,link,&dir,&n));
+    exec(10,a,"[CreateGroup(Own,0)]",0x8000);assert(dir_at(personal,"Own")&&!dir_at(programs,"Own"));
+    exec(10,a,"[CreateGroup(Wide,1)]",0x8000);assert(dir_at(programs,"Wide"));
+    exec(10,a,"[ShowGroup(Mine,1)]",0x8000);   /* found in the personal folder after the common one */
+    exec(10,a,"[DeleteGroup(Own)]",0x8000);assert(!dir_at(personal,"Own"));
+    exec(10,a,"[DeleteGroup(Apps,1)][DeleteGroup(Wide)]",0x8000);assert(!dir_at(programs,"Apps")&&!dir_at(programs,"Wide"));
+    /* Without a profile the personal groups are C:\WINDOWS\Start Menu\Programs
+     * (the common folder itself in the guest, where windows is /WINDOWS). */
+    char flat[1200];snprintf(flat,sizeof(flat),"%s/Start Menu/Programs",root);mkdirs(flat);
+    ws_profile(shell,"");exec(10,a,"[CreateGroup(Flat,0)]",0x8000);assert(dir_at(flat,"Flat"));
+    assert(!rpc(10,W32R_PROGMAN_CLOSE,a,0,0,0,"","",NULL,0,&r,NULL,0));
+    puts("PASS sec-user-05 administrator: common groups by default, CommonGroupFlag 0 personal, lookup order, profile-less layout");
+}
 static void drive(void){for(unsigned i=0;ws_restart_phase(shell)==1&&i<600;i++)ws_restart_tick(shell);assert(ws_restart_phase(shell)==2);}
 static void recreate(void)
 {ws_destroy(shell);struct ws_config config={programs,root};shell=ws_create(&fs,&config,&server);assert(shell);server.shell=shell;}
@@ -313,6 +366,6 @@ int main(int argc,char **argv)
     wr_posix_io(&io,root);real_sync=io.sync;io.sync=sync_fault;io.log=log_line;assert(wr_init(&server,&io,0));
     ws_posix_fs(&fs);real_write=fs.write;fs.write=write_fault;real_rename=fs.rename;fs.rename=rename_fault;fs.log=log_line;
     struct ws_config config={programs,root};shell=ws_create(&fs,&config,&server);assert(shell);server.shell=shell;server.shell_call=ws_call;server.shell_exit=ws_exit;
-    if(!strcmp(argv[1],"fixture"))restart_fixture_test();else if(!strcmp(argv[1],"dde"))dde();else if(!strcmp(argv[1],"wininit"))wininit();else if(!strcmp(argv[1],"runonce"))runonce();else session();
+    if(!strcmp(argv[1],"fixture"))restart_fixture_test();else if(!strcmp(argv[1],"dde"))dde();else if(!strcmp(argv[1],"wininit"))wininit();else if(!strcmp(argv[1],"runonce"))runonce();else if(!strcmp(argv[1],"groups"))groups();else session();
     ws_destroy(shell);wr_destroy(&server);assert(logs);return 0;
 }

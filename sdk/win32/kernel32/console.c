@@ -30,14 +30,55 @@ BOOL W32API SetStdHandle(DWORD which, HANDLE h) {
   }
   return 1;
 }
+/* sec-user-05 (user-security-contract.md 8.2, A1-10): the log console's
+ * backing file is created exclusively, with a collision-safe name, in the
+ * process's temporary directory (GetTempPath: TMP, TEMP, USERPROFILE), which
+ * a profile session places in its own Local Settings\Temp. A missing private
+ * directory is created there; failure is an error, never a fallback to a
+ * shared C:\WINDOWS\TEMP. The file stays the user's ordinary temporary file. */
+static BOOL temp_tree(char *path) {
+  extern BOOL W32API CreateDirectoryA(const char *, SECURITY_ATTRIBUTES *);
+  DWORD n = w32_strlen(path);
+  if (n < 3 || path[1] != ':' || (path[2] != '\\' && path[2] != '/')) {
+    SetLastError(123);
+    return 0;
+  }
+  for (DWORD i = 3; i <= n; i++) {
+    if (i < n && path[i] != '\\' && path[i] != '/')
+      continue;
+    if (path[i - 1] == '\\' || path[i - 1] == '/')
+      continue; /* empty component (the trailing separator) */
+    char c = path[i];
+    path[i] = 0;
+    DWORD attributes = GetFileAttributesA(path);
+    BOOL ok = attributes != ~0u ? (attributes & 16) != 0 : CreateDirectoryA(path, 0);
+    if (!ok && attributes == ~0u && GetLastError() == 183) {
+      attributes = GetFileAttributesA(path); /* created concurrently */
+      ok = attributes != ~0u && (attributes & 16);
+    }
+    path[i] = c;
+    if (!ok) {
+      if (attributes != ~0u && !(attributes & 16))
+        SetLastError(267); /* ERROR_DIRECTORY */
+      return 0;
+    }
+  }
+  return 1;
+}
 BOOL W32API AllocConsole(void) {
   if (log_handle) {
     SetLastError(5);
     return 0;
   }
-  char path[260] = "C:\\WINDOWS\\TEMP\\", file[260];
-  extern BOOL W32API CreateDirectoryA(const char *, SECURITY_ATTRIBUTES *);
-  if (GetFileAttributesA(path) == ~0u && !CreateDirectoryA(path, 0))
+  char path[260], file[260];
+  extern DWORD W32API GetTempPathA(DWORD, char *);
+  DWORD n = GetTempPathA(sizeof(path), path);
+  if (!n || n >= sizeof(path)) {
+    if (n)
+      SetLastError(206);
+    return 0;
+  }
+  if (!temp_tree(path))
     return 0;
   extern DWORD W32API GetTempFileNameA(const char *, const char *, DWORD,
                                        char *);

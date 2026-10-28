@@ -56,12 +56,24 @@ static unsigned surfaces;
 static uint64_t clock_ms, enter_ms, first_frame_ms;
 static unsigned title_set, finished_panel, close_requests;
 static int phase, scenario, armed, entered, presents, damage_count, error_seen, closed;
+static unsigned network_expected;
+static int network_custom;
 static unsigned error_idle_waits;
 static unsigned nonvideo, timeout_waits, state_waits, last_events, nonvideo_presents;
 static int input_refused;
 static int focus_loss;
 static int fs_command,fs_active,fs_panel_seen;
 static uint64_t fs_until;
+/* fx-dosfull scenarios 33-37 (a kernel with CIUKI_DOSVM_GRAPHICS): 33 the
+ * game enters full screen at its first graphics mode and the user's Alt+Enter
+ * back to the window is remembered; 34 a remembered Window starts windowed,
+ * the user's Alt+Enter into full screen is remembered as graphics full screen
+ * and a mode-change return enters again; 35 the display refuses (QEMU f3-29):
+ * one request, no notice, no setting; 36 a mode-change return enters again,
+ * a watchdog return does not; 37 a busy display is retried after 1 s. */
+static unsigned fs_calls,fs_user_in;
+static int fs_hotkey,fs_error;
+static uint64_t fs_first_call,fs_entered_at[4],fs_return_at;
 static unsigned settings_phase, close_declined, f12_forwarded;
 static unsigned session_registered, session_queries, session_answers, session_ends; /* G3 scenario 22 */
 static unsigned save_full_notice;
@@ -192,7 +204,7 @@ int ciuki_channel_recv(int fd, struct ciuki_message *m, uint32_t flags)
         desk_message(m,DESK_END_SESSION,16); desk_put32(m->data+4,5); desk_put32(m->data+8,1); session_ends++;
     } else if (scenario==22 || scenario==26) { errno = EAGAIN; return -1; }
     else if (scenario==31 && clock_ms < enter_ms+20000) { errno = EAGAIN; return -1; } /* the program's return closes it */
-    else if ((presents && clock_ms > (scenario==8 ? fs_until+3300 : scenario==32 ? enter_ms+2650 : enter_ms+650)) ||
+    else if ((presents && clock_ms > (scenario==8 ? fs_until+3300 : scenario==32 ? enter_ms+2650 : scenario>=33 ? enter_ms+5000 : enter_ms+650)) ||
              (error_seen && clock_ms > 5000)) {
         desk_message(m, DESK_CLOSE_REQUEST, 4); phase++; close_requests++;
     } else { errno = EAGAIN; return -1; }
@@ -223,7 +235,8 @@ int ciuki_dosvm(uint32_t op, struct ciuki_dosvm_command *c)
     }
     if (op == CIUKI_DOSVM_CREATE) {
         assert(c->surface_fd == 7);
-        assert(c->launch.game==(scenario==6 ? 0u : 2u));
+        assert(c->launch.game==(scenario==6 || network_custom ? 0u : 2u));
+        assert(dosvm_launch_network(c)==network_expected);
         assert(c->launch.kernel==CIUKI_DOSVM_UNIFIED);
         assert(c->launch.memory==CIUKI_DOSVM_MEMORY_PAGED);
         if (scenario==20) assert(image_polls==7 && image_paints==6 && phase>=2);
@@ -254,7 +267,18 @@ int ciuki_dosvm(uint32_t op, struct ciuki_dosvm_command *c)
         if (scenario==20 && !presents) assert(c->focused);  /* focus seen during the check */
         return 0;
     case CIUKI_DOSVM_FULLSCREEN:
+        fs_calls++;
         if (scenario==19) { assert(!c->focused); fs_command=1; return 0; }
+        if (scenario>=33) {
+            assert(c->focused && !fs_active && fs_calls<=4);
+            if (scenario==34) assert(fs_user_in);   /* a remembered Window never enters by itself */
+            if (scenario==35) return 0;              /* DISPLAY_FULLSCREEN_WINDOWED: success, still windowed */
+            if (scenario==37 && fs_calls==1) { fs_first_call=clock_ms; errno=EBUSY; return -1; }
+            if (scenario==37) assert(clock_ms>=fs_first_call+DOSBOX_AUTO_RETRY_MS);
+            fs_entered_at[fs_calls-1]=clock_ms;
+            fs_active=1; fs_hotkey=0; fs_until=clock_ms+(scenario==36 ? 400u : scenario==33 ? 1000u : 100000u);
+            return 0;
+        }
         assert(scenario==8 && c->focused); fs_active=1; fs_until=clock_ms+100; return 0;
     case CIUKI_DOSVM_STATUS:
         c->state = clock_ms < 300 ? CIUKI_DOSVM_BOOTING : CIUKI_DOSVM_RUNNING;
@@ -264,6 +288,21 @@ int ciuki_dosvm(uint32_t op, struct ciuki_dosvm_command *c)
         if (entered && clock_ms > enter_ms + 500) {
             if (scenario == 3) { c->changed = CIUKI_DOSVM_LAUNCH_FAILED; strcpy(c->name, "Bad command or file name"); }
             else if (scenario != 5) { c->changed = CIUKI_DOSVM_VIDEO_READY; c->video_mode = scenario == 4 ? 3 : 19; }
+        }
+        if (scenario>=33) {
+            if (c->video_mode==19) c->changed|=CIUKI_DOSVM_GRAPHICS;
+            if (scenario==34 && !fs_user_in && entered && clock_ms>enter_ms+700) {
+                /* The user's Alt+Enter in the window (the kernel's input path). */
+                fs_user_in=1; fs_active=1; fs_hotkey=1; fs_until=clock_ms+300;
+            }
+            if (fs_active && clock_ms>=fs_until) {
+                fs_active=0; if (!fs_return_at) fs_return_at=clock_ms;
+                if (scenario==33) fs_hotkey=1;                     /* the user's Alt+Enter back */
+                else if (scenario==34 || (scenario==36 && fs_calls==1)) fs_hotkey=0; /* a VBE mode change */
+                else if (scenario==36) { fs_hotkey=0; fs_error=ETIMEDOUT; }   /* the first-frame watchdog */
+            }
+            if (fs_hotkey) c->changed|=CIUKI_DOSVM_FULLSCREEN_HOTKEY;
+            if (fs_error) { c->changed|=CIUKI_DOSVM_FULLSCREEN_REFUSED; c->reason=(uint32_t)fs_error; }
         }
         if (fs_active && clock_ms>=fs_until) fs_active=0;
         if (fs_active) c->changed|=CIUKI_DOSVM_FULL_SCREEN;
@@ -366,7 +405,17 @@ int main(int argc, char **argv)
     setvbuf(stdout,NULL,_IONBF,0);
     assert(argc == 2 || argc == 3); scenario = atoi(argv[1]);
     if (argc==3) { nonvideo=(unsigned)atoi(argv[2]); assert(nonvideo==1 || nonvideo==2); }
-    assert(scenario>=0 && scenario<=32);
+    assert(scenario>=0 && scenario<=41);
+    int network_scenario=scenario>=38 ? scenario : 0;
+    if (network_scenario==40) {
+        char *bad[]={"dosbox","--network=bogus","\\TRIAL\\GAME.EXE"};
+        assert(dosbox_main(3,bad)==2 && !surfaces && !phase);
+        puts("PASS dosbox loading replay: invalid network rejected before CREATE");return 0;
+    }
+    if (network_scenario) {
+        network_expected=network_scenario==39 ? CIUKI_DOSVM_NETWORK_OFF : CIUKI_DOSVM_NETWORK_IPX;
+        network_custom=network_scenario==41;scenario=0;
+    }
     if (scenario>=13 && scenario<=16) {
         const char *options[]={"--dos-kernel=ciukidos","--dos-kernel=freedos-1.3","--dos-memory=locked","--dos-network=ipx"};
         char *refused[]={"dosbox",(char *)options[scenario-13]};
@@ -376,14 +425,27 @@ int main(int argc, char **argv)
     }
     char *launch[] = {"dosbox", "--name=DOOM", "\\DOOM\\DOOM.EXE", "-config", "CIUKI.CFG"};
     char *reference[]={"dosbox","--name=DOOM","--dos-kernel=unified","\\DOOM\\DOOM.EXE","-config","CIUKI.CFG"};
+    char *network_launch[]={"dosbox","--name=DOOM",network_scenario==39 ? "--network=off" : "--network=ipx",
+                            network_custom ? "\\TRIAL\\GAME.EXE" : "\\DOOM\\DOOM.EXE","-config","CIUKI.CFG"};
+    char network_path[144];
+    if (network_scenario==39) {
+        assert(!mkdir(DOSBOX_SETTINGS_DIR,0700) || errno==EEXIST);
+        assert(!dosbox_network_path(2,network_path,sizeof(network_path)));
+        FILE *f=fopen(network_path,"wb");assert(f);
+        static const char saved[]="network=ipx\n";
+        assert(fwrite(saved,1,sizeof(saved)-1,f)==sizeof(saved)-1 && !fclose(f));
+    }
     struct dosbox_profile profile;
+    if (scenario==34) assert(!dosbox_profile_usage_save("\\DOOM\\DOOM.EXE",DOSBOX_SCREEN_WINDOW));
     if ((scenario>=24 && scenario<=26) || scenario==30) {
         dosbox_profile_default(&profile,"\\DOOM\\DOOM.EXE -config CIUKI.CFG");
         if (scenario==24 || scenario==30) profile.close_on_exit=0; else profile.warn=0;
         assert(!dosbox_profile_save(&profile));
     }
     int selected=scenario==9 || scenario==10;
-    int result = dosbox_main(selected ? 6 : scenario == 6 ? 1 : 5, selected ? reference : launch);
+    int result = dosbox_main(network_scenario || selected ? 6 : scenario == 6 ? 1 : 5,
+                            network_scenario ? network_launch : selected ? reference : launch);
+    if (network_scenario==39) assert(!unlink(network_path) && !rmdir(DOSBOX_SETTINGS_DIR));
     if ((scenario>=24 && scenario<=26) || scenario==30) {
         char path[192]; assert(!dosbox_profile_path(profile.key,path,sizeof(path)) && !unlink(path));
         assert(!rmdir(DOSBOX_SETTINGS_DIR));
@@ -448,13 +510,39 @@ int main(int argc, char **argv)
     if (scenario == 0 || scenario == 4 || scenario == 7) assert(armed && entered && console_at == 1);
     if (scenario == 6) assert(!armed && !entered);
     if (scenario==8) assert(fs_command && fs_panel_seen && !fs_active && back_seen==1 && !notice_seen);
-    else assert(!back_seen);
+    else assert(!back_seen || scenario==36);
+    if (scenario<33) assert(fs_calls==(scenario==8 ? 1u : scenario==19 ? (unsigned)fs_command : 0u));
+    {
+        /* fx-dosfull: what the DOS Box remembered for \DOOM\DOOM.EXE. */
+        struct dosbox_profile stored; dosbox_profile_default(&stored,"\\DOOM\\DOOM.EXE");
+        int loaded=dosbox_profile_load(&stored);
+        if (scenario==8) {
+            /* The window menu's Full screen at a text frame: the whole session. */
+            assert(loaded==1 && stored.screen==DOSBOX_SCREEN_FULL && !stored.command[0]);
+        } else if (scenario==33) {
+            /* Entered by itself at the graphics mode; Alt+Enter back: Window. */
+            assert(fs_calls==1 && fs_entered_at[0]>enter_ms+500 && fs_entered_at[0]<=enter_ms+600 && fs_panel_seen);
+            assert(loaded==1 && stored.screen==DOSBOX_SCREEN_WINDOW && !stored.command[0] && !notice_seen);
+        } else if (scenario==34) {
+            assert(fs_user_in && fs_calls==1 && loaded==1 && stored.screen==DOSBOX_SCREEN_GRAPHICS && !stored.command[0]);
+        } else if (scenario==35) {
+            assert(fs_calls==1 && !fs_panel_seen && !notice_seen && !loaded && presents>3);
+        } else if (scenario==36) {
+            /* Re-entry waits for the focus to settle after the kernel's return. */
+            assert(fs_calls==2 && fs_entered_at[1]>=fs_return_at+DOSBOX_AUTO_RETURN_MS && back_seen==1 && !loaded);
+        } else if (scenario==37) {
+            assert(fs_calls==2 && !loaded && fs_panel_seen);
+        } else assert(!loaded);
+        if (loaded==1) { char path[192]; assert(!dosbox_profile_path(stored.key,path,sizeof(path)) && !unlink(path)); }
+        (void)rmdir(DOSBOX_SETTINGS_DIR);
+    }
+    if (scenario>=33) printf("PASS fx-dosfull scenario=%d full-screen requests=%u (33 auto entry, Alt+Enter back remembered; 34 remembered Window, Alt+Enter remembered; 35 refusal: one request, window, nothing stored; 36 mode change re-enters, watchdog does not; 37 busy retried)\n",scenario,fs_calls);
     if (scenario==18 || scenario==19) assert(save_full_notice==1 && presents && !error_seen);
     if (scenario==19) assert(fs_command);
     if (error_seen) { assert(error_seen==1 && error_idle_waits==1);
         puts("PASS DOS error window: one infinite wait for 10 s modeled idle, close in one turn"); }
     /* fullscreen's static page shares the title; fx-4b: six progress pages and the Preparing page */
-    if (scenario!=6) assert(loading_seen==(scenario==8 ? 2u : scenario==20 ? 8u : scenario==27 ? 6u : 1u));
+    if (scenario!=6) assert(loading_seen==(scenario==8 || scenario>=33 ? 1u+fs_panel_seen : scenario==20 ? 8u : scenario==27 ? 6u : 1u));
     assert(damage_count);
     if (scenario==0 && !nonvideo) {
         assert(first_frame_ms<=3000);

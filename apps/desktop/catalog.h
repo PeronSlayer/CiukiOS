@@ -15,27 +15,27 @@ static const struct desk_catalog_entry desk_catalog[] = {
     {"msconfig", "System Configuration", "preferences-system", 0, ""},
     {"printers", "Printers", "printer", 0, ""},
     /* G30 system tools (apps/systools). */
-    {"resmeter", "Resource Meter", "applications-system", 0, ""},
+    {"resmeter", "Resource Meter", "haiku-resource-meter", 0, ""},
     {"schedtask", "Scheduled Tasks", "x-office-calendar", 0, ""},
-    {"sysinfo", "System Information", "document-properties", 0, ""},
-    {"sysmon", "System Monitor", "network-transmit-receive", 0, ""},
-    {"regedit", "Registry Editor", "x-office-address-book", 0, ""},
-    {"logview", "Log Viewer", "x-office-spreadsheet", 0, ""},   /* G13: boot, NetSurf, Setup and crash logs */
+    {"sysinfo", "System Information", "haiku-system-info", 0, ""},
+    {"sysmon", "System Monitor", "haiku-system-monitor", 0, ""},
+    {"regedit", "Registry Editor", "haiku-registry", 0, ""},
+    {"logview", "Log Viewer", "haiku-log-viewer", 0, ""},   /* G13: boot, NetSurf, Setup and crash logs */
     {"clipbrd", "Clipboard Viewer", "edit-paste", 1, "clp"},
     {"calc", "Calculator", "accessories-calculator", 0, ""},
     {"charmap", "Character Map", "accessories-character-map", 0, ""},
-    {"clock", "Clock", "appointment-new", 0, ""},   /* a clock face; Settings > Date & Time keeps office-calendar */
+    {"clock", "Clock", "haiku-clock", 0, ""},   /* Haiku clock; Settings > Date & Time keeps the Tango calendar */
     {"help", "CiukiOS Help", "help-browser", 1, ""},
     {"mixer", "Volume Control", "audio-volume-high", 0, ""},
     {"recorder", "Sound Recorder", "audio-input-microphone", 0, ""},
     {"music", "Music Player", "audio-x-generic", 1, "wav|mp3|ogg|m3u"},
     {"viewer", "Image Viewer", "image-x-generic", 1, "bmp|png|jpg|jpeg|jpe|gif|xrgb"},
     /* G27 card and board games (Programs > Games). */
-    {"mines", "Minesweeper", "face-smile", 0, ""},
+    {"mines", "Minesweeper", "haiku-mines", 0, ""},
     {"solitaire", "Solitaire", "applications-games", 0, ""},
-    {"freecell", "FreeCell", "face-glasses", 0, ""},
+    {"freecell", "FreeCell", "applications-games", 0, ""},
     {"hearts", "Hearts", "emblem-favorite", 0, ""},
-    {"serial", "Serial Terminal", "network-wired", 0, ""},   /* G27: Accessories > Serial Terminal */
+    {"serial", "Serial Terminal", "haiku-serial", 0, ""},   /* G27: Accessories > Serial Terminal */
     /* Viewer is the default; keep Paint available in the shell's Open With. */
     {"paint", "CiukPaint", "applications-graphics", 1, "bmp|png"},
     /* G28: WordPad opens Rich Text Format, and since G28b Word 6/95/97 (.doc) and Write (.wri) documents (text files stay with CiukNote). */
@@ -70,6 +70,7 @@ static const struct desk_game_entry desk_games[] = {
     /* Blizzard's Warcraft II demo (owner 2026-10-25). WAR2.BAT starts WAR2.EXE, which uses the DOS VM's
      * VESA BIOS (640x480x256 in the window, war2vbe); DIG.INI/MDI.INI are generated for the VM's Sound Blaster. */
     {"Warcraft II (demo)", "Warcraft II", "\\WAR2\\WAR2.BAT", "input-gaming"},
+    {"Duke Nukem 3D (shareware)", "Duke Nukem 3D", "\\DUKE3D\\DUKE3D.BAT", "input-gaming"},
 };
 #define DESK_GAME_COUNT (sizeof(desk_games) / sizeof(desk_games[0]))
 static inline const struct desk_catalog_entry *desk_catalog_find(const char *name)

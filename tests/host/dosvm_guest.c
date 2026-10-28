@@ -37,6 +37,7 @@
  * GUEST_PLAY_KEYS=01@12000,... presses window keys during play:, whose end
  * prints the window picture (H61 PLAY FRAME, GUEST_PLAY_SHOT=<file.ppm>).
  * SPDX-License-Identifier: GPL-2.0-only */
+#include <ciuki/kheap_limits.h>
 #define _POSIX_C_SOURCE 200809L
 #include <stdio.h>
 #include <stdlib.h>
@@ -74,6 +75,19 @@ static uint64_t read_tsc_serialized(void)
     if (clock_gettime(CLOCK_THREAD_CPUTIME_ID, &t)) abort();
     return (uint64_t)t.tv_sec * 1000000000u + (uint64_t)t.tv_nsec;
 }
+/* fx-doomwin: the exit boundary stamps (dosvm_perf_stamp) are RDTSC alone
+ * on the T23; here the same host clock, counted apart. */
+static uint64_t host_plain_calls;
+#ifndef FX27_HEAD_BASELINE
+static uint64_t read_tsc_unserialized(void)
+{
+    if (!guest_perf) return 0;
+    host_plain_calls++;
+    struct timespec t;
+    if (clock_gettime(CLOCK_THREAD_CPUTIME_ID, &t)) abort();
+    return (uint64_t)t.tv_sec * 1000000000u + (uint64_t)t.tv_nsec;
+}
+#endif
 #include <ciuki/kernel.h>
 #include <ciuki/task.h>
 #include <ciuki/input.h>
@@ -107,7 +121,12 @@ static void write_cr3(uint32_t x) { cpu_cr3 = x; }
 static uint32_t read_cr2(void) { return fake_cr2; }
 static void cli(void) { cpu_flags = 0; }
 static void sti(void) { cpu_flags = V86_IF; }
-static void invlpg(uint32_t va) { (void)va; }
+static uint64_t invlpg_calls;
+static void invlpg(uint32_t va) { (void)va; invlpg_calls++; }
+static double t23_trap_ns, t23_invlpg_ns, t23_trap_total_ns, t23_invlpg_total_ns;
+/* fx-doswin3: calibration of the window's VGA port and aperture-fault
+ * prices to the latest trial (GUEST_T23_VGA_SCALE, GUEST_T23_PF_SCALE). */
+static double t23_vga_scale = 1.0, t23_pf_scale = 1.0;
 static uint32_t *table_va(uint32_t p) { return P2V(p); }
 static uint32_t irq_save(void) { uint32_t f = cpu_flags; cli(); return f; }
 static void irq_restore(uint32_t f) { cpu_flags = f; }
@@ -198,7 +217,7 @@ void klog_diag(const char *fmt,...)
     vsnprintf(line,sizeof(line),fmt,ap);va_end(ap);klog("%s",line);
 }
 
-void *kmalloc(size_t n) { return malloc(n); }
+void *(kmalloc)(size_t n) { if (n > KHEAP_MAX_REQUEST) return 0; return malloc(n); }
 void kfree(void *p) { free(p); }
 #include "dosvm_aspace.inc"
 
@@ -272,8 +291,16 @@ struct storage *storage_get(void) { return &store; }
 #define vfs_handle_stat transport_vfs_handle_stat
 #define vfs_version_pin(...) transport_vfs_version_pin(__VA_ARGS__)
 #define vfs_version_unpin transport_vfs_version_unpin
+#define vfs_mkdir transport_vfs_mkdir
 #endif
 int vfs_table_init(struct vfs *vfs, struct vfs_table *table, unsigned drive) { (void)vfs; (void)table; (void)drive; return 0; }
+/* sec-k05: the VM-private scratch directory already exists in this transport. */
+int vfs_mkdir(struct vfs_table *table, const char *path, uint8_t attr) { (void)table; (void)path; (void)attr; return -FS_EEXIST; }
+#ifndef CIUKI_DOSVM_FILE_CPU
+/* Internal VMs only: the identity adapter's host-view gate is never used. */
+void vfs_lock(struct vfs *v, uint32_t mask) { (void)v; (void)mask; abort(); }
+void vfs_unlock(struct vfs *v) { (void)v; abort(); }
+#endif
 void vfs_table_destroy(struct vfs_table *table) { (void)table; }
 int vfs_handle_stat(struct vfs_table *table,int h,struct fat_entry *entry,uint64_t *pos)
 { (void)table;(void)h;(void)entry;(void)pos;return -FS_EOPNOTSUPP; }
@@ -401,14 +428,16 @@ void fs_service(void) { }
 #endif
 /* Explicit guest fixtures have no native persistent title store. */
 int dos_save_store_open(struct dos_save_file *f,struct dos_save *s,const struct dos_save_identity *id,
-                        char path[128],unsigned *archived)
+                        const char *root,char path[DOS_SAVE_PATH],unsigned *archived)
 {
     (void)s; *archived=0; f->fd=-1; f->absent=true;
-    snprintf(path,128,DOS_SAVE_ROOT "\\G%uK%u%s.COW",id->game,id->kernel,id->base);
+    snprintf(path,DOS_SAVE_PATH,"%s\\G%uK%u%s.COW",root,id->game,id->kernel,id->base);
     return -FS_EROFS;
 }
 #include "../../src/kernel/vm/dos_save.c"
 #include "../../src/kernel/vm/dosvm_disk.c"
+/* sec-k05 identity adapter on the same transport as the VM's disk table. */
+#include "../../src/kernel/vm/dos_identity.c"
 #ifdef CIUKI_DOSVM_FILE_CPU
 #undef vfs_table_init
 #undef vfs_table_destroy
@@ -424,6 +453,7 @@ int dos_save_store_open(struct dos_save_file *f,struct dos_save *s,const struct 
 #undef vfs_handle_stat
 #undef vfs_version_pin
 #undef vfs_version_unpin
+#undef vfs_mkdir
 #endif
 
 /* GUEST_INT10_TRACE=1: every INT 10h the VM's BIOS serves (the end of the
@@ -432,15 +462,31 @@ int dos_save_store_open(struct dos_save_file *f,struct dos_save *s,const struct 
  * are left out, VBE 4F00h/4F01h also print the start of the returned
  * block. Observation only (the war2vbe VESA trace, 2026-10-25). */
 static int guest_int10_traced(struct dosvm *v, struct v86_frame *f);
+static int guest_int33_traced(struct dosvm *v, struct v86_frame *f);
 #define dosvm_vga_bios guest_int10_traced
+#define dosvm_mouse_bios guest_int33_traced
 #include "../../src/kernel/vm/dosvm_bios.c"
 #undef dosvm_vga_bios
+#undef dosvm_mouse_bios
 #include "../../src/kernel/vm/dosvm_floppy.c"
 #include "../../src/kernel/vm/floppy_model.c"
 #include "../../src/kernel/drivers/floppy_media.c"
 #include "../../src/kernel/vm/dosvm_pit.c"
 #include "../../src/kernel/vm/dosvm_kbd.c"
 #include "../../src/kernel/vm/dosvm_mouse.c"
+static int guest_int33_traced(struct dosvm *v, struct v86_frame *f)
+{
+    static unsigned count[256];
+    unsigned ax=(uint16_t)f->tf.eax, cx=(uint16_t)f->tf.ecx, dx=(uint16_t)f->tf.edx, es=(uint16_t)f->es;
+    int e=dosvm_mouse_bios(v,f);
+    if (getenv("GUEST_INT33_TRACE") && (ax>=256 || count[ax]++<32 ||
+        (ax==0xB && ((uint16_t)f->tf.ecx || (uint16_t)f->tf.edx)) ||
+        (ax==3 && ((uint16_t)f->tf.ebx&7))))
+        printf("I33 ax=%04x cx=%04x es:dx=%04x:%04x -> e=%d ax=%04x bx=%04x cx=%04x dx=%04x mask=%x ms=%llu\n",
+               ax,cx,es,dx,e,(uint16_t)f->tf.eax,(uint16_t)f->tf.ebx,(uint16_t)f->tf.ecx,
+               (uint16_t)f->tf.edx,v->mouse.mask,(unsigned long long)g_ticks);
+    return e;
+}
 #include "dosvm_uart_seams.inc"
 #include "../../src/kernel/vm/uart16550.c"
 #include "../../src/kernel/vm/dosvm_uart.c"
@@ -562,6 +608,7 @@ static bool t23_model;
  * monitor exits on the T23; the runner still emulates them, charged 1 us. */
 static bool t23_fullscreen;
 static uint64_t t23_monitor, t23_off;       /* owed time, instruction units */
+static double t23_off_total_ns;             /* fx-doswin3: all off-CPU time charged */
 static uint64_t t23_charged_ns[DOSVM_COST_COUNT], t23_exits[DOSVM_COST_COUNT];
 static double t23_ratio(unsigned cause)
 {
@@ -595,6 +642,10 @@ static double t23_ratio(unsigned cause)
  * workstation, HEAD 6b0a5481 sources, DOOM shooting replay, t23x_calibration
  * lines): vga_io 589 ns, pit_pic 375 ns, io 349 ns. */
 static bool t23_fx27;
+/* fx-doomfs2: fixed hot-exit costs from 5bb73dba DOOM n=8, rather than
+ * scaling noisy host timings. Non-display port/flags traps also see the
+ * real fullscreen flag; the fake VGA transport still uses its model. */
+static bool t23_doomfs2;
 static double host_clock_ns;
 #define T23_SERIALIZED_NS 265.0
 #define T23_PATH_NS 150.0
@@ -602,10 +653,41 @@ static uint64_t t23x_code_ns[DOSVM_COST_COUNT], t23x_ser[DOSVM_COST_COUNT], t23x
 /* fx-27: the same split for exits retired on the lean path. */
 static uint64_t t23x_lean_ns[DOSVM_COST_COUNT], t23x_lean_exits[DOSVM_COST_COUNT], t23x_lean_charged[DOSVM_COST_COUNT];
 static bool t23x_lean_exit;
+/* fx-doomwin: exits retired by dosvm_trap_fast (a subset of the lean ones),
+ * and their host code time apart from the lean path's for the same cause. */
+static bool t23x_fast_exit;
+static uint64_t t23x_fast_ns[DOSVM_COST_COUNT], t23x_fast_exits[DOSVM_COST_COUNT];
+/* T23 price of a plain RDTSC (dosvm_perf_stamp): about 42 clocks on the P6
+ * line (Agner Fog's instruction tables), 37 ns at 1.13 GHz. */
+#define T23_PLAIN_NS 37.0
+/* fx-doomwin GUEST_T23_STAMP_NS (default 230): what the trial's per-cause
+ * averages paid inside each exit's measured interval for its serialized
+ * boundary stamps and these sources no longer do: the second CPUID of the
+ * entry read_tsc_serialized and the first of the exit's, about 130 clocks
+ * each (Agner Fog), 2 x 115 ns at 1.13 GHz. Subtracted from every fixed
+ * price; the CPUIDs outside the interval (one at entry, one or three at the
+ * return) are left in the trial's guest time, uncredited. 0 restores the
+ * fx-doswin3 prices for a replay of earlier sources. */
+static double t23_stamp_ns = 230.0;
+/* GUEST_T23_FAST_NS (default 0): the fixed model's what-if saving of a
+ * plane select retired by dosvm_trap_fast against fx-27's lean VGA exit,
+ * beyond the stamps. The measured host code time ratio of the two paths
+ * (H61 T23X lines, GUEST_NO_FAST=1 for the lean path) gives its scale. */
+static double t23_fast_ns;
 /* T23 us per exit (trial e831e685 n=7/8 as fx-16; V86 flag/IRET exits and
  * the keyboard from trial f441c5bd n=3); 0: variable work, fx-16 scaling. */
 static double t23x_average(unsigned cause)
 {
+    if (t23_doomfs2) {
+        switch (cause) {
+        case DOSVM_COST_IO: return 19.946;
+        case DOSVM_COST_PIT_PIC: return 17.728;
+        case DOSVM_COST_PM_FLAGS: return 18.072;
+        case DOSVM_COST_DB: return 18.464;
+        case DOSVM_COST_TIMER: return 58.016;
+        default: break;
+        }
+    }
     switch (cause) {
     case DOSVM_COST_IO: return 21.6;
     case DOSVM_COST_PIT_PIC: return 19.2;
@@ -626,35 +708,103 @@ static double t23x_head_code_ns(unsigned cause)
 {
     return cause == DOSVM_COST_VGA_IO ? 589.1 : cause == DOSVM_COST_PIT_PIC ? 375.1 : 348.7;
 }
-static void t23_charge_calls(uint64_t serialized, uint64_t path)
+/* fx-doswin3 GUEST_T23_MODEL=fixed: every exit costs the T23's measured
+ * average for its cause in trial 5bb73dba (BOOT.LOG vm_perf_cost, the
+ * Wolfenstein 3-D window bank n=6 and full-screen n=9, DOOM window n=4 and
+ * full screen n=7), independent of this host's load: the fx-27 lean model
+ * scales host code time, which varied 2.4x between concurrent replays of
+ * the same sources. Window prices are mostly lean exits; full-screen prices
+ * are ordinary exits (no lean path in a full-screen session) and the
+ * hardware owns the VGA ports and aperture there (no exit, 0 ns). The VGA
+ * port price excludes its sixteen INVLPGs per remap (6.70 us measured,
+ * less 16 x INVLPG_NS per remap), which are charged per call; a lean V86
+ * CLI/STI (fx-doswin3) is priced as the trial's cheapest lean exit, a
+ * 3DAh status read (2.52 us, Wolfenstein bank n=6), plus 0.5 us for
+ * v86_emulate. An aperture fault is the round-1 Wolfenstein price (233 us
+ * x 0.35, fx-doswin3 round 1). Prices in ns. */
+static bool t23_fixed;
+static double t23_xchg_ns;      /* GUEST_T23_XCHG_NS: per locked PTE exchange of a remap */
+static double t23_fixed_price(unsigned cause, bool lean)
+{
+    if (t23_fullscreen) switch (cause) {
+    case DOSVM_COST_VGA_IO: case DOSVM_COST_VGA_PF: return 0;
+    case DOSVM_COST_IO: return 15600;          /* Wolf 11.2, DOOM 20.1 (OPL) */
+    case DOSVM_COST_PIT_PIC: return 15000;     /* Wolf 12.0, DOOM 17.8 */
+    case DOSVM_COST_PM_FLAGS: return 17800;
+    case DOSVM_COST_TIMER: return 54000;       /* Wolf 49.7, DOOM 58.2 */
+    case DOSVM_COST_DB: return 15700;          /* Wolf 13.5, DOOM 18.0 */
+    case DOSVM_COST_HOST_IRQ: return 63800;
+    default: break;
+    }
+    switch (cause) {
+    case DOSVM_COST_VGA_IO: return 6700 - 16 * t23_invlpg_ns * 0.86; /* 0.86 remaps per port exit (DOOM n=4) */
+    case DOSVM_COST_VGA_PF: return 81600;
+    case DOSVM_COST_PIT_PIC: return 5500;      /* DOOM 6.52, Wolf 4.44 */
+    case DOSVM_COST_IO: return 6700;           /* lean OPL, DOOM 6.70 */
+    case DOSVM_COST_PM_FLAGS: return lean ? 6630 : 17800;
+    case DOSVM_COST_DB: return 35400;          /* DOOM n=4 return checkpoints */
+    case DOSVM_COST_TIMER: return 39000;       /* DOOM 44.5, Wolf 33.1 */
+    case DOSVM_COST_RM_CLI: return lean ? 3020 : 7850;
+    case DOSVM_COST_RM_STI: return lean ? 3020 : 8870;
+    case DOSVM_COST_RM_IRET: return 11300;
+    case DOSVM_COST_RM_PUSHF: return 10300;
+    case DOSVM_COST_RM_POPF: return 9200;
+    case DOSVM_COST_RM_INT: return 44700;
+    case DOSVM_COST_PM_INT: return 26200;
+    case DOSVM_COST_DPMI: return 25400;
+    case DOSVM_COST_SWITCH: return 20500;
+    case DOSVM_COST_HOST_IRQ: return 61900;
+    case DOSVM_COST_KBD: return 14000;
+    default: return 23200;                     /* other */
+    }
+}
+static void t23_charge_calls(uint64_t serialized, uint64_t path, uint64_t plain)
 {
     if (!t23_model || !g_tsc_per_ms) return;
     unsigned cause = gv->perf.cause < DOSVM_COST_COUNT ? gv->perf.cause : DOSVM_COST_OTHER;
     double trap = (double)gv->perf.trap_cycles * 1000000.0 / (double)g_tsc_per_ms;
-    /* Boundary reads: the entry and exit stamps (half of each inside the
-     * interval) and the return to guest time after it. */
-    uint64_t inner = serialized >= 3 ? serialized - 3 : 0;
-    double code = trap - (double)(inner + 1 + path) * host_clock_ns;
+    /* fx-doomwin: the boundary stamps are plain reads (dosvm_perf_stamp):
+     * the entry and exit stamps (half of each inside the interval) and, for
+     * an ordinary exit, the return to guest time after it. Every serialized
+     * read is now inside the interval. */
+    uint64_t boundary = t23x_lean_exit || t23x_fast_exit ? 2 : 3;
+    uint64_t inner = plain >= boundary ? plain - boundary : 0;
+    double code = trap - (double)(serialized + inner + 1 + path) * host_clock_ns;
     if (code < 0) code = 0;
-    t23x_code_ns[cause] += (uint64_t)code; t23x_ser[cause] += inner + 1; t23x_path[cause] += path;
-    double clocks = (double)(inner + 1) * T23_SERIALIZED_NS + (double)path * T23_PATH_NS;
+    if (t23x_fast_exit) { t23x_fast_ns[cause] += (uint64_t)code; t23x_fast_exits[cause]++; }
+    else if (t23x_lean_exit) { t23x_lean_ns[cause] += (uint64_t)code; t23x_lean_exits[cause]++; }
+    if (t23_fixed) {
+        double ns = t23_fixed_price(cause, t23x_lean_exit) - t23_stamp_ns;
+        if (t23x_fast_exit) ns -= t23_fast_ns;
+        if (ns < 0) ns = 0;
+        if (!t23_fullscreen && cause == DOSVM_COST_VGA_PF) ns *= t23_pf_scale;
+        if (!t23_fullscreen && cause == DOSVM_COST_VGA_IO) ns *= t23_vga_scale;   /* what-if only */
+        t23_charged_ns[cause] += (uint64_t)ns; t23_exits[cause]++;
+        t23_monitor += (uint64_t)(ns * guest_slice / 1000000.0);
+        return;
+    }
+    t23x_code_ns[cause] += (uint64_t)code; t23x_ser[cause] += serialized; t23x_path[cause] += path;
+    double clocks = (double)serialized * T23_SERIALIZED_NS + (double)path * T23_PATH_NS +
+        (double)(inner + 1) * T23_PLAIN_NS;
     double average = t23x_average(cause) * 1000.0, ns;
     if (t23x_lean_exit) {
         /* HEAD's ordinary exit of the same cause: one serialized read, and
          * two path reads for a VGA register write. */
         double head_clocks = T23_SERIALIZED_NS + (cause == DOSVM_COST_VGA_IO ? 2 * T23_PATH_NS : 0);
         double base = average ? average : 21600.0;
-        ns = (base - head_clocks) * code / t23x_head_code_ns(cause) + clocks;
-        t23x_lean_ns[cause] += (uint64_t)code; t23x_lean_exits[cause]++; t23x_lean_charged[cause] += (uint64_t)ns;
-    } else ns = average ? average : trap * t23_ratio(cause);
-    if (!t23_fx27) return;
+        ns = t23_doomfs2 ? 6600.0 : (base - head_clocks) * code / t23x_head_code_ns(cause) + clocks;
+        t23x_lean_charged[cause] += (uint64_t)ns;
+    } else ns = average ? average - t23_stamp_ns : trap * t23_ratio(cause);
+    if (!t23_fx27 && !t23_doomfs2) return;
     if (t23_fullscreen && (cause == DOSVM_COST_VGA_IO || cause == DOSVM_COST_VGA_PF)) ns = 1000.0;
+    else if (cause == DOSVM_COST_VGA_IO) ns *= t23_vga_scale;
+    else if (cause == DOSVM_COST_VGA_PF) ns *= t23_pf_scale;
     t23_charged_ns[cause] += (uint64_t)ns; t23_exits[cause]++;
     t23_monitor += (uint64_t)(ns * guest_slice / 1000000.0);
 }
 static void t23_charge(void)
 {
-    if (!t23_model || !g_tsc_per_ms || t23_fx27) return;
+    if (!t23_model || !g_tsc_per_ms || t23_fx27 || t23_doomfs2) return;
     unsigned cause = gv->perf.cause < DOSVM_COST_COUNT ? gv->perf.cause : DOSVM_COST_OTHER;
     double ns = (double)gv->perf.trap_cycles * 1000000.0 / (double)g_tsc_per_ms * t23_ratio(cause);
     if (t23_fullscreen && (cause == DOSVM_COST_VGA_IO || cause == DOSVM_COST_VGA_PF)) ns = 1000.0;
@@ -985,12 +1135,31 @@ static void lean_diag(const struct v86_frame *hw)
     else if (gv->mouse.pending_mask && gv->mouse.mask && !gv->mouse.active) why = 20;
     lean_why[why]++;
 }
+/* fx-doswin3 GUEST_ISR_RING=1: the last ISR/IRR/depth transitions of the
+ * master PIC around each exit, printed with the H61 STATE lines (a stuck
+ * in-service bit names the exit that set it and the last one that cleared
+ * it). Diagnostic only. */
+#define ISR_RING 48u
+static struct isr_event { uint64_t tick; uint32_t eip; uint16_t cs; uint8_t vector, isr0, isr1, irr1, depth0, depth1, pm, vif; } isr_ring[ISR_RING];
+static unsigned isr_ring_pos;
+static bool isr_ring_on;
+static void isr_ring_dump(void)
+{
+    for (unsigned i = 0; i < ISR_RING; i++) {
+        const struct isr_event *e = &isr_ring[(isr_ring_pos + i) % ISR_RING];
+        if (!e->tick) continue;
+        printf("H61 ISR t=%llu vec=%02x pm=%u %04x:%08x isr %02x->%02x irr=%02x depth %u->%u vif=%u\n",
+               (unsigned long long)e->tick, e->vector, e->pm, e->cs, e->eip, e->isr0, e->isr1, e->irr1, e->depth0, e->depth1, e->vif);
+    }
+}
 static void deliver(unsigned vector, uint32_t err, uint32_t cr2)
 {
     struct v86_frame hw = cpu;
+    uint8_t isr_before = gv->monitor.pic[0].isr, depth_before = (uint8_t)gv->dpmi.depth;
+    uint16_t cs_before = (uint16_t)cpu.tf.cs; uint32_t eip_before = cpu.tf.eip; bool pm_before = !(cpu.tf.eflags & V86_VM);
     hw.tf.vector = vector; hw.tf.err = err; fake_cr2 = cr2;
     lean_diag(&hw);
-    unsigned cost = getenv("GUEST_COSTS") ? replay_cause(&hw) : 13;
+    unsigned cost = getenv("GUEST_COSTS") || t23_doomfs2 ? replay_cause(&hw) : 13;
     uint64_t begin = getenv("GUEST_COSTS") ? replay_clock() : 0;
     g_current = gv->task; gv->continuation = 0x12345678; cpu_flags = 0;
     unsigned forced = gv->perf.if_enable[DOSVM_IF_FORCED];
@@ -1021,10 +1190,27 @@ static void deliver(unsigned vector, uint32_t err, uint32_t cr2)
 #ifndef FX27_HEAD_BASELINE
     uint32_t lean_before = gv->perf.lean_exits;
 #endif
-    uint64_t calls = host_clock_calls, harvest = gv->perf.harvest_cycles, ports = 0;
+    uint64_t calls = host_clock_calls, harvest = gv->perf.harvest_cycles, ports = 0, invlpgs = invlpg_calls;
+    uint64_t plain0 = host_plain_calls;
+#ifndef FX27_HEAD_BASELINE
+    uint32_t fast_before = gv->perf.fast_exits;
+#endif
+    uint32_t remaps0 = gv->perf.port_remaps;
     for (unsigned i = 0; i < DOSVM_VGA_REGS; i++) ports += gv->perf.port_count[i];
-    if (!setjmp(guest_return)) { CHECK(dosvm_trap(&hw.tf)); cpu = hw; }
+    bool saved_fullscreen = gv->fullscreen;
+    if (t23_doomfs2 && t23_fullscreen && vector == 13 && !err && (cost == 4 || cost == 8 || cost == 10))
+        gv->fullscreen = true;
+    /* fx-doomwin: trap_dispatch offers a VM's #GP to dosvm_trap_fast first
+     * (GUEST_NO_FAST=1: fx-27's lean path alone, for A/B replays). */
+    if (!setjmp(guest_return)) {
+#ifndef FX27_HEAD_BASELINE
+        if (getenv("GUEST_NO_FAST") || !dosvm_trap_fast(&hw.tf))
+#endif
+            CHECK(dosvm_trap(&hw.tf));
+        cpu = hw;
+    }
     else cpu = gv->frame;
+    gv->fullscreen = saved_fullscreen;
     t23_charge();
     uint64_t after = 0;
     for (unsigned i = 0; i < DOSVM_VGA_REGS; i++) after += gv->perf.port_count[i];
@@ -1033,7 +1219,26 @@ static void deliver(unsigned vector, uint32_t err, uint32_t cr2)
 #ifndef FX27_HEAD_BASELINE
     t23x_lean_exit = gv->perf.lean_exits != lean_before;
 #endif
-    t23_charge_calls(total - path, path);
+#ifndef FX27_HEAD_BASELINE
+    t23x_fast_exit = gv->perf.fast_exits != fast_before;
+#endif
+    t23_charge_calls(total - path, path, host_plain_calls - plain0);
+    if (isr_ring_on && (gv->monitor.pic[0].isr != isr_before || gv->dpmi.depth != depth_before)) {
+        isr_ring[isr_ring_pos++ % ISR_RING] = (struct isr_event){g_ticks, eip_before, cs_before, (uint8_t)vector,
+            isr_before, gv->monitor.pic[0].isr, gv->monitor.pic[0].irr, depth_before, (uint8_t)gv->dpmi.depth,
+            pm_before, gv->monitor.vif};
+    }
+    /* fx-doswin3: the exit's hardware round trip (fault delivery, entry
+     * stub, IRET), outside the monitor's own stamps, and each INVLPG at
+     * the caller's T23 prices (GUEST_T23_TRAP_NS, GUEST_T23_INVLPG_NS). */
+    if (t23_model && t23_fx27 && (t23_trap_ns || t23_invlpg_ns || t23_xchg_ns)) {
+        /* Full screen: the hardware aperture has no window PTEs to swap. */
+        double invalidate = t23_fullscreen ? 0 : (double)(invlpg_calls - invlpgs) * t23_invlpg_ns +
+            (double)(gv->perf.port_remaps - remaps0) * 16.0 * t23_xchg_ns;
+        double extra = t23_trap_ns + invalidate;
+        t23_trap_total_ns += t23_trap_ns; t23_invlpg_total_ns += invalidate;
+        t23_monitor += (uint64_t)(extra * guest_slice / 1000000.0);
+    }
     if (guest_perf && gv->perf.if_enable[DOSVM_IF_FORCED] != forced)
         printf("isr_forced cli=%04x:%08x ss:sp=%04x:%08x depth=%u seed=%04x:%08x at=%04x:%08x\n",
                last_cli.tf.cs, last_cli.tf.eip, last_cli.tf.user_ss, last_cli.tf.user_esp,
@@ -1058,13 +1263,178 @@ static bool video_started(void)
 }
 static int perf_row(void *arg, unsigned y, const void *pixels, unsigned bytes)
 { (void)arg; (void)y; (void)pixels; (void)bytes; return 0; }
+/* fx-doswin3 GUEST_T23_PRESENT=KERNEL,DOSBOX,DESKTOP,FRAME (with the T23
+ * model, window only): the presentation pipeline as two stages that run
+ * beside the VM, each charged as off-CPU time.
+ * 1. The DOS Box presenter loop. Its WAIT_PRESENT wake mirrors
+ *    dosvm_client.c present_events (the video event, including the shared
+ *    dosvm_present_store_wake rule and both cadences) and PRESENT_BANDS the
+ *    same bookkeeping around the production dosvm_vga_present, whose rows
+ *    go to a host copy of the shared VM surface with put_row's comparison
+ *    (a row proven by an exact index difference is written without
+ *    comparing). It runs GUEST_T23_PRESENT_DELAY ms after the event (the
+ *    trial's WAIT dispatch delay). A wake costs PRESENT_WAKE_US (WAIT,
+ *    STATUS and PRESENT system calls, the harvest), a changed frame its
+ *    written rows x (KERNEL + DOSBOX) ns; then it sends the damage and
+ *    waits again (dosbox.c never waits for the desktop).
+ * 2. The desktop composes and presents the latest damage: FRAME us plus
+ *    rows x DESKTOP ns. Damage that arrives while it is busy coalesces
+ *    (the frames in between are never shown); a composed frame is a
+ *    visible frame.
+ * Each stage drains at most its share of every millisecond: the DOS Box
+ * GUEST_T23_PRESENT_SHARE (default 0.20, its turns beside a focused VM's
+ * eight of ten ticks), the desktop GUEST_T23_DESKTOP_SHARE (default 0.25,
+ * the f1-98 desktop group share). The stage prices are the caller's
+ * (window_parity.py); the wake, row and frame counts are the production
+ * code's. Not hardware evidence. */
+#define PRESENT_WAKE_US 60.0
+/* fx-doswin3 round 3: GUEST_T23_ACK models the DOS Box's composed
+ * acknowledgement (dosbox.c, at most DOSBOX_ACK_MS = 100 ms of waiting).
+ * 1: after handing a frame to the desktop it converts the next one only once
+ * the desktop has shown it (no overlap of the two stages). 2 (production):
+ * a frame carries the marker when none is outstanding; the DOS Box may
+ * convert one more frame, then waits for the marker's answer, so it is at
+ * most one frame ahead of the desktop. GUEST_T23_DESKTOP_HZ (default 60) is
+ * the desktop's frame cadence (compositor.c: a frame starts at least
+ * DESK_FRAME_NS, 1/60 s, after the previous one started). */
+static unsigned t23_ack;
+static double t23_desktop_slot_us = 1e6 / 60.0;
+static bool ack_wait, pending_ack, desktop_frame_ack;
+static unsigned ack_unmarked;
+static uint64_t ack_since, desktop_next_us, ack_timeouts;
+static double PRESENT_SHARE = 0.20, DESKTOP_SHARE = 0.25;
+static bool t23_present;
+static double t23_present_row_ns, t23_present_frame_ns, t23_desktop_row_ns;
+static unsigned t23_present_delay;
+static uint32_t *present_surface;
+static uint64_t present_frames, present_rows, present_wakes, present_wake_at, desktop_frames, desktop_rows;
+static double present_charged_ns, present_debt_ns, desktop_debt_ns;
+static unsigned desktop_pending, present_handoff;
+static struct { bool observed, pending, waiting; uint32_t changes, display, starts, vbe; uint16_t mode; } present_seen;
+struct present_target { bool force; unsigned written; };
+static int present_put_row(void *arg, unsigned y, const void *pixels, unsigned bytes)
+{
+    struct present_target *t = arg;
+    CHECK(y < DOSVM_VIDEO_HEIGHT && bytes == DOSVM_VIDEO_WIDTH * 4);
+    uint32_t *row = present_surface + (size_t)y * DOSVM_VIDEO_WIDTH;
+    if (!t->force && !gv->video_row_proven && !memcmp(row, pixels, bytes)) return 1;
+    memcpy(row, pixels, bytes);
+    t->written++;
+    return 0;
+}
+#ifdef DOSVM_FLIP_HOLD_MS
+#define present_store_wake(v) dosvm_present_store_wake((v), g_ticks)
+#else
+#define present_store_wake(v) true          /* sources before fx-doswin3 round 2 */
+#endif
+static bool present_video_event(void)
+{
+    struct dosvm *v = gv;
+    return !v->fullscreen && !v->fullscreen_hold && deadline_passed(v->present_due_us / 1000u) &&
+        (!v->video_presented || (!v->vbe_mode && v->video_geometry.text) || deadline_passed(v->video_due_us / 1000u)) &&
+        (present_seen.pending || !present_seen.observed ||
+         (present_store_wake(v) && present_seen.changes != v->vga.changes) ||
+         present_seen.display != v->vga.display_changes || present_seen.starts != v->video_starts ||
+         present_seen.mode != v->vbe_mode || present_seen.vbe != v->present_vbe_changes);
+}
+static double drain(double *debt, double share)
+{
+    double take = *debt < share * 1e6 ? *debt : share * 1e6;
+    *debt -= take;
+    t23_off += (uint64_t)(take * guest_slice / 1000000.0);
+    t23_off_total_ns += take;
+    return take;
+}
+static void t23_present_tick(void)
+{
+    struct dosvm *v = gv;
+    /* Stage 2: the desktop composes the latest damage it was given. */
+    if (desktop_debt_ns > 0) drain(&desktop_debt_ns, DESKTOP_SHARE);
+    if (desktop_debt_ns <= 0 && desktop_frame_ack) { ack_wait = false; desktop_frame_ack = false; ack_unmarked = 0; }
+    if (desktop_debt_ns <= 0 && desktop_pending && (double)g_ticks * 1000.0 >= (double)desktop_next_us) {
+        double ns = t23_present_frame_ns + (double)desktop_pending * t23_desktop_row_ns;
+        desktop_debt_ns += ns; present_charged_ns += ns;
+        desktop_frames++; desktop_rows += desktop_pending; desktop_pending = 0;
+        desktop_frame_ack = pending_ack; pending_ack = false;
+        desktop_next_us = g_ticks * 1000u + (uint64_t)t23_desktop_slot_us;
+    }
+    /* Stage 1: the DOS Box loop. */
+    if (present_debt_ns > 0) {
+        drain(&present_debt_ns, PRESENT_SHARE);
+        if (present_debt_ns > 0) return;          /* still converting/painting */
+    }
+    if (present_handoff) {                        /* DESK_DAMAGE sent: coalesced if busy */
+        if (present_handoff > desktop_pending) desktop_pending = present_handoff;
+        present_handoff = 0;
+        if (t23_ack && !ack_wait) { pending_ack = ack_wait = true; ack_since = g_ticks; ack_unmarked = 0; }
+        else if (t23_ack) ack_unmarked++;
+    }
+    if (ack_wait && (t23_ack == 1 || ack_unmarked)) {   /* the composed acknowledgement */
+        if (g_ticks - ack_since < 100) return;
+        ack_wait = pending_ack = desktop_frame_ack = false; ack_unmarked = 0; ack_timeouts++;
+    }
+    if (!present_seen.waiting) {
+        if (!present_video_event()) return;
+        present_seen.waiting = true; present_wake_at = g_ticks + t23_present_delay;
+    }
+    if (g_ticks < present_wake_at) return;
+    present_seen.waiting = false;
+    if (!present_video_event()) return;           /* as WAIT re-evaluates on return */
+    /* wait_present: the VIDEO event's marks and the WAIT cadence. */
+    present_seen.pending = true; present_seen.observed = true;
+    present_seen.changes = v->vga.changes; present_seen.display = v->vga.display_changes;
+    present_seen.starts = v->video_starts; present_seen.mode = v->vbe_mode; present_seen.vbe = v->present_vbe_changes;
+    v->present_due_us = dosvm_vga_next_due(v->present_due_us, dosvm_vga_period_us(v, g_ticks), g_ticks);
+    /* PRESENT_BANDS */
+    struct present_target target = {.force = !v->video_presented};
+    struct ciuki_rect damage;
+    uint32_t samples = v->present_samples;
+    int e = dosvm_vga_present(v, present_put_row, &target, g_ticks, &damage);
+    if (e >= 0 && v->present_samples != samples) {
+        present_seen.pending = false;
+        v->present_due_us = v->video_due_us; v->present_sample_due_us = v->video_due_us;
+    }
+    double ns = PRESENT_WAKE_US * 1000.0;
+    present_wakes++;
+    if (e > 0 && target.written) {
+        ns += (double)target.written * t23_present_row_ns;
+        present_frames++; present_rows += target.written;
+        present_handoff = target.written;
+    }
+    present_charged_ns += ns; present_debt_ns += ns;
+}
+/* The presenter progresses on every simulated millisecond, whether the VM
+ * spent it in guest code, in the monitor or off the CPU: its own work is
+ * charged as off-CPU time above. */
+static void t23_present_service(void)
+{
+    struct task *saved = g_current;
+    if (guest_perf) dosvm_task_switch(&caller);
+    uint32_t space = cpu_cr3; cpu_cr3 = 0;   /* the DOS Box's own space */
+    t23_present_tick();
+    cpu_cr3 = space;
+    if (guest_perf) dosvm_task_switch(saved == &caller ? &caller : gv->task);
+    g_current = saved;
+}
+static uint64_t t23_desktop_stretch(void);
+static uint64_t t23_off_us(void)
+{
+    if (t23_doomfs2) {
+        /* Measured ~30% off CPU, with a 4 ms stretch; do not charge those
+         * four milliseconds twice. The guest and device clocks continue. */
+        unsigned phase = (unsigned)(g_ticks % 100);
+        return phase == 50 ? 4000 : phase >= 51 && phase <= 54 ? 0 : 274;
+    }
+    return 40 + (g_ticks % 10 == 0 ? 1200 : 0) + t23_desktop_stretch();
+}
 static void guest_timer_tick(void)
 {
     g_ticks++;
     if (guest_perf) perf_phase(gv, 2);
     host_clock_tick();
     deliver(0x20, 0, 0);        /* the host's 1 kHz timer IRQ: a delivery point */
-    if (guest_perf && !(g_ticks % 16)) {
+    if (t23_present && !t23_fullscreen) t23_present_service();
+    else if (guest_perf && !(g_ticks % 16)) {
         dosvm_task_switch(&caller);
         struct ciuki_rect damage;
         /* Time one whole sample, outside production accounting.
@@ -1076,13 +1446,26 @@ static void guest_timer_tick(void)
         dosvm_task_switch(gv->task);
     }
     if (t23_model) {
-        uint64_t off_us = 40 + (g_ticks % 10 == 0 ? 1200 : 0) + (g_ticks % 100 == 50 ? 7000 : 0);
+        uint64_t off_us = t23_off_us();
         t23_off += off_us * guest_slice / 1000;
+        t23_off_total_ns += off_us * 1000.0;
     }
 }
 /* fx-16: consume owed monitor and off-CPU time before the guest runs on.
  * A tick inside monitor time interrupts the VM's kernel code (sampled as
  * running, no trap); a tick inside off-CPU time interrupts another task. */
+/* The generic desktop stretch: 7 ms of every 100 ms (fx-16). fx-doswin3:
+ * GUEST_T23_STRETCH_SPLIT=1 spreads it as 1.75 ms every 25 ms, as trial
+ * 5bb73dba's [kernel] stretch_max_ms records bound continuous non-VM
+ * stretches at 1-4 ms; one 7 ms block re-entered DMX's 7.1 ms timer service
+ * four deep in the DOOM replay (its return without EOI, f3-12, stalled
+ * IRQ0 in service), which the trial's DOOM banks never show. */
+static bool t23_stretch_split;
+static uint64_t t23_desktop_stretch(void)
+{
+    if (t23_stretch_split) return g_ticks % 25 == 12 ? 1750 : 0;
+    return g_ticks % 100 == 50 ? 7000 : 0;
+}
 static void t23_settle(void)
 {
     while (t23_model && (t23_monitor || t23_off) && !stopped()) {
@@ -1094,8 +1477,10 @@ static void t23_settle(void)
         g_current = off ? &caller : gv->task;
         host_clock_tick();
         g_current = gv->task;
-        uint64_t off_us = 40 + (g_ticks % 10 == 0 ? 1200 : 0) + (g_ticks % 100 == 50 ? 7000 : 0);
+        if (t23_present && !t23_fullscreen) t23_present_service();
+        uint64_t off_us = t23_off_us();
         t23_off += off_us * guest_slice / 1000;
+        t23_off_total_ns += off_us * 1000.0;
     }
 }
 /* Run until done() or the VM stops or the instruction budget runs out. */
@@ -1349,11 +1734,13 @@ static void play_progress(uint64_t begin)
     unsigned xms_kb = 0;   /* XMS and EMS the game holds (DOS Box memory, dos_memory.py) */
     for (unsigned i = 0; i < VM_MEM_HANDLES; i++) if (gv->memory.xms[i].used) xms_kb += gv->memory.xms[i].bytes / 1024;
     printf("H61 PLAY t=%llu mode=%02x vbe=%x unchained=%u flips=%u irq_pm=%u dpmi=%u clients=%u terminations=%u faults=%u "
-           "sb_units=%u ifs_reads=%u ifs_failed=%u ifs_critical=%u instr=%llu xms_kb=%u ems_kb=%u\n",
+           "sb_units=%u ifs_reads=%u ifs_failed=%u ifs_critical=%u instr=%llu xms_kb=%u ems_kb=%u "
+           "sb_irq=%u sb_dma8=%u sb_dma16=%u\n",
            (unsigned long long)(g_ticks - begin), video.mode, gv->vbe_mode, video.unchained, video.starts,
            gv->dpmi.stats.irqs_pm, gv->dpmi.active, gv->dpmi.clients, gv->dpmi.stats.terminations, gv->dpmi.stats.faults,
            gv->audio.sb.units, reads, failed, critical,
-           (unsigned long long)instructions, xms_kb, (unsigned)(gv->memory.ems_bytes / 1024));
+           (unsigned long long)instructions, xms_kb, (unsigned)(gv->memory.ems_bytes / 1024),
+           gv->audio.sb.irq, gv->audio.sb.dma8, gv->audio.sb.dma16);
     /* t23-dosperf GUEST_PLAY_PERF=1: cumulative exit causes, lean exits,
      * the fx-16 PM CLI proof cache (BOOT.LOG [vm-audio] cadence_clock
      * cli_hits/cli_learned/cli_missed) and the seed demand that keeps
@@ -1362,10 +1749,30 @@ static void play_progress(uint64_t begin)
         const struct dpmi_cli_stats *c = &gv->dpmi.cli;
         const uint32_t *n = gv->perf.cost_count;
         bool wanted = !gv->dpmi.cli_settled || g_ticks - gv->dpmi.cli_miss_tick < 1000u;
-        printf("H61 PERF t=%llu traps=%llu lean=%u pm_flags=%u pm_int=%u pit_pic=%u vga_io=%u io=%u db=%u timer=%u "
+        if (getenv("GUEST_PLAY_STATE")) {
+            uint8_t code[24] = {0};
+            uint32_t at = gv->frame_pm ? dpmi_fault_linear(gv, &cpu) : ((cpu.tf.cs & 0xFFFFu) << 4) + (cpu.tf.eip & 0xFFFFu);
+            (void)dosvm_read(gv, at - 8, code, sizeof(code));
+            printf("H61 CODE t=%llu linear=%08x bytes=", (unsigned long long)(g_ticks - begin), at - 8);
+            for (unsigned i = 0; i < sizeof(code); i++) printf("%02x", code[i]);
+            printf(" eax=%08x ebx=%08x ecx=%08x edx=%08x esi=%08x edi=%08x ds=%04x\n", cpu.tf.eax, cpu.tf.ebx, cpu.tf.ecx,
+                   cpu.tf.edx, cpu.tf.esi, cpu.tf.edi, (unsigned)(cpu.tf.ds & 0xFFFF));
+        }
+        if (isr_ring_on && g_ticks - begin >= strtoull(getenv("GUEST_ISR_RING"), 0, 10)) { isr_ring_dump(); isr_ring_on = false; }
+        if (getenv("GUEST_PLAY_STATE"))
+            printf("H61 STATE t=%llu pm=%u cs=%04x eip=%08x vif=%u shadow=%u/%u irr=%02x isr=%02x imr=%02x irr2=%02x isr2=%02x "
+                   "depth=%u armed=%u if_waiting=%u if_step=%u return_steps=%u t23_off=%llu t23_monitor=%llu\n",
+                   (unsigned long long)(g_ticks - begin), gv->frame_pm, (unsigned)(cpu.tf.cs & 0xFFFF), cpu.tf.eip,
+                   gv->monitor.vif, gv->monitor.shadow, gv->dpmi.shadow, gv->monitor.pic[0].irr, gv->monitor.pic[0].isr,
+                   gv->monitor.pic[0].imr, gv->monitor.pic[1].irr, gv->monitor.pic[1].isr, gv->dpmi.depth,
+                   gv->dpmi.if_armed, gv->dpmi.if_waiting, gv->dpmi.if_step, gv->dpmi.return_steps,
+                   (unsigned long long)t23_off, (unsigned long long)t23_monitor);
+        printf("H61 PERF t=%llu traps=%llu fast=%u lean=%u pm_flags=%u pm_int=%u pit_pic=%u vga_io=%u io=%u db=%u timer=%u "
                "rm=%u cli_cand=%u hits=%u proved=%u pattern=%u control=%u missed=%u unprovable=%u seeds=%u skipped=%u "
-               "seed_wanted=%u irq0_lost=%llu irq0_reinjected=%llu frames=%u t23_ms=%.1f t23_pit_ms=%.1f t23_flags_ms=%.1f dac=%u armed=%u ret=%u\n",
-               (unsigned long long)(g_ticks - begin), (unsigned long long)traps, gv->perf.lean_exits,
+               "seed_wanted=%u irq0_lost=%llu irq0_reinjected=%llu frames=%u t23_ms=%.1f t23_pit_ms=%.1f t23_flags_ms=%.1f dac=%u armed=%u ret=%u "
+               "t23_vga_ms=%.1f t23_db_ms=%.1f present_frames=%llu present_rows=%llu present_ms=%.1f off_ms=%.1f remaps=%u "
+               "present_wakes=%llu invlpg=%llu trap_ms=%.1f invlpg_ms=%.1f shown_frames=%llu shown_rows=%llu ack_timeouts=%llu\n",
+               (unsigned long long)(g_ticks - begin), (unsigned long long)traps, gv->perf.fast_exits, gv->perf.lean_exits,
                n[DOSVM_COST_PM_FLAGS], n[DOSVM_COST_PM_INT], n[DOSVM_COST_PIT_PIC], n[DOSVM_COST_VGA_IO],
                n[DOSVM_COST_IO], n[DOSVM_COST_DB], n[DOSVM_COST_TIMER],
                n[DOSVM_COST_RM_INT] + n[DOSVM_COST_RM_IRET] + n[DOSVM_COST_RM_FLAGS] + n[DOSVM_COST_RM_PUSHF] +
@@ -1374,7 +1781,13 @@ static void play_progress(uint64_t begin)
                c->seeds, c->seeds_skipped, wanted, (unsigned long long)gv->pit.lost_edges,
                (unsigned long long)gv->pit.reinjected, gv->video_frames, t23_total_ms(),
                t23_charged_ns[DOSVM_COST_PIT_PIC] / 1e6, t23_charged_ns[DOSVM_COST_PM_FLAGS] / 1e6,
-               gv->perf.dac_batched, gv->dpmi.if_armed, gv->perf.return_armed);
+               gv->perf.dac_batched, gv->dpmi.if_armed, gv->perf.return_armed,
+               (t23_charged_ns[DOSVM_COST_VGA_IO] + t23_charged_ns[DOSVM_COST_VGA_PF]) / 1e6,
+               t23_charged_ns[DOSVM_COST_DB] / 1e6, (unsigned long long)present_frames,
+               (unsigned long long)present_rows, present_charged_ns / 1e6, t23_off_total_ns / 1e6,
+               gv->perf.port_remaps, (unsigned long long)present_wakes, (unsigned long long)invlpg_calls,
+               t23_trap_total_ns / 1e6, t23_invlpg_total_ns / 1e6, (unsigned long long)desktop_frames,
+               (unsigned long long)desktop_rows, (unsigned long long)ack_timeouts);
     }
 }
 /* GUEST_PLAY_KEYS="01@12000,1c@20000": a window key (set-1 code, hex) is
@@ -1399,6 +1812,24 @@ static void play_keys(uint64_t elapsed)
         }
         k = *end == ',' ? end + 1 : end;
     }
+}
+/* fx-dosmouse: inject through the focused window API after the game's
+ * actual INT33 handler is installed, and leave time for its thunk to run. */
+static void play_mouse(uint64_t elapsed)
+{
+    static unsigned stage;
+    const char *start=getenv("GUEST_PLAY_MOUSE_AT");
+    uint64_t at=start ? strtoull(start,0,10) : 28000;
+    if (!getenv("GUEST_PLAY_MOUSE") || (!gv->mouse.mask && !getenv("GUEST_PLAY_MOUSE_POLL")) ||
+        elapsed<at+stage*1000 || stage>=4) return;
+    struct ciuki_input_event e={.type=CIUKI_INPUT_MOTION,.value=100,.value2=100};
+    if (stage==1) { e.value=137; e.value2=121; }
+    else if (stage>=2) { e.type=CIUKI_INPUT_BUTTON; e.code=1; e.value=stage==2; }
+    CHECK(dosvm_input_event(dosvm_key(gv),&e));
+    printf("H61 MOUSE stage=%u x=%d y=%d buttons=%u pending=%x callbacks=%llu active=%u pm=%u\n",
+           stage,gv->mouse.x,gv->mouse.y,gv->mouse.buttons,gv->mouse.pending_mask,
+           (unsigned long long)gv->dpmi.stats.callbacks,gv->mouse.active,gv->frame_pm);
+    stage++;
 }
 /* The window picture at the end of a play run: what the DOS window shows
  * (dosvm_frame_capture, the presenter's own rows), its non-black pixel
@@ -1426,22 +1857,65 @@ static void play_frame(void)
     printf("H61 PLAY FRAME e=%d mode=%x %ux%u text=%u nonblack=%u\n", e, frame.mode, frame.width, frame.height,
            frame.text, shot.nonblack);
 }
+/* fx-doswin3 GUEST_PLAY_HOLD="4d@6000-30000,...": a window key held from
+ * the first to the second simulated millisecond of the play run (a player
+ * turning, so every rendered frame differs). Checked once per play step. */
+static void play_holds(uint64_t elapsed)
+{
+    const char *holds = getenv("GUEST_PLAY_HOLD");
+    static uint32_t down, up;
+    unsigned index = 0;
+    for (const char *k = holds; k && *k; index++) {
+        char *end;
+        unsigned code = (unsigned)strtoul(k, &end, 16);
+        CHECK(*end == '@' && index < 32);
+        unsigned long long from = strtoull(end + 1, &end, 10);
+        CHECK(*end == '-');
+        unsigned long long to = strtoull(end + 1, &end, 10);
+        if (!(down & (1u << index)) && elapsed >= from) {
+            CHECK(dosvm_input_focus(dosvm_key(gv), true));
+            window_key(code, 1); down |= 1u << index;
+            printf("H61 PLAY HOLD code=%02x down t=%llu\n", code, (unsigned long long)elapsed);
+        }
+        if ((down & (1u << index)) && !(up & (1u << index)) && elapsed >= to) {
+            window_key(code, 0); up |= 1u << index;
+            printf("H61 PLAY HOLD code=%02x up t=%llu\n", code, (unsigned long long)elapsed);
+        }
+        k = *end == ',' ? end + 1 : end;
+    }
+}
 static int play_run(void)
 {
     const char *limit = getenv("GUEST_PLAY_MS");
     uint64_t total = limit ? strtoull(limit, 0, 10) : 30000, begin = g_ticks;
     int r = 0;
+    if (getenv("GUEST_PLAY_MOUSE")) {
+        /* Capture before the application's reset/handler installation, so
+         * the activation click cannot satisfy its later click assertions. */
+        CHECK(dosvm_input_focus(dosvm_key(gv),true));
+        struct ciuki_input_event capture={.type=CIUKI_INPUT_MOTION,.value=100,.value2=100};
+        CHECK(dosvm_input_event(dosvm_key(gv),&capture));
+        capture=(struct ciuki_input_event){.type=CIUKI_INPUT_BUTTON,.code=1,.value=1};
+        CHECK(dosvm_input_event(dosvm_key(gv),&capture));
+        capture.value=0; CHECK(dosvm_input_event(dosvm_key(gv),&capture));
+    }
     while (g_ticks - begin < total) {
         play_keys(g_ticks - begin);
+        play_mouse(g_ticks - begin);
+        play_holds(g_ticks - begin);
         menu_until = g_ticks + 1000;
         if (menu_until > begin + total) menu_until = begin + total;
         r = run(4000000000ull, menu_elapsed);
         play_progress(begin);
-        if (r == 2 && prompt()) break;      /* the game returned to the shell */
+        if (r == 2 && dosvm_shell_idle(gv) && prompt()) break;
         if (r == -1 || stopped()) break;
         if (r == 0) { printf("H61 PLAY instruction budget exhausted\n"); break; }
         if (r == 2) waiting_input = false; /* a game waiting for a key: keep time running */
     }
+    if (getenv("GUEST_PLAY_MOUSE"))
+        printf("H61 MOUSE END mask=%x pending=%x active=%u callbacks=%llu x=%d y=%d buttons=%u\n",
+               gv->mouse.mask,gv->mouse.pending_mask,gv->mouse.active,(unsigned long long)gv->dpmi.stats.callbacks,
+               gv->mouse.x,gv->mouse.y,gv->mouse.buttons);
     return r;
 }
 static bool menu_wait(uint32_t ms)
@@ -1557,7 +2031,13 @@ int main(int argc, char **argv)
     setvbuf(stdout, 0, _IOLBF, 0);
     guest_perf = getenv("GUEST_PERF") != 0;
     t23_model = guest_perf && getenv("GUEST_T23") != 0;
-    t23_fx27 = t23_model && getenv("GUEST_T23_MODEL") && !strcmp(getenv("GUEST_T23_MODEL"), "fx27");
+    t23_fixed = t23_model && getenv("GUEST_T23_MODEL") && !strcmp(getenv("GUEST_T23_MODEL"), "fixed");
+    t23_fx27 = t23_model && getenv("GUEST_T23_MODEL") && (!strcmp(getenv("GUEST_T23_MODEL"), "fx27") || t23_fixed);
+    t23_doomfs2 = t23_model && getenv("GUEST_T23_MODEL") && !strcmp(getenv("GUEST_T23_MODEL"), "doomfs2");
+    if (getenv("GUEST_T23_XCHG_NS")) t23_xchg_ns = strtod(getenv("GUEST_T23_XCHG_NS"), 0);
+    if (getenv("GUEST_T23_STAMP_NS")) t23_stamp_ns = strtod(getenv("GUEST_T23_STAMP_NS"), 0);
+    if (getenv("GUEST_T23_FAST_NS")) t23_fast_ns = strtod(getenv("GUEST_T23_FAST_NS"), 0);
+    CHECK(t23_stamp_ns >= 0 && t23_stamp_ns <= 2000 && t23_fast_ns >= 0 && t23_fast_ns <= 5000);
     if (guest_perf) {
         /* Host cost of one monitor clock read (a CLOCK_THREAD_CPUTIME_ID
          * system call); the median of five 20000-call batches. */
@@ -1575,6 +2055,44 @@ int main(int argc, char **argv)
         printf("host clock: %.1f ns per monitor clock read (thread CPU clock system call)\n", host_clock_ns);
     }
     t23_fullscreen = t23_model && getenv("GUEST_T23_FULLSCREEN") != 0;
+    isr_ring_on = getenv("GUEST_ISR_RING") != 0;
+    t23_stretch_split = getenv("GUEST_T23_STRETCH_SPLIT") != 0;
+    if (getenv("GUEST_T23_VGA_SCALE")) t23_vga_scale = strtod(getenv("GUEST_T23_VGA_SCALE"), 0);
+    if (getenv("GUEST_T23_PF_SCALE")) t23_pf_scale = strtod(getenv("GUEST_T23_PF_SCALE"), 0);
+    CHECK(t23_vga_scale > 0 && t23_vga_scale <= 10 && t23_pf_scale > 0 && t23_pf_scale <= 10);
+    if (getenv("GUEST_T23_TRAP_NS")) t23_trap_ns = strtod(getenv("GUEST_T23_TRAP_NS"), 0);
+    if (getenv("GUEST_T23_INVLPG_NS")) t23_invlpg_ns = strtod(getenv("GUEST_T23_INVLPG_NS"), 0);
+    CHECK(t23_trap_ns >= 0 && t23_trap_ns <= 100000 && t23_invlpg_ns >= 0 && t23_invlpg_ns <= 100000);
+    const char *present_prices = getenv("GUEST_T23_PRESENT");
+    if (present_prices && t23_model) {
+        double kernel = -1, dosbox = -1, desktop = -1, frame = -1;
+        CHECK(sscanf(present_prices, "%lf,%lf,%lf,%lf", &kernel, &dosbox, &desktop, &frame) == 4 &&
+              kernel >= 0 && dosbox >= 0 && desktop >= 0 && frame >= 0);
+        t23_present = true;
+        if (getenv("GUEST_T23_PRESENT_SHARE")) PRESENT_SHARE = strtod(getenv("GUEST_T23_PRESENT_SHARE"), 0);
+        if (getenv("GUEST_T23_DESKTOP_SHARE")) DESKTOP_SHARE = strtod(getenv("GUEST_T23_DESKTOP_SHARE"), 0);
+        CHECK(PRESENT_SHARE > 0 && PRESENT_SHARE <= 1 && DESKTOP_SHARE > 0 && DESKTOP_SHARE <= 1);
+        const char *delay = getenv("GUEST_T23_PRESENT_DELAY");
+        t23_present_delay = delay ? (unsigned)strtoul(delay, 0, 10) : 0;
+        CHECK(t23_present_delay <= 1000);
+        t23_present_row_ns = kernel + dosbox; t23_desktop_row_ns = desktop;
+        t23_present_frame_ns = frame * 1000.0;
+        t23_ack = getenv("GUEST_T23_ACK") ? (unsigned)strtoul(getenv("GUEST_T23_ACK"), 0, 10) : 0;
+        CHECK(t23_ack <= 2);
+        if (getenv("GUEST_T23_DESKTOP_HZ")) {
+            double hz = strtod(getenv("GUEST_T23_DESKTOP_HZ"), 0);
+            CHECK(hz >= 0 && hz <= 1000);
+            t23_desktop_slot_us = hz > 0 ? 1e6 / hz : 0;
+        }
+        present_surface = calloc((size_t)DOSVM_VIDEO_WIDTH * DOSVM_VIDEO_HEIGHT, 4);
+        CHECK(present_surface);
+        printf("T23 present model: DOS Box %.0f ns per written row, desktop %.0f ns per row and %.0f us per frame, "
+               "%.0f us per wake, dispatch %u ms, shares %.0f/%.0f %%, desktop %.0f Hz, composed ack %s%s\n", t23_present_row_ns, t23_desktop_row_ns, frame,
+               PRESENT_WAKE_US, t23_present_delay, PRESENT_SHARE * 100, DESKTOP_SHARE * 100,
+               t23_desktop_slot_us > 0 ? 1e6 / t23_desktop_slot_us : 0.0,
+               t23_ack == 2 ? "one frame ahead" : t23_ack ? "serial" : "off",
+               t23_fullscreen ? " (full screen: not charged)" : "");
+    }
     if (guest_perf) {
         g_tsc_per_ms = 1000000;
         puts("host perf: CPU=thread nanoseconds, interval ms=instruction-clock; guest includes emulation, paging/IRQ transport are fakes; NOT hardware share/FPS");
@@ -1660,6 +2178,9 @@ int main(int argc, char **argv)
     if (guest_kernel==2 && getenv("GUEST_UNIFIED_UNBOUND")) gv->kernel=0;
 #endif
     CHECK(dosvm_boot(gv) == 0);
+    /* fx-doswin3: the VM's space is current while its worker runs (worker()
+     * loads it), so window PTE swaps invalidate (INVLPG, counted). */
+    cpu_cr3 = gv->as.pd_phys;
     cpu = gv->frame;
     int failures = 0;
     sleep_hook = input_hook;
@@ -1725,7 +2246,7 @@ int main(int argc, char **argv)
         type(command);
         if (play) {
             int pr = play_run();
-            bool returned = pr == 2 && prompt();
+            bool returned = pr == 2 && dosvm_shell_idle(gv) && prompt();
             /* f3-61 GUEST_PLAY_QUIT=1: leave DOOM through its own menu (Esc,
              * Up to Quit Game, Enter, y) as a player does, then require the
              * shell prompt: the EXEC frame completes and the shell is idle. */
@@ -1738,7 +2259,7 @@ int main(int argc, char **argv)
                 }
                 menu_until = g_ticks + 60000;
                 pr = run(4000000000ull, menu_elapsed);
-                returned = pr == 2 && prompt();
+                returned = pr == 2 && dosvm_shell_idle(gv) && prompt();
                 if (pr == 2) { waiting_input = false; run(20000000ull, 0); }
                 printf("H61 QUIT returned=%u exec_pending=%u overflow=%u shell_idle=%u dpmi=%u clients=%u\n", returned,
                        gv->exec_pending, gv->exec_overflow, dosvm_shell_idle(gv), gv->dpmi.active, gv->dpmi.clients);
@@ -1866,6 +2387,14 @@ int main(int argc, char **argv)
     printf("debug traps: rm=%llu flags=%llu returns=%llu other=%llu\n",
            (unsigned long long)db_rm, (unsigned long long)db_flags,
            (unsigned long long)db_return, (unsigned long long)db_other);
+    /* fx-doomwin: host code time per exit (clock reads removed) of the lean
+     * and trap-entry paths, by cause, for the fixed model's fast price. */
+    for (unsigned c = 0; c < DOSVM_COST_COUNT; c++) if (t23x_lean_exits[c] || t23x_fast_exits[c])
+        printf("H61 T23X cause=%u lean=%llu lean_ns=%.1f fast=%llu fast_ns=%.1f\n", c,
+               (unsigned long long)t23x_lean_exits[c],
+               t23x_lean_exits[c] ? (double)t23x_lean_ns[c] / (double)t23x_lean_exits[c] : 0.0,
+               (unsigned long long)t23x_fast_exits[c],
+               t23x_fast_exits[c] ? (double)t23x_fast_ns[c] / (double)t23x_fast_exits[c] : 0.0);
     printf("debug trap owners:");
     for (unsigned i = 0; i < 16 && db_owners[i].owner; i++)
         printf(" %s=%llu", db_owners[i].owner, (unsigned long long)db_owners[i].count);

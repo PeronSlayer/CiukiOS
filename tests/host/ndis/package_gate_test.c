@@ -1,3 +1,5 @@
+#include <ciuki/desktop.h>
+#include <ciuki/kheap_limits.h>
 /* Real package admission with synthetic VFS/PCI/qualification services.
  * SPDX-License-Identifier: GPL-2.0-only */
 #include <assert.h>
@@ -17,11 +19,16 @@ static struct pci_func pci={.bus=0,.dev=3,.fn=0,.vendor=0x1234,.device=0x5678,.s
 static struct netif native;
 static uint8_t approved_hash[32],approved_seal[32];
 static int qualified,native_owned,fail_read,extra_manifest,allocations,tables,opens,tamper_file,tamper_registry;
+static int allocation_fail_after=-1;
 static const unsigned char binary[]="synthetic native binary",inf[]="synthetic INF";
 struct handle { int live,file; size_t at; };
 static struct handle handles[8];
-void *kmalloc(size_t n) { void *p=malloc(n); if(p) allocations++; return p; }
+void *(kmalloc)(size_t n) { if (n > KHEAP_MAX_REQUEST) return 0; void *p=malloc(n); if(p) allocations++; return p; }
 void kfree(void *p) { assert(p && allocations); allocations--; free(p); }
+void *desktop_buffer_alloc(uint32_t bytes,enum mm_owner owner)
+{ assert(bytes && owner==MM_IO_REQUEST); if (!allocation_fail_after) return 0; if (allocation_fail_after>0) allocation_fail_after--; void *p=calloc(1,bytes); if (p) allocations++; return p; }
+void desktop_buffer_free(void *p,uint32_t bytes,enum mm_owner owner)
+{ assert(bytes && owner==MM_IO_REQUEST); kfree(p); }
 struct storage *storage_get(void) { return &storage; }
 unsigned pci_count(void) { return 1; }
 const struct pci_func *pci_get(unsigned i) { return i?NULL:&pci; }
@@ -78,6 +85,9 @@ int main(void)
     manifest.parameters[0].type=NDP_STRING; manifest.parameters[0].bytes=4; memcpy(manifest.parameters[0].data,"one",4);
     ndp_seal(&manifest); memcpy(approved_hash,manifest.files[0].hash,32); memcpy(approved_seal,manifest.seal,32);
     assert(!admit(NULL,NULL)); qualified=1; assert(admit(NULL,NULL)); assert(admit(&pci,approved_seal));
+    allocation_fail_after=0; assert(!admit(NULL,NULL));
+    allocation_fail_after=1; assert(!admit(NULL,NULL));
+    allocation_fail_after=-1; assert(admit(NULL,NULL));
     profile_enabled=0; assert(!admit(NULL,NULL) && !admit(&pci,approved_seal)); profile_enabled=1;
     profile_driver="Other"; assert(!admit(NULL,NULL) && !admit(&pci,approved_seal));
     profile_driver="Synthetic"; assert(admit(NULL,NULL) && admit(&pci,approved_seal)); profile_driver=NULL;

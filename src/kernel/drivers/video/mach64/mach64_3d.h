@@ -6,6 +6,7 @@
 #include "../render3d.h"
 #include "engine.h"
 struct vfs;
+#define MACH64_3D_FEATURES (R3D_FEATURES | R3D_TEXTURE1)
 #define MACH64_3D_TEXTURE_MIN (256u * 1024u)
 /* Q2 scratch: one 256-square and one 128-square level plus their guards. */
 #define MACH64_3D_FULL_TEXTURES (256u * 256u * 4u + 128u * 128u * 4u + 4u * 4096u)

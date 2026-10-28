@@ -15,6 +15,7 @@
 #pragma clang diagnostic push
 #pragma clang diagnostic ignored "-Wmacro-redefined"
 #include "host.h"
+#include <w32/user32.h>
 #include <ciuki/w32_diagnostics.h>
 #include "../../../../sdk/win32/services/files.h"
 #pragma clang diagnostic pop
@@ -42,7 +43,9 @@ BOOL W32API CreateDirectoryA(const char *w,SECURITY_ATTRIBUTES *sa){(void)sa;cha
 BOOL W32API RemoveDirectoryA(const char *w){char p[1400];return path(w,p) && (!rmdir(p) || fail());}
 BOOL W32API DeleteFileA(const char *w){char p[1400];return path(w,p) && (!unlink(p) || fail());}
 BOOL W32API MoveFileA(const char *a,const char *b){char p[1400],q[1400];return path(a,p) && path(b,q) && (!rename(p,q) || fail());}
-DWORD W32API GetFileAttributesA(const char *w){char p[1400];struct stat st;if(!path(w,p) || stat(p,&st)){fail();return ~0u;}return S_ISDIR(st.st_mode)?16:128;}
+DWORD W32API GetFileAttributesA(const char *w){char p[1400];struct stat st;if(!path(w,p) || stat(p,&st)){fail();return ~0u;}
+  /* A host mode without owner write is FILE_ATTRIBUTE_READONLY (fx-exeicons: desktop.ini folders). */
+  DWORD ro=st.st_mode&0200?0:1;return S_ISDIR(st.st_mode)?16|ro:ro?ro:128;}
 DWORD W32API GetFullPathNameA(const char *w,DWORD cap,char *p,char **part){
   char source[260],out[260];unsigned ends[130],depth=0,n=3;
   if(strlen(w)>=sizeof(source) || w[1]!=':'){error=123;return 0;}
@@ -119,6 +122,40 @@ BOOL W32API CreateProcessA(const char *exe,char *command,SECURITY_ATTRIBUTES *ps
   host_spawned++;*p=(struct shell_process){(HANDLE)(uintptr_t)(0x100000+host_spawned*2),(HANDLE)(uintptr_t)(0x100001+host_spawned*2),100,101};return 1;
 }
 void w32_diag(const char *a,const char *b,const char *c){(void)a;(void)b;(void)c;}
+/* fx-q3vise: USER for the shell's folder windows. Windows are recorded with
+ * their class, title and style; CiukiShellOpenFolder records the Files path
+ * the desktop would open, or fails as a refusing desktop does. */
+struct host_window host_windows[16];
+unsigned host_window_count,host_folder_launches,host_folder_refuse;
+char host_folder_launch[16][260];
+static char host_classes[4][64];
+ATOM W32API RegisterClassA(const WNDCLASSA *c){
+  assert(c && c->lpfnWndProc && c->lpszClassName && strlen(c->lpszClassName)<64);
+  for(unsigned i=0;i<4;i++)if(!strcmp(host_classes[i],c->lpszClassName)){error=1410;return 0;}
+  for(unsigned i=0;i<4;i++)if(!host_classes[i][0]){strcpy(host_classes[i],c->lpszClassName);return (ATOM)(0xc000+i);}
+  error=8;return 0;
+}
+HWND W32API CreateWindowExA(DWORD ex,const char *klass,const char *title,DWORD style,int x,int y,int w,int h,HWND parent,HANDLE menu,HINSTANCE instance,void *param){
+  (void)ex;(void)x;(void)y;(void)w;(void)h;(void)menu;(void)instance;(void)param;
+  unsigned known=0;for(unsigned i=0;i<4;i++)known|=!strcmp(host_classes[i],klass);
+  if(!known || parent || host_window_count==16){error=known?8:1407;return 0;}
+  struct host_window *n=&host_windows[host_window_count];
+  snprintf(n->klass,sizeof(n->klass),"%s",klass);snprintf(n->title,sizeof(n->title),"%s",title?title:"");
+  n->style=style;n->live=1;return (HWND)(uintptr_t)(0x100+4*host_window_count++);
+}
+static struct host_window *host_window(HWND h){
+  uintptr_t v=(uintptr_t)h;if(v<0x100 || (v-0x100)%4 || (v-0x100)/4>=host_window_count)return 0;
+  struct host_window *w=&host_windows[(v-0x100)/4];return w->live?w:0;
+}
+BOOL W32API IsWindow(HWND h){return host_window(h)!=0;}
+BOOL W32API DestroyWindow(HWND h){struct host_window *w=host_window(h);if(!w){error=1400;return 0;}w->live=0;return 1;}
+LRESULT W32API DefWindowProcA(HWND h,UINT m,WPARAM wp,LPARAM lp){(void)h;(void)m;(void)wp;(void)lp;return 0;}
+BOOL W32API CiukiShellOpenFolder(HWND h,const char *path){
+  if(!host_window(h)){error=1400;return 0;}
+  if(host_folder_refuse){error=5;return 0;}
+  assert(host_folder_launches<16 && path && strlen(path)<260);
+  strcpy(host_folder_launch[host_folder_launches++],path);return 1;
+}
 HANDLE W32API GetModuleHandleA(const char *name){(void)name;return 0;}
 void *W32API GetProcAddress(HANDLE h,const char *name){(void)h;(void)name;return 0;}
 void w32_report_refusal(uint32_t why,const char *name,uint32_t code){(void)name;assert(why==W32_REFUSE_MSI && code==120);host_refusals++;}
@@ -140,8 +177,19 @@ void host_init(const char *root){
 void host_finish(void){if(registry_live){assert(!wr_flush(&registry));wr_destroy(&registry);registry_live=0;}}
 void host_put(const char *w,const char *s){char p[1400];assert(path(w,p));FILE *f=fopen(p,"wb");assert(f);assert(fwrite(s,1,strlen(s),f)==strlen(s));assert(!fclose(f));}
 
+/* sec-user-05: a profile session's DOS-spelled USERPROFILE (Win32 startup
+ * converts the kernel-generated native value); none without a profile. */
+static char host_userprofile[200];
+DWORD W32API GetEnvironmentVariableA(const char *name,char *out,DWORD cap)
+{
+  if(strcmp(name,"USERPROFILE") || !host_userprofile[0]){error=203;return 0;}
+  DWORD n=(DWORD)strlen(host_userprofile);if(cap<=n)return n+1;
+  memcpy(out,host_userprofile,n+1);return n;
+}
 void host_profile(const char *name,const char *root)
 {
+  snprintf(host_userprofile,sizeof(host_userprofile),"%s%s",*root?"C:":"",root);
+  for(char *c=host_userprofile;*c;c++)if(*c=='/')*c='\\';
   char p[1400];snprintf(p,sizeof(p),"%s%s",hive_directory,root);
   for(char *c=p+1;;c++)if(!*c || *c=='/'){
     char end=*c;*c=0;assert(!mkdir(p,0700) || errno==EEXIST);*c=end;if(!end)break;

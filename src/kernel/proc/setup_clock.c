@@ -1,6 +1,8 @@
 /* Setup's checked UTC clock/RTC update and boot convention reader.
  * SPDX-License-Identifier: GPL-2.0-only */
 #include <ciuki/kernel.h>
+#include <ciuki/security_device.h>
+#include <ciuki/desktop.h>
 #include <ciuki/clock.h>
 #include <ciuki/setup_mode.h>
 #include <ciuki/storage.h>
@@ -9,7 +11,7 @@ extern bool fs_rtc_store(uint16_t,uint16_t,uint8_t) __attribute__((weak));
 static bool leap_year(unsigned y) { return !(y%4) && (y%100 || !(y%400)); }
 int file_setup_clock(struct process *p,const struct ciuki_setup_clock *q)
 {
-    if (!p || !p->setup_capability || !setup_mode()) return -EPERM;
+    if (!security_device_setup(p) || !setup_mode()) return -EPERM;
     if (!q || q->version!=CIUKI_SETUP_FAT_VERSION || q->size!=sizeof(*q) || q->rtc_local>1 ||
         q->offset_minutes < -720 || q->offset_minutes>840 || q->seconds<0 || q->seconds>3471292799LL) return -EINVAL;
     int64_t rtc=q->seconds+(q->rtc_local ? q->offset_minutes*60 : 0);
@@ -37,9 +39,9 @@ static int clock_table(struct vfs_table **out)
 {
     struct storage *s=storage_get();
     if (!s || !s->vfs.volumes[2]) return -ENODEV;
-    struct vfs_table *t=kzalloc(sizeof(*t));
+    struct vfs_table *t=desktop_buffer_alloc(sizeof(*t),MM_IO_REQUEST);
     if (!t) return -ENOMEM;
-    if (vfs_table_init(&s->vfs,t,2)) { kfree(t); return -EIO; }
+    if (vfs_table_init(&s->vfs,t,2)) { desktop_buffer_free(t,sizeof(*t),MM_IO_REQUEST); return -EIO; }
     *out=t; return 0;
 }
 int timezone_store_read(char *text,size_t capacity,size_t *length)
@@ -52,7 +54,7 @@ int timezone_store_read(char *text,size_t capacity,size_t *length)
         if (!e && n==capacity) e=-E2BIG;
         if (!e) *length=n; else e=-EIO;
     }
-    vfs_table_destroy(t); kfree(t); return e;
+    vfs_table_destroy(t); desktop_buffer_free(t,sizeof(*t),MM_IO_REQUEST); return e;
 }
 int timezone_store_write(const char *text,size_t length)
 {
@@ -70,5 +72,5 @@ int timezone_store_write(const char *text,size_t length)
             e=e || closed ? -EIO : 0;
         }
     }
-    vfs_table_destroy(t); kfree(t); return e;
+    vfs_table_destroy(t); desktop_buffer_free(t,sizeof(*t),MM_IO_REQUEST); return e;
 }

@@ -40,6 +40,15 @@ int fb_begin(struct firstboot *f,const struct fb_host *h)
     }
     free(text);
     if(!installed || !pending)return 0;
+    /* sec-user-02: a Standard or Guest session leaves the install record
+     * pending for the first administrator logon (it cannot write it anyway). */
+    if(h->administrator){
+        int admin=h->administrator(h->ctx);
+        if(admin<=0){
+            if(h->record)h->record(h->ctx,admin<0?"[firstboot] credential=unreadable result=deferred":"[firstboot] credential=standard result=deferred");
+            return 0;
+        }
+    }
     f->active=1;
     for(unsigned i=0;i<FB_STEPS;i++)if(f->result[i])snprintf(f->detail[i],sizeof(f->detail[i]),"Recorded on a previous run.");
     while(f->step<FB_STEPS && f->result[f->step])f->step++;

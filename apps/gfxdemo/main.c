@@ -27,7 +27,20 @@ struct runtime {
     unsigned benchmark_seconds,benchmark_page;
     int benchmark_started,benchmark_done,benchmark_error;
     struct gfx_fps fps;
+    /* f7-14 full screen: the granted lease, the packed render target and
+     * the next 60 Hz slot (uncapped in a full-screen benchmark). */
+    struct ciuki_gl_lease lease;
+    uint32_t *full_pixels;
+    uint64_t next_full_ns;
+    int full_uncapped;
+    /* Requested and not released: a lease the desktop reactivates when the
+     * window regains focus (after Alt+Tab) is taken again. */
+    int full_wanted;
+    uint64_t benchmark_software_frames;
 };
+/* Command-line choices beyond the original arguments() signature. */
+static unsigned cli_backend=CIUKI_GL_BACKEND_AUTO;
+static int cli_fullscreen;
 static int arguments(int argc,char **argv,int *channel,int *test,unsigned *seconds,unsigned *page)
 {
     char *filtered[16];int count=1;filtered[0]=argv[0];*seconds=0;*page=1;
@@ -38,6 +51,14 @@ static int arguments(int argc,char **argv,int *channel,int *test,unsigned *secon
             char *end;long n=strtol(argv[i],&end,10);
             if (!argv[i][0] || *end || n<1 || n>60) return 2;
             *seconds=(unsigned)n;
+        } else if (!strcmp(argv[i],"--backend")) {
+            if (++i>=argc) return 2;
+            if (!strcmp(argv[i],"auto")) cli_backend=CIUKI_GL_BACKEND_AUTO;
+            else if (!strcmp(argv[i],"hardware")) cli_backend=CIUKI_GL_BACKEND_HARDWARE;
+            else if (!strcmp(argv[i],"software")) cli_backend=CIUKI_GL_BACKEND_SOFTWARE;
+            else return 2;
+        } else if (!strcmp(argv[i],"--fullscreen")) {
+            cli_fullscreen=1;
         } else if (!strcmp(argv[i],"--scene")) {
             if (have_scene || ++i>=argc) return 2;
             if (!strcmp(argv[i],"cube")) *page=1;
@@ -56,23 +77,133 @@ static int arguments(int argc,char **argv,int *channel,int *test,unsigned *secon
 static void benchmark_tick(struct runtime *r,uint64_t now)
 {
     if (!r->benchmark_seconds || r->benchmark_done) return;
+    /* A full-screen run needs the lease for its whole measurement. */
+    if (cli_fullscreen==2 && r->app.full_state==GFX_WINDOWED) {
+        printf("[gfxdemo] benchmark seconds=%u status=%s result=%d\n",r->benchmark_seconds,
+            r->benchmark_started ? "fullscreen_ended" : "fullscreen_refused",r->app.full_error);
+        fflush(stdout);r->benchmark_done=1;r->benchmark_error=1;return;
+    }
     if (!r->benchmark_started) {
+        /* A full-screen run measures from its first leased frame. */
+        if (cli_fullscreen && r->app.full_state!=GFX_FULL_ACTIVE) return;
         gfx_fps_start(&r->fps,now,r->benchmark_seconds);r->benchmark_started=1;
+        gfx_gl_status(&r->app);r->benchmark_software_frames=r->app.gl.software_frames;
     }
     if (now<r->fps.end) return;
     uint64_t elapsed=r->fps.end-r->fps.begin;
     uint64_t fps100=r->fps.frames*100000000000ull/elapsed;
     uint64_t p95=gfx_fps_p95(&r->fps);
-    printf("[gfxdemo] benchmark seconds=%u scene=%s source=%ux%u frames=%llu average_fps=%llu.%02llu frame_us=%llu p95_us=%llu status=%s\n",
-        r->benchmark_seconds,r->app.page==1 ? "cube" : "tiles",r->app.scene.width,r->app.scene.height,
+    gfx_gl_status(&r->app);
+    /* A required hardware backend must stay selected for every measured
+     * frame (contract T2); a CPU frame fails that run. */
+    uint64_t cpu=r->app.gl.software_frames-r->benchmark_software_frames;
+    int hardware_lost=r->app.backend==CIUKI_GL_BACKEND_HARDWARE && (cpu || r->app.gl.backend!=CIUKI_GL_BACKEND_HARDWARE);
+    int full=r->app.full_state==GFX_FULL_ACTIVE;
+    printf("[gfxdemo] benchmark seconds=%u scene=%s source=%ux%u frames=%llu average_fps=%llu.%02llu frame_us=%llu p95_us=%llu status=%s "
+        "backend=%s policy=%s gpu_frames=%llu cpu_frames=%llu refusals=%llu fallbacks=%llu present=%s pacing=%s\n",
+        r->benchmark_seconds,r->app.page==1 ? "cube" : "tiles",full ? r->lease.width : r->app.scene.width,full ? r->lease.height : r->app.scene.height,
         (unsigned long long)r->fps.frames,(unsigned long long)(fps100/100),(unsigned long long)(fps100%100),
         (unsigned long long)(r->fps.frames ? elapsed/r->fps.frames/1000 : 0),
-        (unsigned long long)(p95/1000),r->fps.overflow ? "overflow" : r->fps.frames ? "ok" : "no_frames");
-    fflush(stdout);r->benchmark_done=1;r->benchmark_error=r->fps.overflow || !r->fps.frames;
+        (unsigned long long)(p95/1000),r->fps.overflow ? "overflow" : !r->fps.frames ? "no_frames" : hardware_lost ? "not_hardware" : "ok",
+        r->app.gl.backend==CIUKI_GL_BACKEND_HARDWARE ? "hardware" : "software",gfx_backend_name(r->app.backend),
+        (unsigned long long)r->app.gl.hardware_frames,(unsigned long long)r->app.gl.software_frames,
+        (unsigned long long)r->app.gl.refusals,(unsigned long long)r->app.gl.fallbacks,gfx_present_name(&r->app),
+        full && r->full_uncapped ? "uncapped" : "60hz-slots");
+    fflush(stdout);r->benchmark_done=1;r->benchmark_error=r->fps.overflow || !r->fps.frames || hardware_lost;
+}
+/* DESK_LEASE: request (1) the common present lease for the focused window,
+ * or release (0) it. Native resolution asks for the desktop's display size;
+ * otherwise 320 x 240, which the kernel scales to the chosen mode. */
+static int lease_request(struct runtime *r,unsigned on)
+{
+    struct ciuki_message m; desk_message(&m,DESK_LEASE,20);
+    desk_put32(m.data+4,on);
+    r->full_wanted=on!=0;
+    if (on) {
+        unsigned w=GFX_W,h=GFX_H;
+        if (r->app.native_resolution) {
+            w=r->app.have_info && r->app.display_w ? r->app.display_w : 640;
+            h=r->app.have_info && r->app.display_h ? r->app.display_h : 480;
+            if (w>GFX_FULL_MAX_W || h>GFX_FULL_MAX_H) { w=640;h=480; }
+        }
+        desk_put32(m.data+8,w); desk_put32(m.data+12,h); desk_put32(m.data+16,32);
+    }
+    return du_window_queue(&r->window,&m) ? -EIO : 0;
+}
+static void full_leave(struct runtime *r,int error)
+{
+    free(r->full_pixels); r->full_pixels=NULL;
+    r->app.scene.target=NULL; r->app.scene.lease=NULL;
+    r->lease=(struct ciuki_gl_lease){0};
+    r->app.full_state=GFX_WINDOWED; r->app.full_error=error;
+    r->app.full_width=r->app.full_height=0;
+    /* The desktop repaints its composition; this window republishes its
+     * whole surface and its windowed scene on the next turn. */
+    r->ui.dirty=1; r->app.scene_ready=0; r->app.animation_due=1;
+    r->app.frames=0; r->app.sample_begin=0;
+}
+static void lease_event(struct runtime *r,const struct desk_packet *p)
+{
+    if (p->flags==1 && (r->app.full_state!=GFX_WINDOWED || r->full_wanted)) {
+        const struct desk_lease_tuple *t=&p->lease;
+        if (t->surface.format!=CIUKI_PRESENT_XRGB8888 || t->surface.width>GFX_FULL_MAX_W || t->surface.height>GFX_FULL_MAX_H) {
+            (void)lease_request(r,0); full_leave(r,-EOPNOTSUPP); return;
+        }
+        free(r->full_pixels);
+        r->full_pixels=calloc((size_t)t->surface.width*t->surface.height,4);
+        if (!r->full_pixels) { (void)lease_request(r,0); full_leave(r,-ENOMEM); return; }
+        r->lease=(struct ciuki_gl_lease){t->token,t->generation,t->surface.width,t->surface.height,32,t->surface.pitch};
+        r->app.full_state=GFX_FULL_ACTIVE; r->app.full_error=0;
+        r->app.full_width=t->surface.width; r->app.full_height=t->surface.height;
+        r->next_full_ns=du_now(); r->app.frames=0; r->app.sample_begin=0;
+        printf("[gfxdemo] fullscreen=granted source=%ux%u native=%ux%ux%u scale=%u\n",t->surface.width,t->surface.height,
+            t->native_width,t->native_height,t->native_bpp,t->scale);
+        fflush(stdout);
+    } else if (p->flags==0 || p->flags==3) {
+        if (p->flags==0) r->full_wanted=0;
+        if (r->app.full_state==GFX_WINDOWED) return;
+        printf("[gfxdemo] fullscreen=%s result=%d\n",p->flags==3 ? "ended" : "refused",p->result);
+        fflush(stdout);
+        full_leave(r,p->flags==0 ? (p->result ? p->result : -EBUSY) : 0);
+    }
+}
+/* One full-screen frame: render into the leased target and present it
+ * (GPU copy on a qualified provider, CPU copy otherwise). */
+static void full_frame(struct runtime *r,uint64_t now)
+{
+    struct gfx_app *a=&r->app; struct gfx_scene *s=&a->scene;
+    unsigned w=s->width,h=s->height;
+    s->target=r->full_pixels; s->lease=&r->lease; s->width=r->lease.width; s->height=r->lease.height;
+    uint64_t begin=du_now();
+    if (a->page==2) gfx_sprites(s,a->elapsed_ns,a->portrait);
+    else gfx_cube(s,a->elapsed_ns,a->portrait,a->gouraud);
+    a->render_ns=du_now()-begin;
+    gfx_gl_status(a);
+    int presented=s->presented,error=s->error;
+    s->target=NULL; s->lease=NULL; s->width=w; s->height=h;
+    if (error) {
+        /* The windowed path reports the retained scene error and exits. */
+        printf("[gfxdemo] fullscreen=render-failed result=%d\n",error); fflush(stdout);
+        (void)lease_request(r,0); full_leave(r,-EIO);
+        return;
+    }
+    if (presented>=0) {
+        uint64_t done=du_now();
+        gfx_presented(a,done);
+        if (r->benchmark_started) gfx_fps_frame(&r->fps,done);
+    } else if (presented!=-EBUSY && presented!=-EAGAIN) {
+        /* Revoked or refused by the kernel: give the display back. */
+        printf("[gfxdemo] fullscreen=present-failed result=%d\n",presented); fflush(stdout);
+        (void)lease_request(r,0); full_leave(r,presented);
+        return;
+    }
+    if (!r->full_uncapped)
+        r->next_full_ns+=((now-r->next_full_ns)/GFX_FRAME_NS+1)*GFX_FRAME_NS;
 }
 static int request(void *ctx,unsigned op,unsigned index)
 {
     struct runtime *r=ctx; struct ciuki_message m;
+    if (op==DESK_LEASE) return lease_request(r,index);
     desk_message(&m,op,(op==DESK_GFX_BENCH || op==DESK_GFX_QUERY_ENGINE) ? 12 : 8);
     uint32_t serial=++r->serial; desk_put32(m.data+4,serial);
     if (op==DESK_GFX_BENCH) desk_put32(m.data+8,index);
@@ -111,6 +242,8 @@ static void message(struct du_window *w,const struct desk_packet *p,void *ctx)
         gfx_receive(&r->app,p);
     else if ((p->opcode==DESK_SYSTEM_INFO || (p->opcode==DESK_TASK_RESULT && p->request==DESK_SYSTEM_QUERY)) && p->serial==r->system_serial)
         gfx_receive(&r->app,p);
+    else if (p->opcode==DESK_LEASE_EVENT)
+        lease_event(r,p);
 }
 static void idle(void *ctx)
 {
@@ -123,6 +256,16 @@ static void idle(void *ctx)
     benchmark_tick(r,now);
     if (r->benchmark_done) return;
     gfx_advance(&r->app,now);
+    if (r->app.full_state==GFX_FULL_ACTIVE) {
+        /* The desktop's composition is suspended under the lease. */
+        if (!r->app.paused && (r->full_uncapped || now>=r->next_full_ns)) full_frame(r,now);
+    } else if (cli_fullscreen==1 && r->app.page && r->app.have_info && r->window.configured) {
+        cli_fullscreen=2;
+        r->app.full_error=lease_request(r,1);
+        if (!r->app.full_error) r->app.full_state=GFX_FULL_REQUESTED;
+    }
+    /* Windowed frames continue until the desktop grants the lease. */
+    if (r->app.full_state==GFX_FULL_ACTIVE) goto queries;
     /* Rendering touches only the private scene. Toolkit repaint/replacement
      * stays completion-gated; it supersedes any prepared successor. */
     if (r->app.page && !r->app.paused && !r->ui.dirty && !r->window.swap_sent &&
@@ -138,7 +281,7 @@ static void idle(void *ctx)
         fprintf(stderr,"gfxdemo: TinyGL render error %d\n",r->app.scene.error);
         r->window.error=EIO;r->window.closed=1;return;
     }
-    if (r->benchmark_seconds && r->app.scene_ready &&
+    if (r->benchmark_seconds && !cli_fullscreen && r->app.scene_ready &&
         (r->app.scene.width!=640 || r->app.scene.height!=480)) {
         fprintf(stderr,"gfxdemo: benchmark requires a 640x480 scene (client at least 672x644)\n");
         r->benchmark_error=1;r->benchmark_done=1;return;
@@ -190,6 +333,7 @@ static void idle(void *ctx)
             } else a->scene_ready=0;
         }
     }
+queries:
     if (now>=r->next_info) {
         request(r,DESK_GFX_QUERY_ENGINE,0); request(r,DESK_SYSTEM_QUERY,0); r->next_info=now+1000000000ull;
     }
@@ -223,7 +367,11 @@ int main(int argc,char **argv)
     r->app.page=page;du_get(&r->ui,GFX_TABS)->active=page;
     du_get(&r->ui,GFX_RUN)->hidden=1;du_get(&r->ui,GFX_SHADE)->hidden=page!=1;
     r->benchmark_seconds=seconds;r->benchmark_page=page;
-    printf("[gfxdemo] renderer=TinyGL authors=Fabrice_Bellard,Gek_DMHSW,C-Chads\n");fflush(stdout);
+    printf("[gfxdemo] renderer=TinyGL authors=Fabrice_Bellard,Gek_DMHSW,C-Chads engine=ciuki-gl policy=%s fullscreen=%d\n",
+        gfx_backend_name(cli_backend),cli_fullscreen);fflush(stdout);
+    gfx_set_backend(&r->app,cli_backend);
+    if (r->app.backend_error) { printf("[gfxdemo] backend=%s result=%d (software rendering)\n",gfx_backend_name(cli_backend),r->app.backend_error);fflush(stdout); }
+    r->full_uncapped=seconds && cli_fullscreen;
     r->app.time_ns=du_now;
     r->app.request=request;r->app.request_ctx=r;
     r->window.message=message;r->window.user=r;
@@ -235,11 +383,16 @@ int main(int argc,char **argv)
         idle(r);
         if (r->benchmark_done || r->window.closed) break;
         uint64_t next=du_next_deadline(&r->ui);
+        if (r->app.full_state==GFX_FULL_ACTIVE && !r->app.paused) {
+            if (r->full_uncapped) next=0;
+            else if (r->next_full_ns<next) next=r->next_full_ns;
+        }
         if (r->app.page && !r->app.paused && !r->window.present_pending && r->app.next_ns<next) next=r->app.next_ns;
         if (r->benchmark_started && r->fps.end<next) next=r->fps.end;
         if (du_window_wait(&r->window,next)) { result=-1;break; }
     }
     int failed=result<0 || r->window.error || r->benchmark_error ||
         (r->benchmark_seconds && !r->benchmark_done);
-    du_window_destroy(&r->window);ciuki_gl_close();free(r->portrait);free(r);return failed ? 1 : 0;
+    if (r->app.full_state!=GFX_WINDOWED) { (void)lease_request(r,0); (void)du_window_turn(&r->window,du_now()); }
+    du_window_destroy(&r->window);ciuki_gl_close();free(r->full_pixels);free(r->portrait);free(r);return failed ? 1 : 0;
 }

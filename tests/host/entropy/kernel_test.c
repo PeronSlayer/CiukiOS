@@ -1,5 +1,6 @@
 /* Production boot/guard/IRQ adapters and syscall with hardware/user shims.
  * SPDX-License-Identifier: GPL-2.0-only */
+#include <ciuki/kheap_limits.h>
 #include <ciuki/kernel.h>
 #include <ciuki/process.h>
 #include <ciuki/entropy.h>
@@ -44,7 +45,7 @@ static uint64_t read_tsc_unserialized(void) { return irq_counter_stopped ? fake_
 static uint8_t inb(uint16_t port) { CHECK(port==0x61);return pit_stalled || pit_reads++<2 ? speaker&~0x20u : speaker|0x20u; }
 static void outb(uint16_t port,uint8_t value) { if(port==0x61)speaker=value;else CHECK(port==0x42 || port==0x43); }
 uint64_t ktime_cycles(void) { return read_tsc_serialized(); }
-void *kmalloc(size_t n) { CHECK(n<=2040);return malloc(n); }
+void *(kmalloc)(size_t n) { if (n > KHEAP_MAX_REQUEST) return 0; return malloc(n); }
 void kfree(void *p) { free(p); }
 volatile uint64_t g_ticks;
 bool g_cpu_tsc=true;

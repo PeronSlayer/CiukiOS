@@ -13,7 +13,7 @@ class PrintingTests(unittest.TestCase):
         with tempfile.TemporaryDirectory(prefix="printing-", dir=parent) as scratch:
             sources = ["tests/host/desktop/printers_test.c" if ui else "tests/host/printing_test.c", "apps/libprint/print.c"]
             if ui:
-                sources += ["apps/libdeskui/" + s + ".c" for s in ("draw", "widgets", "list", "menu", "dialog", "textarea", "icons", "icon_map")]
+                sources += ["apps/libdeskui/" + s + ".c" for s in ("draw", "widgets", "list", "menu", "dialog", "textarea", "icons", "icon_map", "iconx", "fileicon")]
                 sources += ["apps/desktop/compositor.c", "apps/desktop/theme.c"]
             else:
                 sources += ["apps/libprint/render.c"]

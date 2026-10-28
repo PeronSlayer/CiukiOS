@@ -10,6 +10,7 @@
  * which only the "Ready to install" page reaches. */
 #include "setup.h"
 #include "../hwreport/textframe.h"
+#include "../accounts/adapter.h"   /* sec-user-02: struct acct_io of the repair target */
 #include <errno.h>
 #include <inttypes.h>
 #include <stdarg.h>
@@ -19,8 +20,8 @@
 #include <time.h>
 
 static const char *const page_names[ST_PAGES] = {
-    "welcome", "licence", "hardware", "disk", "components", "user", "network", "summary", "copy", "restart",
-    "stop", "failed", "status", "rescue", "text"
+    "welcome", "licence", "hardware", "disk", "components", "user", "account", "network", "summary", "copy", "restart",
+    "stop", "failed", "status", "rescue", "text", "repair"
 };
 const char *st_page_name(enum st_page p) { return (unsigned)p < ST_PAGES ? page_names[p] : "unknown"; }
 
@@ -227,8 +228,17 @@ int st_init(struct st_app *a, struct du_ui *u, const struct st_host *h)
     return 0;
 }
 
+/* sec-user-02: secrets and the seed never outlive their use (contract 5.1). */
+void st_accounts_clear(struct st_app *a)
+{
+    st_secret_wipe(&a->acct, sizeof(a->acct));
+    a->answers.account_seed = NULL; a->answers.account_seed_length = 0;
+    a->plan.answers.account_seed = NULL; a->plan.answers.account_seed_length = 0;
+}
+
 void st_free(struct st_app *a)
 {
+    st_accounts_clear(a);
     if (a->text_ready) du_ta_free(&a->text);
     free(a->file); a->file = NULL; a->text_ready = 0;
     free(a->link_text); a->link_text = NULL; a->link_length = 0;
@@ -239,6 +249,10 @@ void st_goto(struct st_app *a, enum st_page p)
     if (a->page != p || !a->ui->count) st_log(a, "page %s -> %s", st_page_name(a->page), st_page_name(p));
     a->page = p;
     if (p < ST_PAGE_SUMMARY) a->plan_ok = 0;
+    /* Entering the Passwords page (forward or Back) starts from empty fields:
+     * earlier secrets and the seed built from them are wiped. */
+    if (p <= ST_PAGE_ACCOUNT && !a->executing) st_accounts_clear(a);
+    if (p == ST_PAGE_REPAIR || p == ST_PAGE_RESCUE) st_secret_wipe(a->acct.secret, sizeof(a->acct.secret));
     if (p == ST_PAGE_RESTART) {
         a->restart_state = 0;
         a->countdown_deadline = now_ns(a) + (uint64_t)ST_COUNTDOWN_S * 1000000000ull;
@@ -285,7 +299,9 @@ static int validate(struct st_app *a)
     if (a->page == ST_PAGE_USER) {
         if (strlen(du_get(a->ui, ST_ID_COMPUTER)->text) > SETUP_COMPUTER_MAX)
             return invalid(a, ST_ID_COMPUTER, "Type a computer name of at most 15 characters.");
-        if (strlen(du_get(a->ui, ST_ID_USER)->text) >= sizeof(s->user_name) || !setup_valid_user(s->user_name)) return invalid(a, ST_ID_USER, "Type your name: 1 to 32 characters.");
+        if (strlen(du_get(a->ui, ST_ID_USER)->text) >= sizeof(s->user_name) || !setup_valid_user(s->user_name))
+            return invalid(a, ST_ID_USER, "Type a user name of 1 to 31 letters, digits, hyphens or underscores. "
+                                          "SYSTEM, CiukiAdministrator, CiukiUser, Guest, Administrators, Users and Guests are reserved.");
         if (!setup_valid_computer(s->computer_name))
             return invalid(a, ST_ID_COMPUTER, "Type a computer name of 1 to 15 letters, digits or hyphens. It cannot be only digits or start or end with a hyphen.");
         int64_t local;
@@ -296,6 +312,33 @@ static int validate(struct st_app *a)
         s->clock_adjust_s = a->clock_edited && typed != shown + 0 ? typed - (now - now % 60) : 0;
         s->present |= 1u << SETUP_KEY_USER_NAME | 1u << SETUP_KEY_COMPUTER_NAME | 1u << SETUP_KEY_KEYBOARD |
                       1u << SETUP_KEY_TIME_ZONE | 1u << SETUP_KEY_CLOCK;
+    }
+    if (a->page == ST_PAGE_ACCOUNT) {
+        /* sec-user-02: 8-63 printable bytes, both confirmed, then the seed of
+         * salted verifiers is built at once and every plaintext is wiped. */
+        char (*sec)[ST_SECRET_BYTES] = a->acct.secret;
+        const char *problem = NULL; int focus_id = ST_ID_SECRET;
+        if (!st_password_valid(sec[0])) problem = "Type a password of 8 to 63 characters: letters, digits, spaces and symbols.";
+        else if (strcmp(sec[0], sec[1])) { problem = "The two passwords for your account do not match. Type them again."; }
+        else if (!st_password_valid(sec[2])) { problem = "Type a recovery password of 8 to 63 characters for CiukiAdministrator."; focus_id = ST_ID_SECRET + 2; }
+        else if (strcmp(sec[2], sec[3])) { problem = "The two recovery passwords do not match. Type them again."; focus_id = ST_ID_SECRET + 2; }
+        if (problem) {
+            st_secret_wipe(a->acct.secret, sizeof(a->acct.secret));
+            a->ui->dirty = 1;
+            return invalid(a, focus_id, problem);
+        }
+        int r = a->h.entropy ? st_seed_build(a->acct.seed, s->user_name, sec[0], sec[2], a->h.entropy, a->h.ctx) : -ENOSYS;
+        st_secret_wipe(a->acct.secret, sizeof(a->acct.secret));
+        a->ui->dirty = 1;
+        st_log(a, "accounts seed result=%d", r);
+        if (r) {
+            st_accounts_clear(a);
+            return invalid(a, ST_ID_SECRET, r == -EAGAIN || r == -ENOSYS ?
+                "Setup cannot prepare the accounts yet: the system has not gathered enough randomness. Wait a few seconds, then type the passwords again." :
+                "Setup cannot prepare the accounts. Type the passwords again.");
+        }
+        a->acct.seed_ready = 1;
+        s->account_seed = a->acct.seed; s->account_seed_length = sizeof(a->acct.seed);
     }
     if (a->page == ST_PAGE_NETWORK) {
         if (a->adapter_none) s->network = SETUP_NET_NONE;
@@ -336,6 +379,7 @@ static void prepare(struct st_app *a)
     if (!s->unattended) { s->erase_disk = 1; s->disk = SETUP_DISK_ATA0; }   /* consent: Install on the summary */
     s->hardware_report = a->report; s->hardware_report_length = a->report_length;
     s->log = &a->log;
+    if (a->acct.seed_ready) { s->account_seed = a->acct.seed; s->account_seed_length = sizeof(a->acct.seed); }
     memset(&a->plan, 0, sizeof(a->plan));
     int r = setup_txn_prepare(s, &a->plan);
     if (!r && (a->plan.version!=SETUP_TXN_VERSION || a->plan.erased_partitions>SETUP_ERASED_MAX ||
@@ -525,6 +569,7 @@ static void install_run(struct st_app *a)
     static const struct setup_callbacks callbacks = {cb_progress, cb_error, cb_cancel, cb_log};
     int r = setup_txn_execute(&a->plan, &callbacks, a);
     a->executing = 0;
+    st_accounts_clear(a);   /* sec-user-02: the staged seed is on the disk or the install failed */
     /* An unanswered power dialog is asked again with the post-copy text. */
     if (a->ui->dialog.kind && a->ui->dialog.id == ST_DLG_POWER) a->power_pending = 1;
     if (a->ui->dialog.kind) du_dialog_close(a->ui);
@@ -670,6 +715,93 @@ void st_licence_open(struct st_app *a, unsigned index)
     text_open(a, a->licence_names[index], path, NULL, 0);
 }
 
+/* ---- sec-user-02: confirmed lost-password repair (contract 5.3, K-Q7) ----
+ * Under physical control, from the Rescue console only: the operator picks
+ * an identified installation, reads the backup warning, types the new
+ * recovery password twice and confirms; only then is anything written, and
+ * only that installation's protected account files. Nothing is written for
+ * an inconsistent or unfinished store, which stays closed. */
+static int repair_store(struct st_app *a, char letter, struct acct_io *io)
+{ return a->h.repair_io ? a->h.repair_io(a->h.ctx, letter, io) : -ENOSYS; }
+static void repair_describe(struct st_app *a, int r)
+{
+    const char *text = "";
+    if (r == 0) text = a->repair.recovery_configured ?
+        "The account database is intact. CiukiAdministrator already has a password; Setup replaces it." :
+        "The account database is intact. CiukiAdministrator has no password yet; Setup sets one.";
+    else if (r == -EBUSY) text = "An earlier change to the accounts is waiting to finish. Start CiukiOS normally once, then run the repair again if you still cannot sign in.";
+    else if (r == -EIO) text = "The account files of this installation are damaged or inconsistent. Setup cannot repair them: back up your data and reinstall CiukiOS.";
+    else if (r) text = "Setup cannot read the account files of this installation.";
+    snprintf(a->repair_status, sizeof(a->repair_status), "%s", text);
+}
+static void repair_open(struct st_app *a)
+{
+    struct st_repair probe;
+    if (a->page != ST_PAGE_REPAIR) {
+        a->repair_volumes = 0; a->repair_choice = 0;
+        for (int i = 0; i < a->volume_count && a->repair_volumes < 4; i++) {
+            const struct st_volume *v = &a->volumes[i];
+            if (v->letter == 'C' || v->letter == 'D' || v->usb) continue;   /* the Setup media and USB sticks */
+            struct acct_io io;
+            if (repair_store(a, v->letter, &io)) continue;
+            int r = st_repair_inspect(&io, &probe);
+            if (r == -ENOENT || r == -EINVAL || r == -ENOSYS) continue;
+            a->repair_letters[a->repair_volumes++] = v->letter;
+        }
+        a->repair_state = 0;
+    }
+    a->repair_status[0] = 0;
+    if (a->repair_volumes) {
+        struct acct_io io;
+        int r = repair_store(a, a->repair_letters[a->repair_choice], &io);
+        if (!r) r = st_repair_inspect(&io, &a->repair);
+        repair_describe(a, r);
+        if (r && a->repair_state == 0) a->repair_state = 2;
+    }
+    st_record(a, "[rescue] action=account_repair_open installations=%d", a->repair_volumes);
+    st_goto(a, ST_PAGE_REPAIR);
+}
+static void repair_confirm(struct st_app *a)
+{
+    if (a->page != ST_PAGE_REPAIR || !a->repair_volumes || a->repair_state) return;
+    const char *problem = NULL;
+    if (!st_password_valid(a->acct.secret[0])) problem = "Type a recovery password of 8 to 63 characters: letters, digits, spaces and symbols.";
+    else if (strcmp(a->acct.secret[0], a->acct.secret[1])) problem = "The two passwords do not match. Type them again.";
+    if (problem) {
+        st_secret_wipe(a->acct.secret, sizeof(a->acct.secret));
+        du_focus(a->ui, ST_ID_SECRET); a->ui->dirty = 1;
+        st_message(a, "Reset the recovery password", problem, DU_DLG_ICON_WARNING);
+        return;
+    }
+    static const char *const buttons[] = {"Reset password", "Cancel"};
+    char text[300];
+    snprintf(text, sizeof(text), "Set a new password for CiukiAdministrator on the installation on drive %c:?\n\n"
+             "Setup writes the account files of that installation. The other files and accounts are not changed.",
+             a->repair_letters[a->repair_choice]);
+    du_message(a->ui, ST_DLG_REPAIR, "Reset the recovery password", text, DU_DLG_ICON_WARNING, buttons, 2, 1, 1);
+}
+static void repair_run(struct st_app *a)
+{
+    char letter = a->repair_letters[a->repair_choice];
+    struct acct_io io;
+    int r = repair_store(a, letter, &io);
+    if (!r) r = a->h.entropy ? st_repair_execute(&io, a->acct.secret[0], a->h.entropy, a->h.ctx, &a->repair) : -ENOSYS;
+    st_secret_wipe(a->acct.secret, sizeof(a->acct.secret));
+    if (!r) {
+        a->repair_state = 1;
+        st_record(a, "[rescue] action=account_repair result=ok letter=%c generation=%llu", letter, (unsigned long long)a->repair.next_generation);
+    } else {
+        a->repair_state = 2;
+        repair_describe(a, r == -EBUSY || r == -EIO ? r : -EPERM);
+        if (r == -EAGAIN || r == -ENOSYS)
+            snprintf(a->repair_status, sizeof(a->repair_status), "%s", "The system has not gathered enough randomness yet. Close this page, wait a few seconds and try again.");
+        else if (r != -EBUSY && r != -EIO)
+            snprintf(a->repair_status, sizeof(a->repair_status), "Setup could not write the account files (error %d). If a change was written, CiukiOS finishes it at the next start.", -r);
+        st_record(a, "[rescue] action=account_repair result=failed letter=%c error=%d", letter, r);
+    }
+    st_page_build(a);
+}
+
 /* ---- navigation ---- */
 
 static void next(struct st_app *a)
@@ -681,7 +813,8 @@ static void next(struct st_app *a)
     case ST_PAGE_HARDWARE: if (!a->stop) st_goto(a, ST_PAGE_DISK); break;
     case ST_PAGE_DISK: st_goto(a, ST_PAGE_COMPONENTS); break;
     case ST_PAGE_COMPONENTS: st_goto(a, ST_PAGE_USER); break;
-    case ST_PAGE_USER: st_goto(a, ST_PAGE_NETWORK); break;
+    case ST_PAGE_USER: st_goto(a, ST_PAGE_ACCOUNT); break;
+    case ST_PAGE_ACCOUNT: st_goto(a, ST_PAGE_NETWORK); break;
     case ST_PAGE_NETWORK: prepare(a); break;
     case ST_PAGE_SUMMARY: install(a); break;
     default: break;
@@ -739,7 +872,10 @@ void st_action(struct st_app *a, int id)
     case ST_ID_CLOSE:
         if (a->page == ST_PAGE_TEXT) st_goto(a, a->back_page);
         else if (a->page == ST_PAGE_RESCUE) st_goto(a, a->rescue_return);
+        else if (a->page == ST_PAGE_REPAIR) st_goto(a, ST_PAGE_RESCUE);
         break;
+    case ST_ID_REPAIR: repair_open(a); break;
+    case ST_ID_REPAIR_RUN: repair_confirm(a); break;
     case ST_ID_DEFAULTS: st_components_defaults(a); break;
     }
 }
@@ -762,6 +898,10 @@ static void dialog_result(struct st_app *a, int id, int index)
             st_record(a, "[setup] power button confirmed during copy; cancelling");
         } else power_off_now(a, "button");
         break;
+    case ST_DLG_REPAIR:
+        if (index == 0) repair_run(a);
+        else { st_secret_wipe(a->acct.secret, sizeof(a->acct.secret)); st_record(a, "[rescue] action=account_repair result=declined"); st_page_build(a); }
+        break;
     case ST_DLG_PREPARE:
         if (index == 0 && (a->failed_class == SETUP_ERR_SOURCE_READ || a->failed_class == SETUP_ERR_MEDIA_REMOVED)) prepare(a);
         else if (a->failed_class == SETUP_ERR_DEST_FULL) st_goto(a, ST_PAGE_COMPONENTS);
@@ -783,9 +923,9 @@ static void escape(struct st_app *a)
     switch (a->page) {
     case ST_PAGE_WELCOME: exit_request(a); break;
     case ST_PAGE_LICENCE: case ST_PAGE_HARDWARE: case ST_PAGE_DISK: case ST_PAGE_COMPONENTS:
-    case ST_PAGE_USER: case ST_PAGE_NETWORK: case ST_PAGE_SUMMARY: back(a); break;
+    case ST_PAGE_USER: case ST_PAGE_ACCOUNT: case ST_PAGE_NETWORK: case ST_PAGE_SUMMARY: back(a); break;
     case ST_PAGE_COPY: st_action(a, ST_ID_CANCEL); break;
-    case ST_PAGE_RESCUE: case ST_PAGE_TEXT: st_action(a, ST_ID_CLOSE); break;
+    case ST_PAGE_RESCUE: case ST_PAGE_TEXT: case ST_PAGE_REPAIR: st_action(a, ST_ID_CLOSE); break;
     default: break;
     }
 }

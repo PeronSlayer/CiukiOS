@@ -8,8 +8,8 @@
 #include <stdbool.h>
 #include <stdarg.h>
 #include "boot_info.h"
+#include <ciuki/memory_limits.h>
 
-#define PAGE_SIZE       4096u
 #define PAGE_ALIGN_UP(x)   (((x) + PAGE_SIZE - 1) & ~(PAGE_SIZE - 1))
 #define PAGE_ALIGN_DOWN(x) ((x) & ~(PAGE_SIZE - 1))
 #define ARRAY_SIZE(a)   (sizeof(a) / sizeof((a)[0]))

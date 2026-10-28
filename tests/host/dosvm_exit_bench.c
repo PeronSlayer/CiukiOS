@@ -77,17 +77,24 @@ static void exit_vga_bench(bool pm)
          * exit and timed separately. "ordinary" refuses the lean path with
          * the IPX-binding precondition only. Thread CPU time per exit. */
         static uint8_t polluter[4u << 20];
-        for (unsigned mode = 0; mode < 2; mode++) {
+        /* fx-doomwin: mode 2, the same select retired at trap entry
+         * (dosvm_trap_fast, as trap_dispatch offers it first). */
+        static const char *const hot[] = {"pm_vga_byte_exit_settled_hot_lean",
+            "pm_vga_byte_exit_settled_hot_ordinary", "pm_vga_byte_exit_settled_hot_fast"};
+        static const char *const cold_name[] = {"pm_vga_byte_exit_settled_cold_lean",
+            "pm_vga_byte_exit_settled_cold_ordinary", "pm_vga_byte_exit_settled_cold_fast"};
+        for (unsigned mode = 0; mode < 3; mode++) {
             v->network_attached = mode == 1;
             uint64_t t0 = __builtin_ia32_rdtsc();
             for (unsigned i = 0; i < n; i++) {
                 cur.tf.eip=address; cur.tf.edx=0x3C5; cur.tf.eax=1u<<(i&3);
-                step(v,13,0); CHECK(!left);
+                if (mode == 2) CHECK(step_entry(v)); else step(v,13,0);
+                CHECK(!left);
             }
-            printf("exit_bench case=%s iterations=%u avg_tsc_cycles=%llu\n", mode ? "pm_vga_byte_exit_settled_hot_ordinary" :
-                   "pm_vga_byte_exit_settled_hot_lean", n, (unsigned long long)((__builtin_ia32_rdtsc() - t0) / n));
+            printf("exit_bench case=%s iterations=%u avg_tsc_cycles=%llu\n", hot[mode], n,
+                   (unsigned long long)((__builtin_ia32_rdtsc() - t0) / n));
         }
-        for (unsigned mode = 0; mode < 2; mode++) {
+        for (unsigned mode = 0; mode < 3; mode++) {
             v->network_attached = mode == 1;
             uint64_t total = 0; volatile uint8_t sink = 0;
             const unsigned cold = 2000;
@@ -95,13 +102,13 @@ static void exit_vga_bench(bool pm)
                 for (unsigned at = 0; at < sizeof(polluter); at += 64) sink += polluter[at] + (uint8_t)i;
                 cur.tf.eip=address; cur.tf.edx=0x3C5; cur.tf.eax=1u<<(i&3);
                 uint64_t t0 = __builtin_ia32_rdtsc();   /* no system call inside the interval */
-                step(v,13,0);
+                bool fast = mode == 2 ? step_entry(v) : (step(v,13,0), false);
                 total += __builtin_ia32_rdtsc() - t0;
-                CHECK(!left);
+                CHECK(!left && fast == (mode == 2));
             }
             (void)sink;
-            printf("exit_bench case=%s iterations=%u avg_tsc_cycles=%llu\n", mode ? "pm_vga_byte_exit_settled_cold_ordinary" :
-                   "pm_vga_byte_exit_settled_cold_lean", cold, (unsigned long long)(total / cold));
+            printf("exit_bench case=%s iterations=%u avg_tsc_cycles=%llu\n", cold_name[mode], cold,
+                   (unsigned long long)(total / cold));
         }
         v->network_attached = false;
 #endif

@@ -47,6 +47,14 @@ extern int game_mode;
 int game_prompt_ready(void);
 static uint64_t close_requested_at, window_closed_at;
 uint64_t game_close_requested(void) { return close_requested_at; }
+int game_fullscreen_returned(void);
+static unsigned frames_after_return;
+/* fx-dosfull: the usage the DOS Box stored for \DOOM\DOOM.EXE, or -1. */
+int game_stored_usage(void)
+{
+    struct dosbox_profile p; dosbox_profile_default(&p, "\\DOOM\\DOOM.EXE");
+    return dosbox_profile_load(&p) == 1 && !p.command[0] ? (int)p.screen : -1;
+}
 uint64_t game_window_closed(void) { return window_closed_at; }
 
 uint32_t game_guest_screen[CIUKI_DOSVM_WIDTH * CIUKI_DOSVM_HEIGHT];
@@ -84,7 +92,7 @@ static int desktop_pending(void)
 {
     if (phase < 2 || (phase == 2 && (failed_wait || game_now_ms() > 120000))) return 1;
     if (phase != 2 || window_closed_at) return 0;
-    return game_mode == 0 ? frames != 0 : game_mode == 2 && game_prompt_ready();
+    return game_mode == 0 || game_mode == 3 ? frames_after_return != 0 : game_mode == 2 && game_prompt_ready();
 }
 static int launch_poll(struct pollfd *fds, nfds_t n, int timeout)
 {
@@ -131,6 +139,7 @@ int ciuki_channel_send(int fd, const struct ciuki_message *m, uint32_t flags)
     if (p.opcode == DESK_DAMAGE && window_has_game_frame()) {
         if (!frames) printf("app: first guest frame in the window at t=%llu ms\n", (unsigned long long)game_now_ms());
         frames++;
+        if (game_fullscreen_returned()) frames_after_return++;
     }
     return 0;
 }
@@ -141,7 +150,7 @@ int ciuki_channel_recv(int fd, struct ciuki_message *m, uint32_t flags)
     else if (phase == 1) { desk_message(m, DESK_FOCUS, 8); desk_put32(m->data + 4, 1); phase++; }
     else if (phase == 2 && failed_wait) { desk_message(m, DESK_CLOSED, 4); phase++; }
     else if (phase == 2 && game_now_ms() > 120000) { printf("app: window still open after 120 s\n"); desk_message(m, DESK_CLOSED, 4); phase++; }
-    else if (phase == 2 && game_mode == 0 && frames) { desk_message(m, DESK_CLOSED, 4); phase++; }
+    else if (phase == 2 && (game_mode == 0 || game_mode == 3) && frames_after_return) { desk_message(m, DESK_CLOSED, 4); phase++; }
     else if (phase == 2 && game_mode == 2 && game_prompt_ready()) {
         /* The close button at the idle prompt: "Closing..." on the caption. */
         close_requested_at = game_now_ms(); printf("desktop: close request at t=%llu ms\n", (unsigned long long)close_requested_at);

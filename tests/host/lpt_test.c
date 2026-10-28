@@ -1,3 +1,4 @@
+#include <ciuki/kheap_limits.h>
 /* Independent cable/register/8237 model; production LPT, native and INT17.
  * No emulator or physical qualification. SPDX-License-Identifier: GPL-2.0-only */
 #include <assert.h>
@@ -7,9 +8,11 @@
 #include <setjmp.h>
 #define CIUKI_CPU_H
 #include <ciuki/kernel.h>
+#include "security/subject_fixture.h"
 #include <ciuki/lpt.h>
 #include <ciuki/task.h>
 #include <ciuki/mm.h>
+#include <ciuki/desktop.h>
 #include <ciuki/firmware.h>
 #include <ciuki/vga_ports.h>
 static uint8_t ram[2*1024*1024];
@@ -139,8 +142,12 @@ void task_sleep_ms(uint32_t ms)
 int udelay(uint32_t us) { assert(us<=5); return delay_fail ? -ENOSYS : 0; }
 uint64_t deadline_after_ms(uint32_t ms) { return g_ticks+ms; }
 bool deadline_passed(uint64_t d) { return g_ticks>=d; }
-void *kzalloc(size_t n) { if (fail_alloc) return 0; allocations++; return calloc(1,n); }
+void *(kzalloc)(size_t n) { if (n > KHEAP_MAX_REQUEST) return 0; if (fail_alloc) return 0; allocations++; return calloc(1,n); }
 void kfree(void *p) { if (p) { assert(allocations); allocations--; free(p); } }
+void *desktop_buffer_alloc(uint32_t bytes,enum mm_owner owner)
+{ assert(bytes==sizeof(struct ciuki_firmware_page) && owner==MM_IO_REQUEST); if (fail_alloc) return 0; void *p=calloc(1,bytes); if (p) allocations++; return p; }
+void desktop_buffer_free(void *p,uint32_t bytes,enum mm_owner owner)
+{ assert(bytes && owner==MM_IO_REQUEST); kfree(p); }
 void klog(const char *fmt,...) { (void)fmt; }
 uint32_t pmm_alloc_dma_run(uint32_t n,uint32_t a)
 { assert(n==1 && a==1); if (fail_alloc) return 0; assert(!bounce_allocated); bounce_allocated=true; return 0x100000; }
@@ -520,6 +527,7 @@ static void test_vga_coexistence(void)
 }
 int main(void)
 {
+    security_fixture_identity(&user_process,1001,1,false,0);
     setvbuf(stdout,0,_IONBF,0);
     test_spp(); test_modes(); test_dma(); test_discovery(); test_vga_coexistence(); test_native(); test_int17();
     printf("PASS LPT metadata=%zu VM_state=%zu native_operation=%zu bytes; no global limit increase\n",

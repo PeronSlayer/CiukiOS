@@ -1,12 +1,19 @@
 /* SPDX-License-Identifier: LGPL-2.1-or-later */
 #include "ciuki-icon32.h"
 #include "unicode.h"
+#include "../../../apps/libdeskui/iconx.h"
+/* fx-exeicons: small[] is the icon's own 16x16 image (straight ARGB) when its
+ * group has one (LoadIcon, ExtractIcon, the class and window icons the
+ * desktop shows in captions and on the taskbar); USER draws the 32x32
+ * colour image through its AND mask, as Windows 98 does. */
 struct icon {
   DWORD id, resource;
   BOOL cursor, shared;
   UINT hotx, hoty;
   DWORD pixels[1024];
   uint8_t mask[1024];
+  BOOL has_small;
+  DWORD small[256];
 };
 static struct icon icons[64];
 static DWORD serial = 0x10000;
@@ -210,7 +217,7 @@ BOOL W32API DestroyIcon(HICON h) {
   return 1;
 }
 /* f5-20B: one RT_ICON/RT_CURSOR image (BITMAPINFOHEADER, XOR image, AND
- * mask; cursors start with the hotspot) of any square size up to 256
+ * mask; cursors start with the hotspot) with each dimension up to 256
  * pixels and 1/4/8/24/32 bits, resampled to USER's 32x32 icon by nearest
  * neighbour. PNG images (Windows Vista) are refused as on Windows 98. */
 static struct icon *from_bits(const uint8_t *b, DWORD n, BOOL cursor) {
@@ -229,28 +236,28 @@ static struct icon *from_bits(const uint8_t *b, DWORD n, BOOL cursor) {
     return (struct icon *)(uintptr_t)u32_fail(13);
   LONG width = (LONG)w32_u32(b + 4), height2 = (LONG)w32_u32(b + 8);
   UINT depth = w32_u16(b + 14);
-  if (width <= 0 || width > 256 || height2 != 2 * width ||
+  if (width <= 0 || width > 256 || height2 <= 0 || height2 > 512 || (height2 & 1) ||
       (depth != 1 && depth != 4 && depth != 8 && depth != 24 && depth != 32))
     return (struct icon *)(uintptr_t)u32_fail(13);
-  UINT size = (UINT)width;
+  UINT size = (UINT)width, height = (UINT)height2 / 2;
   UINT colors =
       depth <= 8 ? (w32_u32(b + 32) ? w32_u32(b + 32) : 1u << depth) : 0;
   if (colors > 256)
     return (struct icon *)(uintptr_t)u32_fail(13);
   UINT pitch = ((size * depth + 31) / 32) * 4, offset = 40 + colors * 4,
        mask_pitch = ((size + 31) / 32) * 4;
-  if ((uint64_t)offset + (uint64_t)pitch * size + (uint64_t)mask_pitch * size >
+  if ((uint64_t)offset + (uint64_t)pitch * height + (uint64_t)mask_pitch * height >
       n)
     return (struct icon *)(uintptr_t)u32_fail(13);
   struct icon *i = allocate(cursor);
   if (!i)
     return 0;
   i->hotx = size == 32 ? hotx : hotx * 32 / size;
-  i->hoty = size == 32 ? hoty : hoty * 32 / size;
+  i->hoty = height == 32 ? hoty : hoty * 32 / height;
   for (UINT y = 0; y < 32; y++)
     for (UINT x = 0; x < 32; x++) {
-      UINT sx = x * size / 32, sy = y * size / 32;
-      const uint8_t *row = b + offset + (size - 1 - sy) * pitch;
+      UINT sx = x * size / 32, sy = y * height / 32;
+      const uint8_t *row = b + offset + (height - 1 - sy) * pitch;
       UINT p = y * 32 + x;
       DWORD c = 0;
       if (depth == 32)
@@ -268,13 +275,47 @@ static struct icon *from_bits(const uint8_t *b, DWORD n, BOOL cursor) {
         }
         c = w32_u32(b + 40 + idx * 4);
       }
-      BOOL mask = !!(b[offset + pitch * size + (size - 1 - sy) * mask_pitch +
+      BOOL mask = !!(b[offset + pitch * height + (height - 1 - sy) * mask_pitch +
                        sx / 8] &
                      (128 >> (sx & 7)));
       i->mask[p] = mask;
       i->pixels[p] = mask ? 0 : (c & 0xffffff) | 0xff000000;
     }
   return i;
+}
+/* An iconx image (straight ARGB, 32x32) as USER's colour image and AND
+ * mask: alpha below 128 is transparent. */
+static void icon_set_argb(struct icon *i, const uint32_t *argb) {
+  for (UINT p = 0; p < 1024; p++) {
+    BOOL m = (argb[p] >> 24) < 128;
+    i->mask[p] = m;
+    i->pixels[p] = m ? 0 : argb[p] | 0xff000000u;
+  }
+}
+/* The images of an in-memory RT_GROUP_ICON ranked for a size (iconx: the
+ * closest size, then the deepest colour), decoded through the module's
+ * RT_ICON resources. */
+static BOOL group_image(HANDLE module, const uint8_t *g, DWORD gn, UINT size, uint32_t *out) {
+  unsigned order[ICONX_TRIES];
+  int n = iconx_rank(g, gn, 14, size, order, ICONX_TRIES);
+  struct iconx *x = n > 0 ? u32_alloc(sizeof(*x)) : 0;
+  BOOL ok = 0;
+  for (int k = 0; x && k < n && !ok; k++) {
+    UINT rid = w32_u16(g + 6 + order[k] * 14 + 12);
+    HANDLE r = FindResourceA(module, (void *)(uintptr_t)rid, (void *)(uintptr_t)3);
+    const uint8_t *b = r ? LoadResource(module, r) : 0;
+    if (!b)
+      continue;
+    struct iconx_memory m = {b, SizeofResource(module, r)};
+    iconx_init(x, iconx_memory_read, &m, m.size);
+    ok = !iconx_decode(x, 0, m.size, size, out);
+  }
+  if (x)
+    u32_free(x);
+  return ok;
+}
+static void group_small(HANDLE module, const uint8_t *g, DWORD gn, struct icon *i) {
+  i->has_small = group_image(module, g, gn, 16, i->small);
 }
 static HANDLE load(HINSTANCE instance, const char *name, BOOL cursor) {
   if (!instance) {
@@ -337,12 +378,18 @@ static HANDLE load(HINSTANCE instance, const char *name, BOOL cursor) {
     return 0;
   }
   UINT best = 0;
-  for (UINT k = 0; k < w32_u16(g + 4); k++) {
-    const uint8_t *entry = g + 6 + k * 14;
-    if ((cursor ? w32_u16(entry) : entry[0]) == 32) {
-      best = k;
-      break;
-    }
+  if (cursor) {
+    for (UINT k = 0; k < w32_u16(g + 4); k++)
+      if (w32_u16(g + 6 + k * 14) == 32) {
+        best = k;
+        break;
+      }
+  } else {
+    /* fx-exeicons: the 32x32 image Windows picks (Hornick, "Choosing an
+     * Icon"): the closest size, then the greatest colour depth. */
+    unsigned order[1];
+    if (iconx_rank(g, gn, 14, 32, order, 1) == 1)
+      best = order[0];
   }
   UINT rid = w32_u16(g + 6 + best * 14 + 12);
   HANDLE resource = FindResourceA(instance, (void *)(uintptr_t)rid,
@@ -355,6 +402,8 @@ static HANDLE load(HINSTANCE instance, const char *name, BOOL cursor) {
   if (!i)
     return 0;
   i->shared = 1;
+  if (!cursor)
+    group_small(instance, g, gn, i);
   return (HANDLE)(uintptr_t)i->id;
 }
 HCURSOR W32API LoadCursorA(HINSTANCE i, const char *name) {
@@ -589,19 +638,18 @@ static HICON group_icon(HANDLE module, const void *name) {
   if (!g || gn < 6 || w32_u16(g + 2) != 1 || !w32_u16(g + 4) ||
       gn < 6u + 14u * w32_u16(g + 4))
     return 0;
-  UINT best = 0, best_score = 0xffffffffu;
-  for (UINT k = 0; k < w32_u16(g + 4); k++) {
-    const uint8_t *e = g + 6 + k * 14;
-    UINT size = e[0] ? e[0] : 256, score = size > 32 ? size - 32 : 32 - size;
-    if (score < best_score) {
-      best = k;
-      best_score = score;
-    }
-  }
+  /* fx-exeicons: the closest size, then the deepest image (iconx_rank),
+   * with the group's own 16x16 image for the small icon. */
+  unsigned order[1];
+  UINT best = iconx_rank(g, gn, 14, 32, order, 1) == 1 ? order[0] : 0;
   UINT rid = w32_u16(g + 6 + best * 14 + 12);
   HANDLE r = FindResourceA(module, (void *)(uintptr_t)rid, (void *)(uintptr_t)3);
   const uint8_t *b = r ? LoadResource(module, r) : 0;
-  return b ? u32_icon_from_resource(b, SizeofResource(module, r), 1, 0) : 0;
+  HICON icon = b ? u32_icon_from_resource(b, SizeofResource(module, r), 1, 0) : 0;
+  struct icon *i = icon ? find(icon) : 0;
+  if (i)
+    group_small(module, g, gn, i);
+  return icon;
 }
 static BOOL W32API group_found(HANDLE module, const char *type, char *name,
                                intptr_t context) {
@@ -624,57 +672,89 @@ static BOOL W32API group_found(HANDLE module, const char *type, char *name,
     x->count++;
   return x->count < x->wanted;
 }
-static HICON ico_file(const char *path, UINT *found) {
+/* fx-exeicons: an icon file (.ico, .cur, .ani, .bmp) or a 16-bit NE
+ * program or library, read whole (bounded) and extracted by iconx with the
+ * ExtractIcon index rules. 1 handled (*result set), 0 not such a file (a PE
+ * image goes through the loader's resource tree below), the file missing
+ * reports UINT_MAX as ExtractIconEx does. */
+#define U32_ICON_FILE_MAX (8u << 20)
+static int file_icons(const char *path, int index, HICON *icons, UINT *ids, UINT wanted, UINT *result) {
   HANDLE f = CreateFileA(path, 0x80000000u, 1, 0, 3, 0, 0);
-  *found = 0;
   if (!f || f == (HANDLE)(intptr_t)-1)
     return 0;
-  uint8_t *data = u32_alloc(1u << 18);
-  DWORD n = 0;
-  BOOL ok = data && ReadFile(f, data, 1u << 18, &n, 0);
-  CloseHandle(f);
-  *found = 1;
-  HICON icon = 0;
-  if (ok && n >= 6 + 16 && w32_u16(data) == 0 && w32_u16(data + 2) == 1 &&
-      w32_u16(data + 4) && n >= 6u + 16u * w32_u16(data + 4)) {
-    UINT best = 0, best_score = 0xffffffffu;
-    for (UINT k = 0; k < w32_u16(data + 4); k++) {
-      const uint8_t *e = data + 6 + k * 16;
-      UINT size = e[0] ? e[0] : 256, score = size > 32 ? size - 32 : 32 - size;
-      if (score < best_score) {
-        best = k;
-        best_score = score;
+  DWORD size = GetFileSize(f, 0), head = size < 4096 ? size : 4096, got = 0;
+  uint8_t *data = u32_alloc(head ? head : 1);
+  int handled = 0;
+  if (data && size != 0xffffffffu && ReadFile(f, data, head, &got, 0) && got == head) {
+    struct iconx_memory m = {data, head};
+    struct iconx *x = u32_alloc(sizeof(*x));
+    if (x) {
+      iconx_init(x, iconx_memory_read, &m, head);
+      int kind = iconx_kind(x);
+      if (kind == ICONX_DOS && head >= 64 && w32_u32(data + 60) + 4 > head && size > head)
+        kind = ICONX_PE;   /* a header past the probe: the loader decides */
+      if (kind == ICONX_DOS) { handled = 1; *result = 0; }
+      else if (kind != ICONX_PE && kind != ICONX_UNKNOWN && size <= U32_ICON_FILE_MAX) {
+        uint8_t *whole = size > head ? u32_alloc(size) : data;
+        DWORD more = 0;
+        if (whole && whole != data) {
+          w32_copy(whole, data, head);
+          if (!ReadFile(f, whole + head, size - head, &more, 0) || more != size - head) {
+            u32_free(whole);
+            whole = 0;
+          }
+        }
+        if (whole) {
+          m = (struct iconx_memory){whole, size};
+          iconx_init(x, iconx_memory_read, &m, size);
+          int count = iconx_count(x);
+          handled = 1;
+          *result = 0;
+          if (!icons)
+            *result = count > 0 ? (UINT)count : 0;
+          else {
+            uint32_t *argb = u32_alloc((1024 + 256) * 4);
+            for (UINT k = 0; argb && k < wanted; k++) {
+              if (index < 0 && k)
+                break;
+              int at = index >= 0 ? index + (int)k : index;
+              if (iconx_extract(x, at, 32, argb))
+                break;
+              struct icon *i = allocate(0);
+              if (!i)
+                break;
+              icon_set_argb(i, argb);
+              if (!iconx_extract(x, at, 16, argb + 1024)) {
+                w32_copy(i->small, argb + 1024, sizeof(i->small));
+                i->has_small = 1;
+              }
+              icons[*result] = (HICON)(uintptr_t)i->id;
+              if (ids)
+                ids[*result] = x->group_id;
+              (*result)++;
+            }
+            if (argb)
+              u32_free(argb);
+          }
+          if (whole != data)
+            u32_free(whole);
+        }
       }
+      u32_free(x);
     }
-    const uint8_t *e = data + 6 + best * 16;
-    DWORD bytes = w32_u32(e + 8), offset = w32_u32(e + 12);
-    if (offset <= n && bytes <= n - offset)
-      icon = u32_icon_from_resource(data + offset, bytes, 1, 0);
   }
-  u32_free(data);
-  return icon;
+  if (data)
+    u32_free(data);
+  CloseHandle(f);
+  return handled;
 }
 static UINT extract(const char *path, int index, HICON *icons, UINT *ids,
                     UINT wanted) {
-  UINT n = path ? w32_strlen(path) : 0;
   if (!path)
     return (UINT)u32_fail(87);
-  if (n > 4 && !u32_stricmp(path + n - 4, ".ico")) {
-    UINT found;
-    if (!icons)
-      return ico_file(path, &found) ? 1u : 0u;
-    if (index > 0 || !wanted)
-      return 0;
-    HICON icon = ico_file(path, &found);
-    if (!found)
-      return 0xffffffffu;
-    if (!icon)
-      return 0;
-    icons[0] = icon;
-    if (ids)
-      ids[0] = 0;
-    return 1;
-  }
+  UINT handled;
+  if (file_icons(path, index, icons, ids, icons ? wanted : 0, &handled))
+    return handled;
   HANDLE(W32API * load)(const char *, HANDLE, DWORD) =
       (HANDLE(W32API *)(const char *, HANDLE, DWORD))u32_kernel("LoadLibraryExA");
   BOOL(W32API * unload)(HANDLE) = (BOOL(W32API *)(HANDLE))u32_kernel("FreeLibrary");
@@ -744,4 +824,121 @@ UINT W32API PrivateExtractIconExW(const WCHAR *path, int index, HICON *large,
   UINT r = PrivateExtractIconExA(a, index, large, small, n);
   u32_text_free(a);
   return r;
+}
+
+/* ---- fx-exeicons: the icon a window shows on the desktop ------------------
+ * Microsoft: WM_GETICON ("A window that has no icon explicitly set (with
+ * WM_SETICON) uses the icon for the registered window class"), WNDCLASSEX
+ * hIconSm ("If this member is NULL, the system searches the icon resource
+ * specified by the hIcon member for an icon of the appropriate size").
+ * A window with neither shows its executable's first icon group (the owner's
+ * fx-exeicons requirement; Windows documents a default icon there). The
+ * desktop draws the 16 px icon in the caption and on the taskbar button and
+ * the 32 px one in Alt+Tab. Only captioned top-level windows have them. */
+static HICON exe_icon(void) {
+  static HICON cached;
+  static BOOL tried;
+  if (tried)
+    return cached;
+  tried = 1;
+  BOOL(W32API * names)(HANDLE, const char *,
+                       BOOL(W32API *)(HANDLE, const char *, char *, intptr_t),
+                       intptr_t) =
+      (BOOL(W32API *)(HANDLE, const char *,
+                      BOOL(W32API *)(HANDLE, const char *, char *, intptr_t),
+                      intptr_t))u32_kernel("EnumResourceNamesA");
+  HANDLE module = GetModuleHandleA(0);
+  HICON icon = 0;
+  struct extract x = {1, 0, 0, 0, &icon, 0, module};
+  if (names && module)
+    names(module, (const char *)(uintptr_t)14, group_found, (intptr_t)&x);
+  struct icon *i = x.count ? find(icon) : 0;
+  if (i)
+    i->shared = 1;
+  return cached = i ? icon : 0;
+}
+static void icon_argb(const struct icon *i, uint32_t *out32, uint32_t *out16) {
+  if (out32)
+    for (UINT p = 0; p < 1024; p++)
+      out32[p] = i->mask[p] ? 0 : i->pixels[p] | 0xff000000u;
+  if (!out16)
+    return;
+  if (i->has_small) {
+    w32_copy(out16, i->small, sizeof(i->small));
+    return;
+  }
+  for (UINT y = 0; y < 16; y++)
+    for (UINT x = 0; x < 16; x++) {
+      UINT a = 0, r = 0, g = 0, b = 0;
+      for (UINT k = 0; k < 4; k++) {
+        UINT p = (2 * y + k / 2) * 32 + 2 * x + k % 2;
+        if (i->mask[p])
+          continue;
+        a += 255; r += (i->pixels[p] >> 16 & 255) * 255;
+        g += (i->pixels[p] >> 8 & 255) * 255; b += (i->pixels[p] & 255) * 255;
+      }
+      out16[y * 16 + x] = a ? ((a + 2) / 4) << 24 | ((r + a / 2) / a) << 16 |
+                                  ((g + a / 2) / a) << 8 | (b + a / 2) / a
+                            : 0;
+    }
+}
+static BOOL send_icon(struct u32_window *w, UINT size, const uint32_t *argb) {
+  struct u32_surface s = {.fd = -1};
+  if (!u32_backend.surface(size, size, &s))
+    return 0;
+  for (UINT y = 0; y < size; y++)
+    w32_copy((uint8_t *)s.pixels + y * s.pitch, argb + y * size, size * 4);
+  uint8_t b[4];
+  desk_put32(b, size);
+  BOOL ok = u32_wire(w, DESK_V3_WINDOW_ICON, b, 4, s.fd);
+  u32_backend.drop_surface(&s);
+  return ok;
+}
+BOOL u32_window_icon(struct u32_window *w) {
+  if (!w || !w->wire || w->parent || (w->exstyle & WS_EX_TOOLWINDOW) ||
+      ((w->style & WS_CAPTION) != WS_CAPTION && !(w->exstyle & 0x40000u /* WS_EX_APPWINDOW */)))
+    return 1;
+  struct icon *big = find(w->icon_big ? w->icon_big : w->cls ? w->cls->c.hIcon : 0);
+  struct icon *small = find(w->icon_small ? w->icon_small : w->cls ? w->cls->c.hIconSm : 0);
+  if (big && big->cursor)
+    big = 0;
+  if (small && small->cursor)
+    small = 0;
+  if (!big && !small)
+    big = find(exe_icon());
+  if (!big && !small)
+    return 1;   /* the desktop's default */
+  uint32_t *argb = u32_alloc((1024 + 256) * 4);
+  if (!argb)
+    return 0;
+  icon_argb(big ? big : small, argb, 0);
+  icon_argb(small ? small : big, 0, argb + 1024);
+  BOOL ok = send_icon(w, 32, argb) && send_icon(w, 16, argb + 1024);
+  u32_free(argb);
+  return ok;
+}
+
+/* fx-exeicons: the shell's default icons for ciukishell's SHGetFileInfo, the
+ * Tango 0.8.90 images the native shell shows for the same objects: 0 a file
+ * without its own icon, 1 a folder, 2 a program without icons, 3 an open
+ * folder. Shared handles (DestroyIcon keeps them), with their 16x16 image. */
+HICON W32API CiukiShellIcon(UINT kind) {
+  U32_GUARD;
+  static const unsigned int *const large[4] = {tango_document32, tango_folder32, tango_program32, tango_folder_open32};
+  static const unsigned int *const little[4] = {tango_document16, tango_folder16, tango_program16, tango_folder_open16};
+  if (kind > 3)
+    return (HICON)(uintptr_t)u32_fail(87);
+  DWORD resource = 0x10000u + kind;
+  for (UINT k = 0; k < 64; k++)
+    if (icons[k].id && icons[k].shared && !icons[k].cursor && icons[k].resource == resource)
+      return (HICON)(uintptr_t)icons[k].id;
+  struct icon *i = allocate(0);
+  if (!i)
+    return 0;
+  i->shared = 1;
+  i->resource = resource;
+  icon_set_argb(i, large[kind]);
+  w32_copy(i->small, little[kind], sizeof(i->small));
+  i->has_small = 1;
+  return (HICON)(uintptr_t)i->id;
 }

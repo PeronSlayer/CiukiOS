@@ -1,5 +1,7 @@
 /* Runtime-only core fixture observers. SPDX-License-Identifier: GPL-2.0-only */
 #include <ciuki/probe.h>
+#include <ciuki/kernel.h>
+#include <ciuki/supervisor.h>
 #include "../../probes/win32_core/controller.h"
 extern int probes_w32_core_fixture(unsigned);
 static int probe_kernel32(void) { return probes_w32_core_fixture(W32_FIXTURE_KERNEL32); }
@@ -22,3 +24,16 @@ static int probe_ddraw(void) { return probes_w32_core_fixture(W32_FIXTURE_DDRAW)
 CIUKI_F5_PROBE("w32-ddraw",probe_ddraw);
 static int probe_input(void) { return probes_w32_core_fixture(W32_FIXTURE_INPUT); }
 CIUKI_F5_PROBE("w32-input",probe_input);
+static int probe_q3_lease_eio(void)
+{
+    if (!supervisor_interactive_test(&g_boot)) {
+        rec_emit("q3-lease-eio","FAIL","reason=qemu-only");
+        return 1;
+    }
+    supervisor_bootstrap();
+    rec_emit("q3-lease-eio","READY","fault=EIO desktop=interactive");
+    /* The dispatcher's normal continuation overlays evidence pages. Keep the
+     * ordinary desktop in charge throughout this interactive reproduction. */
+    for (;;) task_sleep_ms(60000);
+}
+CIUKI_F5_PROBE("q3-lease-eio",probe_q3_lease_eio);

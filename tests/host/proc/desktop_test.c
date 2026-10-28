@@ -214,6 +214,7 @@ void entropy_erase(void *p, size_t n) { (void)p; (void)n; }
 int storage_sync(void) { CHECK(!"storage_sync outside the Files case"); return -EIO; }
 /* These native gate replays never select the installer controller. Keep
  * its VFS dependency explicit and fail if the harness accidentally enters it. */
+#ifndef CIUKI_DESKTOP_REAL_VFS
 int vfs_table_init(struct vfs *v,struct vfs_table *t,unsigned drive)
 { (void)v;(void)t;(void)drive;CHECK(!"installer VFS in desktop spawn replay");return -EIO; }
 void vfs_table_destroy(struct vfs_table *t)
@@ -233,6 +234,7 @@ int vfs_find_next(struct vfs_table *t,struct vfs_find *f,struct fat_entry *e)
 {(void)t;(void)f;(void)e;CHECK(!"installers-tier walk in desktop replay");return -EIO;}
 int vfs_flush_drive(struct vfs_table *t,unsigned drive)
 {(void)t;(void)drive;CHECK(!"installers-tier flush in desktop replay");return -EIO;}
+#endif
 static int report_fixture_spawn(const char *path, const char *const argv[], const char *cwd,
                                 bool desktop, struct process **out)
 {
@@ -451,6 +453,30 @@ static void test_desktop_channels(void)
     puts("desktop channels: queue cap, drain/EOF, SIGPIPE, atomic receive, attachment lifetime PASS");
 }
 
+/* f7-14: the present lease admits a native client that holds the opposite
+ * open end of one channel with the desktop (channel_connected). */
+static void test_desktop_channel_peers(void)
+{
+    struct process *p, *q;
+    struct proc_thread *t = make_process(proc_supervisor(), &p); desktop_select(t);
+    make_process(proc_supervisor(), &q);
+    int32_t pair[2]; CHECK(!channel_pair(p, pair));
+    CHECK(!channel_connected(p, p) && !channel_connected(p, q) && !channel_connected(0, q));
+    /* Hand one end to q as a launch inheritance would. */
+    struct desktop_description *end = desktop_fd(p, pair[1]);
+    end->object.retain(&end->object);
+    int fd = desktop_fd_install(q, end, 0); CHECK(fd >= 0);
+    CHECK(!desktop_close(p, pair[1]));
+    CHECK(channel_connected(p, q) && channel_connected(q, p) && !channel_connected(q, q));
+    /* A duplicate of the same end in the same process is no peer. */
+    int dup = desktop_dup(p, pair[0], 0, false, 0); CHECK(dup >= 0);
+    CHECK(!channel_connected(p, p) && channel_connected(p, q));
+    CHECK(!desktop_close(p, dup) && !desktop_close(p, pair[0]));
+    CHECK(!channel_connected(p, q) && !channel_connected(q, p)); /* the desktop end is gone */
+    CHECK(!desktop_close(q, fd));
+    stop_collect(q); desktop_clean(p);
+    puts("desktop channel peers: opposite open ends across processes only, closed or same-process ends refused PASS");
+}
 static void test_desktop_scheduler_hints(void)
 {
     struct process *p; struct proc_thread *t=make_process(proc_supervisor(),&p);desktop_select(t);
@@ -1071,13 +1097,19 @@ static void test_setup_bootstrap(void)
 static void test_pager_boot_fallback(void)
 {
     const struct ciuki_file_ops *saved = proc_get_file_ops();
-    uint32_t boot_flags = g_boot.flags;
+    struct ciuki_boot_info saved_boot = g_boot;
     unsigned releases = pager_boot_releases;
     CHECK(!bootstrap_attempted && !desktop_pid);
     g_boot.flags = CBI_F_TEST_REQUEST;
     supervisor_bootstrap();
     CHECK(!bootstrap_attempted && pager_boot_releases == releases);
-    g_boot.flags = 0; proc_set_file_ops(0);
+    /* Only the QEMU interactive failure selection is allowed to bootstrap
+     * under a test request. Ordinary diagnostics above still bypass it. */
+    g_boot.flags = CBI_F_TEST_REQUEST | CBI_F_SMBIOS_QEMU;
+    strcpy(g_boot.test_request,"f5:q3-lease-eio run=1234abcd");
+    g_boot.test_request_len=sizeof("f5:q3-lease-eio run=1234abcd")-1;
+    CHECK(supervisor_interactive_test(&g_boot));
+    proc_set_file_ops(0);
     supervisor_bootstrap(); /* desktop and stand-in absent: console fallback */
     CHECK(bootstrap_attempted && !desktop_pid && pager_boot_releases == releases + 1);
     supervisor_bootstrap(); CHECK(pager_boot_releases == releases + 1);
@@ -1086,7 +1118,7 @@ static void test_pager_boot_fallback(void)
     supervisor_poll();
     CHECK(!desktop_pid && desktop_deaths == deaths + 1 && pager_boot_releases == releases + 2);
     desktop_deaths = deaths; bootstrap_attempted = false;
-    g_boot.flags = boot_flags; proc_set_file_ops(saved);
+    g_boot = saved_boot; proc_set_file_ops(saved);
     puts("desktop pager boot: diagnostics bypass bootstrap; console fallback and death release manager; duplicate bootstrap is inert PASS");
 }
 static unsigned desktop_opens;
@@ -1094,6 +1126,8 @@ static int desktop_open_error;
 static int desktop_open(void *cwd, const char *path, struct ciuki_file *file)
 {
     (void)cwd;
+    /* Transitional fixture has no sealed security-service images. */
+    if (!strncmp(path,"/System/Services/",sizeof("/System/Services/")-1)) return -ENOENT;
     CHECK(!strcmp(path, "/Programs/desktop"));
     desktop_opens++;
     if (desktop_open_error) return desktop_open_error;
@@ -1890,7 +1924,10 @@ void desktop_spawn_host_finish(void)
 #ifdef CIUKI_DESKTOP_REAL_INPUT
 #define main desktop_input_fixture_main
 #endif
-int main(int argc, char **argv)
+#ifndef CIUKI_DESKTOP_HOST_MAIN
+#define CIUKI_DESKTOP_HOST_MAIN main
+#endif
+int CIUKI_DESKTOP_HOST_MAIN(int argc, char **argv)
 {
     setvbuf(stdout, 0, _IOLBF, 0);
     ram = calloc(HOST_PAGES, PAGE_SIZE); CHECK(ram);
@@ -1909,7 +1946,7 @@ int main(int argc, char **argv)
         test_captured_handshake(argv[2],argc==4 ? argv[3] : 0);
         CHECK(!pages_used && !g_user_mappings && heap_blocks==1); free(ram); return 0;
     }
-    test_desktop_surfaces(); test_desktop_channels(); test_desktop_scheduler_hints(); test_desktop_channel_rollback(); test_desktop_waits(); test_desktop_grants(); test_desktop_present(); test_setup_bootstrap(); test_pager_boot_fallback(); test_desktop_restart(); test_desktop_capture();
+    test_desktop_surfaces(); test_desktop_channels(); test_desktop_channel_peers(); test_desktop_scheduler_hints(); test_desktop_channel_rollback(); test_desktop_waits(); test_desktop_grants(); test_desktop_present(); test_setup_bootstrap(); test_pager_boot_fallback(); test_desktop_restart(); test_desktop_capture();
     test_native_reports(); test_native_v3_reports(); test_native_input_records(); test_native_app_reports(); test_native_controller(); test_native_diagnostics();
 #ifdef CIUKI_DESKTOP_PAYLOAD_BIN
     test_standin_controller_records();

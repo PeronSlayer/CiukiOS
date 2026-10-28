@@ -1,13 +1,14 @@
 # ATI Mach64 (Rage Pro / LT Pro / Mobility) 3D backend (f7-27)
 
 Source audit updated: **2026-10-28** (`date --iso-8601=seconds` on the workstation). Directive:
-[f7-27](../directives/f7-27-ati-mach64.md); umbrella rules: the f7-20
-amendment of [f7-3d-acceleration-contract.md](f7-3d-acceleration-contract.md)
-(sections A–G). This document plugs the Mach64 family into that model. It is
+[f7-27](../directives/f7-27-ati-mach64.md); integration note: the f7-27
+amendment of [f7-3d-acceleration-contract.md](f7-3d-acceleration-contract.md).
+This document plugs the Mach64 family into that model. It is
 a source-derived implementation and host-model design, **not a silicon
 qualification**: QEMU emulates no Mach64 3D engine and nothing here was run
-on hardware. The current tree has the Savage-style `record` hook, not f7-13's
-background qualification worker; the integration point is noted below.
+on hardware. Mach64 still uses its existing `record` hook. Integration 6
+contains the Savage background qualification worker; moving this family
+to that worker remains a separate lead integration item.
 
 ## 1. Sources and provenance
 
@@ -334,8 +335,8 @@ The same snapshot serves opengl32 and native GL; no PCI ID reaches them.
 ## 9. Boot qualification Q1–Q4
 
 Opt-in with `3d=probe`, through the 2D driver's `record` hook (worker
-context, outside the presenter) until f7-13's budgeted background job is
-merged; the lead moves the call there. Before the first write: active
+context, outside the presenter). The lead must move this family to the
+budgeted background orchestration already available for Savage. Before the first write: active
 healthy 2D owner, supported 16/32-bpp mode, heap ≥ Q1 minimum, presenter pin,
 register preflight (chip ID at 0xce0 and 0x4e0, BUS_EXT_REG_EN, FIFO error),
 marker store, registry claim + activation + mapping, scratch allocation and
@@ -440,3 +441,30 @@ compositing) are admitted.
    don't-care" (XRGB targets) would let the common Quake III blends through
    on this engine; today the native interface defines the alpha channel.
 5. Moving the call from the `record` hook to f7-13's background job.
+
+
+## Integration 6 compatibility (2026-10-28)
+
+The shared service now supports stencil/D24S8 and page-backed large buffers.
+Mach64 continues to advertise only `R3D_FEATURES | R3D_TEXTURE1` (127),
+independent of the expanding shared `R3D_ALL_FEATURES` mask. Its D16-only
+resources reject stencil combinations without emission; this merge adds no
+stencil, D24S8 or RGB565 hardware claim.
+
+Probe scratch, resource shadows and temporary texture images use
+`desktop_buffer_alloc(..., MM_IO_REQUEST)` through the owner's allocation
+callbacks. They exceed the class-heap maximum request and must not use
+`kmalloc`. Allocation headers track byte extent and page charge; the existing
+32 MiB `R3D_RAM_LIMIT` includes all live probe buffers plus backend staging,
+including simultaneous hardware/reference services. Failed allocation
+releases its charge, and every safe completion frees the matching extent.
+Fault quarantine retains the same buffers and charge until reboot. This is
+the integration 6 Savage owner's allocation contract, applied in Mach64's
+own owner file; the shared Savage files are unchanged.
+
+The family's H1 harness uses the shared TinyGL archive and no-environment
+fixture. `GL_KERNEL_FAMILY_MACH64` selects the family's existing Q1–Q3 setup
+and replay; the newer Savage full-screen lease, direct-scanout assertions
+and lease-reacquisition replay remain unchanged in the default harness.
+Mach64's H1 replay still exercises production GL/GDI/copied transport and
+reports its software fallback, without claiming Savage lease coverage.

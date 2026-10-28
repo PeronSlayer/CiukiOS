@@ -1,5 +1,6 @@
 /* Exercise the production exact-path delegation policy. SPDX-License-Identifier: GPL-2.0-only */
 #include <ciuki/kernel.h>
+#include "../security/subject_fixture.h"
 #include <ciuki/desktop.h>
 #include <ciuki/supervisor.h>
 #include <assert.h>
@@ -18,16 +19,18 @@ int main(void)
 {
     setvbuf(stdout,NULL,_IOLBF,0);parent.pid=42;display.owner=input.owner=42;
     display.kind=DESKTOP_DISPLAY;input.kind=DESKTOP_INPUT;
-    supervisor_dosvm_delegate(&supervisor,&child,"/Programs/desktop");assert(child.network_capability);
-    supervisor_dosvm_delegate(&supervisor,&child,"/Programs/control");assert(child.network_capability);
-    supervisor_dosvm_delegate(&supervisor,&child,"/Programs/control-copy");assert(!child.network_capability);
-    supervisor_dosvm_delegate(&supervisor,&child,"/Programs/netsurf");assert(!child.network_capability);
-    supervisor_dosvm_delegate(&parent,&child,"/Programs/control");assert(!child.network_capability);
-    parent.network_capability=true;have_display=true;
-    supervisor_dosvm_delegate(&parent,&child,"/Programs/control");assert(!child.network_capability);
-    have_input=true;input.owner=99;
-    supervisor_dosvm_delegate(&parent,&child,"/Programs/control");assert(!child.network_capability);
-    input.owner=42;supervisor_dosvm_delegate(&parent,&child,"/Programs/control");assert(child.network_capability);
-    supervisor_dosvm_delegate(&parent,&child,"/Programs/netsurf");assert(!child.network_capability);
-    puts("PASS f2-100 capability delegation: supervisor/exact paths, both owner-bound desktop grants, no inheritance through Control Panel or ordinary programs");return 0;
+    security_fixture_identity(&child,1000,1,true,0);
+    const char *paths[]={"/Programs/desktop","/Programs/control","/Programs/control-copy","/Programs/netsurf","/Programs/terminal","/Programs/msconfig"};
+    for(unsigned i=0;i<sizeof(paths)/sizeof(paths[0]);i++) {
+        supervisor_dosvm_delegate(&supervisor,&child,paths[i]);
+        assert(child.network_capability && child.dhcp_capability && child.time_capability && child.recovery_capability);
+    }
+    security_fixture_identity(&child,1001,2,false,0);
+    have_display=have_input=true;
+    parent.network_capability=parent.dhcp_capability=parent.time_capability=parent.recovery_capability=true;
+    for(unsigned i=0;i<sizeof(paths)/sizeof(paths[0]);i++) {
+        supervisor_dosvm_delegate(&parent,&child,paths[i]);
+        assert(!child.network_capability && !child.dhcp_capability && !child.time_capability && !child.recovery_capability);
+    }
+    puts("PASS sec-k04 capability compatibility: credential rights independent of path, parent flags and grants");return 0;
 }

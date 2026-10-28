@@ -8,6 +8,7 @@
 #undef main
 #include <stdlib.h>
 #include <ciuki/mm.h>
+#include <ciuki/desktop.h>
 #include "mach64_3d_model.h"
 #define THREE_KEY "C:/system/settings/accel-3d-mach64-1002-4c4d.cfg"
 struct ciuki_boot_info g_boot;
@@ -17,6 +18,7 @@ static struct resource claim3,reserved3;
 static unsigned variant3,claimed3,released3,quarantined3,logs3;
 static bool prepared3;
 static void *allocations3[64]; static unsigned allocation_count3;
+static uint32_t allocation_sizes3[64],page_bytes3;
 static char lines3[16][512]; static unsigned line_count3;
 void klog(const char *fmt,...)
 {
@@ -31,16 +33,24 @@ static bool logged(const char *text)
     for (unsigned i=0;i<line_count3;i++) if (strstr(lines3[i],text)) return true;
     return false;
 }
-void *kmalloc(size_t n)
+void *desktop_buffer_alloc(uint32_t n,enum mm_owner owner)
 {
-    assert(!m64m.locks);
+    assert(!m64m.locks && n && owner==MM_IO_REQUEST);
     if (variant3==8 && allocation_count3==3) return 0;
-    void *p=calloc(1,n); assert(p && allocation_count3<64); allocations3[allocation_count3++]=p; return p;
+    void *p=calloc(1,n); assert(p && allocation_count3<64); allocation_sizes3[allocation_count3]=n;
+    allocations3[allocation_count3++]=p;
+    page_bytes3+=(n+PAGE_SIZE-1)&~(PAGE_SIZE-1);
+    assert(page_bytes3+mach64_3d_backend()->resident_bytes<=R3D_RAM_LIMIT);
+    return p;
 }
-void kfree(void *p)
+void desktop_buffer_free(void *p,uint32_t n,enum mm_owner owner)
 {
-    assert(!m64m.locks);
-    for (unsigned i=0;i<allocation_count3;i++) if (allocations3[i]==p) { free(p); allocations3[i]=0; return; }
+    assert(!m64m.locks && owner==MM_IO_REQUEST);
+    for (unsigned i=0;i<allocation_count3;i++) if (allocations3[i]==p) {
+        assert(allocation_sizes3[i]==n);
+        page_bytes3-=(n+PAGE_SIZE-1)&~(PAGE_SIZE-1);
+        free(p); allocations3[i]=0; return;
+    }
     assert(!p);
 }
 const struct pci_func *display_driver_owner(void) { return &pci3; }
@@ -169,6 +179,7 @@ int main(int argc,char **argv)
         assert(!retained && !size_of(THREE_KEY) && size_of(other)==14);
     }
     free(consumer);
+    if (variant3!=17 && variant3!=19) assert(!page_bytes3);
     /* Destroying the model is the reboot, including retained fault data. */
     for (unsigned i=0;i<allocation_count3;i++) free(allocations3[i]);
     m64m_destroy();

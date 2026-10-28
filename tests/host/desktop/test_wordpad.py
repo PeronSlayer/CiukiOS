@@ -27,28 +27,31 @@ PIN = "PIN-FROM-FIRST-RUN"
 # wp-ruler-bullet and wp-preview-1 were reviewed again as screenshots (CIUKI_FONT_REVIEW=<folder> writes PNG copies), as were the new
 # frames justified, options-dialog, ruler-units, nowrap-hscroll, ruler-drag, pictures, pictures-frame, insert-object, word-opened
 # and word-picture; context, empty, formatted, opened and replace-bar differ from G28's only by the ruler and are pinned without a
-# new review. wp-font-dialog was re-pinned after G16b added the Font Script combo (reviewed as a screenshot 2026-10-24). A change here is a visible change of WordPad or libdeskui; none of these is guest evidence.
+# new review. wp-font-dialog was re-pinned after G16b added the Font Script combo (reviewed as a screenshot 2026-10-24).
+# fx-deskdebt re-pinned every frame but preview-1 after fx-icons (4358d62b5) mapped program:clock, the Date/Time toolbar
+# button, to the Haiku clock (reviewed as a zoomed old/new comparison 2026-10-27; no other pixel changed).
+# A change here is a visible change of WordPad or libdeskui; none of these is guest evidence.
 APP_SCREENS = {
-    'wp-context.xrgb': '690ddd000344a0191f10174357b37156ee46213142f3d860e1ad49eb1fa6fb8e',
-    'wp-empty.xrgb': '33e74cb038c003982298045b806832d7c41b789cad077bafbcd6eba7ddd90772',
-    'wp-find.xrgb': '9094dd9780617f53b3e405c5aa4c798102485466870c5f7c9eb434b5429f0d91',
-    'wp-font-dialog.xrgb': '6f5aaa53093dab7c60c5502b8c7f447c0289a58f6cba57f8f91faa839dfd5bd8',
-    'wp-formatted.xrgb': 'dd80368b287f66ce0140bae4bbf1c0848772c4c7457098da8dd7b284ece5b198',
-    'wp-insert-object.xrgb': '08cc56a5835c257b295e8d47745b5864a9ef611c9bf05ea0706266bd7774d37f',
-    'wp-justified.xrgb': '6bbe4c85c2805bc91e384b0e5bdf9eb276cb95e3afd57fc7507e1a63a1f75693',
-    'wp-nowrap-hscroll.xrgb': 'be741ee26182eb26f1629dafc10ab0b4480ae9e76c6fdc9690feeefecb501b20',
-    'wp-opened.xrgb': '1372874ef05de37ca06e7eda8718c0593051d976b77977de9ba2b3af14f2e499',
-    'wp-options-dialog.xrgb': '1af33e111f630ae6bfb3dd200b25c07e75d99ce452370baf4922df23a9b2292f',
-    'wp-paragraphs.xrgb': 'bd9ecea3feb3b5aa8a2f9479d7eb70b0a9844978baa242d661cf54e7396ed002',
-    'wp-pictures-frame.xrgb': '00a50538ea7577c7de624fc534cffcc20eed642124ad45b4f7c6210a71536a8a',
-    'wp-pictures.xrgb': '20cf376f4940f34ebddf830551bfa3120a9b5060660fb666bbd1d2122cbb239e',
+    'wp-context.xrgb': '3f284a2051d0395ece8222185dd5c81fcbdee83089a50ed7bd48d1e5112a4b09',
+    'wp-empty.xrgb': 'b9d9701b0ce3b658898916c4e6f5781cd9ea5b4e39ebd701ba169c63c95e4cc1',
+    'wp-find.xrgb': '0ca3e0075f64155684b32c113e85c407813e19fd8ed9d7966b486c9b7b8d4faf',
+    'wp-font-dialog.xrgb': '272abef4bd72faeab2e8c3e54671497acd3a0f684424ac265458934b8735ee42',
+    'wp-formatted.xrgb': '2158c55796be56483c422213643ec2ca193142321a793189a3f134000ee48f49',
+    'wp-insert-object.xrgb': 'bce9b06b8f817bfa18878b6b52e71255c72b3af1c92b945f6892ea317e48d381',
+    'wp-justified.xrgb': 'bbeafdb2ea6d4020a4d7602ed73a3d60370202a93ebbbdc6f4f85544158c5885',
+    'wp-nowrap-hscroll.xrgb': '158483991ed8ca49ba48142ab2675df8b55c4d92ff265ff6c431ebcdab292b6b',
+    'wp-opened.xrgb': '925c2c56e7270c543e0f6e09a9cca0573ff8761ae922cf6bb71dc0181f662f43',
+    'wp-options-dialog.xrgb': '0fb79f7834b898a976c7169370974130b4cac94d162c0c6259a139e1640282ba',
+    'wp-paragraphs.xrgb': 'cb88677f795d8f3c6ac7447b4144e6a541e6c67676ab7cfd88c8cc171b3375c9',
+    'wp-pictures-frame.xrgb': 'dc23a0b61b354c65ff031ac932114a5e257e9ec23a2dd66bc1733186361aa0fd',
+    'wp-pictures.xrgb': 'b49640ab3f64a1bd76f2c41d2eaf254bc571eb466533f61691a8f995bf6ec4c2',
     'wp-preview-1.xrgb': '8f7b08096501d7feb445019f4357a6be24ff8dafb3579b44dbcf4000c87dc184',
-    'wp-replace-bar.xrgb': '38592605d14d9048cf60a9dc61fa3794ddbd904ddfd793a5acdf86f62b218cb2',
-    'wp-ruler-bullet.xrgb': '17a2e94dd39f12e4beefe0f5074e4e25dd5d2dc883525f243c2820e994b75515',
-    'wp-ruler-drag.xrgb': '52dbad893bad79b105673a32a205703bf0cd2e082f40e4ba64bf638a09908d21',
-    'wp-ruler-units.xrgb': '966703ae08cf18ab60459a8a5a89107545274f2cc2122a0a7ef58800d17c1cf9',
-    'wp-word-opened.xrgb': '548bf2cc9cd7cfe256fc933e5fff7a9df3fe9bf22c44283bcf7a400437d48149',
-    'wp-word-picture.xrgb': '1f86826cd54b1ac182d6ea18e571b54f5ae2da9943e7c00115d2f63f43ba7d57',
+    'wp-replace-bar.xrgb': 'fb42b76b438665529f8e961e778254061bd9becf5f0451d6ddf0b7155ea93ecc',
+    'wp-ruler-bullet.xrgb': '4bce0c7a82aa10e6817c4f96c119ef26d63c204eb54a2441e2513b0cdfc5e24c',
+    'wp-ruler-drag.xrgb': '7d0d2c5b39d5c32afc4b4007d414de5d76f258e71fb2647bbf13e0e8bc173918',
+    'wp-ruler-units.xrgb': 'a4fa5d8a2ed190f0618d613780673d767bdea3a8dc4cba592cb571cef4d4f687',
+    'wp-word-opened.xrgb': '85d0da24da0c78fdde79c539d0a956a2bc62eb9b0a3d3e45144f05f52db37d01',
+    'wp-word-picture.xrgb': 'fb6a86c6e0a962cac13ec02f2ae1cf8956e052e3a8773764dee1a8612b21bfb3',
 }
 FLAGS = ["-std=c17", "-D_POSIX_C_SOURCE=200809L", "-O1", "-g", "-Wall", "-Wextra", "-Werror", "-Wno-macro-redefined",
          "-fsanitize=address,undefined", "-fno-sanitize-recover=undefined", "-ffunction-sections", "-fdata-sections", "-Wl,--gc-sections"]
@@ -56,7 +59,7 @@ INCLUDES = ["-I", str(ROOT / "apps/wordpad"), "-I", str(ROOT / "apps/libdeskui")
             "-I", str(ROOT / "src/kernel/include")]
 TOOLKIT = ["apps/libdeskui/draw.c", "apps/libdeskui/widgets.c", "apps/libdeskui/list.c", "apps/libdeskui/menu.c",
            "apps/libdeskui/dialog.c", "apps/libdeskui/controls.c", "apps/libdeskui/commdlg.c", "apps/libdeskui/textarea.c", "apps/libdeskui/recent.c", "apps/libdeskui/keymap.c",
-           "apps/desktop/compositor.c", "apps/desktop/theme.c", "apps/libdeskui/icons.c", "apps/libdeskui/icon_map.c"]
+           "apps/desktop/compositor.c", "apps/desktop/theme.c", "apps/libdeskui/icons.c", "apps/libdeskui/icon_map.c", "apps/libdeskui/iconx.c", "apps/libdeskui/fileicon.c"]
 CORE = ["apps/wordpad/rich.c", "apps/wordpad/rtf.c", "apps/wordpad/layout.c"]
 IMPORT = ["apps/wordpad/ole.c", "apps/wordpad/msword.c", "apps/wordpad/write.c"]
 CLIPBOARD = ["apps/libdeskui/clipboard.c", "apps/libdeskui/clipstore.c", "apps/desktop/protocol.c"]

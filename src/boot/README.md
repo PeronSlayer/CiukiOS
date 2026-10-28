@@ -73,6 +73,8 @@ from `elf.inc` and fails when the installed kernel exceeds 75 % of it.
 
 BOOT.CFG is optional, <=127 ASCII bytes, without NUL. Default:
 safe=0 serial=1. Recognized options: safe=1, serial=0, mode=0xNNNN.
+`3d=probe` is passed through for background 3D qualification after the desktop
+has presented; it is independent of the loader's `probe=f0:...` test selector.
 Complete option bytes are copied into the NUL-terminated handoff.
 Safe mode prefers 640×480; an explicitly named mode has priority.
 Without a valid fw_cfg request, SELECT_READY precedes the three-second

@@ -94,6 +94,16 @@ def icon_header(out):
             if (w,h)!=(32,32):raise ValueError('Tango size')
             values=[pixels[i+3]<<24|pixels[i]<<16|pixels[i+1]<<8|pixels[i+2] for i in range(0,len(pixels),4)]
             header.write('static const unsigned int tango_'+key+'[1024]={'+','.join(hex(v)+'u' for v in values)+'};\n')
+        # fx-exeicons: the shell's default icons (CiukiShellIcon, SHGetFileInfo):
+        # the same Tango names the native shell uses (icon_map.c type:unknown,
+        # type:folder, type:folder-open, type:executable), 32 and 16 px.
+        for key,member in {'document':'mimetypes/text-x-generic-template','folder':'places/folder',
+                           'program':'mimetypes/application-x-executable','folder_open':'status/folder-open'}.items():
+            for size in (32,16):
+                w,h,pixels=tango.png_rgba(archive.extractfile(f'tango-icon-theme-0.8.90/{size}x{size}/'+member+'.png').read())
+                if (w,h)!=(size,size):raise ValueError('Tango size')
+                values=[pixels[i+3]<<24|pixels[i]<<16|pixels[i+1]<<8|pixels[i+2] for i in range(0,len(pixels),4)]
+                header.write(f'static const unsigned int tango_{key}{size}[{size*size}]={{'+','.join(hex(v)+'u' for v in values)+'};\n')
 
 def inventory():
     result = {}
@@ -108,7 +118,7 @@ def build(out, base, flags):
     icon_header(objdir)
     flags=[*flags,'-I'+str(core/'user32/compat'),'-I'+str(objdir)]
     sources=sorted((core/'user32').glob('*.c'))+[
-        ROOT/'apps/libdeskui/v3.c',ROOT/'apps/desktop/protocol.c',ROOT/'apps/desktop/keymap.c',
+        ROOT/'apps/libdeskui/v3.c',ROOT/'apps/libdeskui/iconx.c',ROOT/'apps/desktop/protocol.c',ROOT/'apps/desktop/keymap.c',
         core/'services/bytes.c',core/'services/stack.S',core/'advapi32/rpc.c',core/'advapi32/gate.S']
     objects=[];exports={}
     for i,source in enumerate(sources):

@@ -58,6 +58,11 @@ static void test_timer_irq_flags_boundary(void)
         cur.tf.eflags = cur.tf.eax = V86_IF | 2;
         step(v, 13, 0);
         CHECK(!left && v->dpmi.if_armed && !v->monitor.vif && (cur.tf.eax & V86_TF));
+        /* fx-doomwin: the proven site is cached and wants no seed; each
+         * scenario below starts unproven again, so its CLI needs the
+         * boundary the IRQ return keeps. */
+        CHECK(v->dpmi.cli.proved == 1 && !dpmi_seed_wanted(v));
+        dpmi_cli_sites_reset(v);
         /* The same proof survives an actual PM IRQ handler and its IRET. */
         v->dpmi.if_armed = false; v->monitor.vif = true;
         v->dpmi.vec[8] = (struct dpmi_vec){.sel=(uint16_t)cur.tf.cs, .off=0x700};
@@ -70,6 +75,7 @@ static void test_timer_irq_flags_boundary(void)
         CHECK(cur.tf.eip == 0x202 && v->monitor.vif && v->dpmi.decode_eip == 0x200);
         step(v, 13, 0);
         CHECK(!left && v->dpmi.if_armed && (cur.tf.eax & V86_TF));
+        dpmi_cli_sites_reset(v);
         /* A reflected real-mode IRQ preserves the same interrupted proof. */
         v->dpmi.if_armed = false; v->monitor.vif = true;
         v->dpmi.vec[8] = (struct dpmi_vec){DPMI_PM_INT + 8, DPMI_HOST_CS};
@@ -84,6 +90,7 @@ static void test_timer_irq_flags_boundary(void)
         CHECK(in_pm() && cur.tf.eip == 0x202 && v->dpmi.decode_eip == 0x200);
         step(v, 13, 0);
         CHECK(!left && v->dpmi.if_armed && (cur.tf.eax & V86_TF));
+        dpmi_cli_sites_reset(v);
         /* A transfer breaks the forward proof: acquire the IRQ boundary
          * rather than treating bytes embedded in an operand as PUSHF. */
         static const uint8_t jump[] = {0xEB, 0x01, 0x9C, 0x90, 0xFA};
@@ -160,8 +167,18 @@ static void test_timer_call_flags_boundary(void)
         v->dpmi.decode_valid = false; cur.tf.eip = 0x500; step(v, 0x20, 0);
         CHECK(v->dpmi.decode_stack_valid);
         cur.tf.user_esp = sp - w; cur.tf.eip = 0x202; cur.tf.eax = cur.tf.eflags = V86_IF | 2;
+        struct dpmi_cli_stats proof = v->dpmi.cli;
         step(v, 13, 0);
         CHECK(!left && v->dpmi.if_armed && (cur.tf.eax & V86_TF));
+        /* fx-doomwin: a control-flow proof is cached like a forward proof
+         * and restarts no seed demand; its next execution is a hit. */
+        CHECK(v->dpmi.cli.control == proof.control + 1 && !dpmi_seed_wanted(v));
+        v->dpmi.if_armed = false; v->monitor.vif = true; v->dpmi.decode_valid = false;
+        cur.tf.user_esp = sp - w; cur.tf.eip = 0x202; cur.tf.eax = cur.tf.eflags = V86_IF | 2;
+        step(v, 13, 0);
+        CHECK(!left && v->dpmi.if_armed && (cur.tf.eax & V86_TF) &&
+              v->dpmi.cli.hits == proof.hits + 1 && v->dpmi.cli.control == proof.control + 1);
+        v->dpmi.if_armed = false; dpmi_cli_sites_reset(v);
         /* A store could replace a snapshotted root return: never use that
          * cached target, even when it would lead to a save byte pattern. */
         uint8_t changed[] = {0x89, 0x00, 0x58, 0x5A, 0xC3};
@@ -189,6 +206,7 @@ static void test_timer_call_flags_boundary(void)
         cur.tf.user_esp = sp - w; cur.tf.eip = 0x202; cur.tf.eax = cur.tf.eflags = V86_IF | 2;
         step(v, 13, 0);
         CHECK(!left && v->dpmi.if_armed && (cur.tf.eax & V86_TF));
+        v->dpmi.if_armed = false; dpmi_cli_sites_reset(v);   /* fx-doomwin: unproven again */
         /* POP of the call return followed by a different PUSH forfeits the
          * return proof; it cannot lead to a caller's save/CLI by guessing. */
         static const uint8_t forged[] = {0x58, 0x53, 0xC3};

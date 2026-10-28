@@ -1,6 +1,7 @@
 /* Checked native COM character I/O; no namespace lock across device waits.
  * SPDX-License-Identifier: GPL-2.0-only */
 #include <ciuki/kernel.h>
+#include <ciuki/security_device.h>
 #include <ciuki/com.h>
 #include <ciuki/files.h>
 #include <ciuki/signal.h>
@@ -40,6 +41,7 @@ int com_rw_user(struct file_description *d, uint32_t address, uint32_t bytes, bo
 {
     if (bytes>CIUKI_IO_MAX) return -EINVAL;
     if (write ? (d->flags&O_ACCMODE)==O_RDONLY : (d->flags&O_ACCMODE)==O_WRONLY) return -EBADF;
+    if (!security_device_session(proc_current()) && !security_device_system(proc_current())) return -EACCES;
     if (!bytes) return 0;
     struct com_operation *o=kzalloc(sizeof(*o)); if (!o) return -ENOMEM;
     o->description=d; o->process=proc_current(); d->object.retain(&d->object);
@@ -69,6 +71,8 @@ int com_devctl(struct process *p, int32_t fd, uint32_t op, uint32_t address, uin
 {
     struct file_description *d=file_fd(p,fd);
     if (!d || d->node->kind!=PX_COM) return -EBADF;
+    if (!security_device_session(p) && !security_device_system(p)) return -EACCES;
+    if (op==COM_SET_MOUSE && !security_device_admin(p)) return -EPERM;
     union { struct ciuki_com_status status; struct ciuki_com_line line; struct ciuki_com_modem modem;
         struct ciuki_com_owner owner; struct ciuki_com_mouse mouse; } record;
     unsigned size=op==COM_GET_LINE || op==COM_SET_LINE ? sizeof(record.line) :
@@ -77,6 +81,7 @@ int com_devctl(struct process *p, int32_t fd, uint32_t op, uint32_t address, uin
     if (!size) return -ENOTTY;
     if (bytes!=size) return -EINVAL;
     int e=copy_from_user(&record,address,bytes); if (e) return e;
+    if (!security_process_live(p) || (op==COM_SET_MOUSE && !security_device_admin(p))) return -EPERM;
     e=com_control(d->node->drive,d->com_generation,op,&record,bytes,(d->flags&O_ACCMODE)!=O_RDONLY);
     if (!e && (op==COM_GET_LINE || op==COM_GET_STATUS || op==COM_GET_OWNER)) e=copy_to_user(address,&record,bytes);
     return e;

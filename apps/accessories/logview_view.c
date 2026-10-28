@@ -37,13 +37,15 @@ void lv_show(struct lv_app *a, int index)
     a->selected = index;
     char *bytes = malloc(LV_TEXT_MAX);
     size_t length = 0; unsigned long total = 0;
-    int error = bytes ? lv_read_tail(e->path, bytes, LV_TEXT_MAX, &length, &total) : -ENOMEM;
+    int error = bytes ? lv_read_entry(e, bytes, LV_TEXT_MAX, &length, &total) : -ENOMEM;
     if (error) {
         char note[512];
-        if (error == -ENOENT)
+        if (error == -EPERM || error == -EACCES)
+            snprintf(note, sizeof(note), "%s is a system log.\n\nSystem logs can be read by administrators only.", e->path);
+        else if (error == -ENOENT)
             snprintf(note, sizeof(note), "There is no %s yet.\n\n%s is created by %s.", e->title, e->path,
                      e->kind == LV_BOOT ? "the system at startup" : e->kind == LV_NETSURF ? "NetSurf when a page fails to load" :
-                     e->kind == LV_SETUP ? "Setup" : "the system when a program faults");
+                     e->kind == LV_SETUP ? "Setup" : e->kind == LV_SYSTEM ? "the system" : "the system when a program faults");
         else snprintf(note, sizeof(note), "%s cannot be read: %s", e->path, strerror(-error));
         set_text(a, note, strlen(note));
         snprintf(a->status, sizeof(a->status), "%s (not available)", e->title);

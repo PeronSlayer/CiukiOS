@@ -17,3 +17,10 @@ uint32_t w32_server_exchange(const void *in, uint32_t n, void *out, uint32_t cap
         *used = 0;
     return hook ? hook(in, n, out, cap, used) : 1062;
 }
+/* sec-user-05: ntdll's RB_MACHINE_ID export (server.c). H1 has no REGISTRY
+ * broker, so the per-install machine SID is unavailable, as without the
+ * service on a real system: ERROR_SERVICE_NOT_ACTIVE, never a made-up SID. */
+uint32_t w32_registry_machine(uint32_t out[8]) {
+    (void)out;
+    return 1062;
+}

@@ -80,6 +80,27 @@ BOOL W32API CiukiShellNotify(DWORD action,void *data,BOOL wide) {
   if (ok && (flags&16u)) ok=u32_wire(w,DESK_V3_TRAY_BALLOON,balloon,16+(UINT)title+(UINT)text,-1);
   return ok;
 }
+/* fx-q3vise: ShellExecute(Ex) of a folder (sdk/win32/shell/execute.c).
+ * Windows 98 shows the folder in an Explorer window; CiukiOS shows it in
+ * Files. The shell passes its folder window (a top-level window of this
+ * thread, which carries the Win32 identity on the desktop wire) and the
+ * folder as an absolute POSIX path; the desktop starts Files there
+ * (DESK_V3_LAUNCH "files", which it accepts from a Win32 window for an
+ * absolute folder path only: apps/desktop/client.c). The ANSI path is sent
+ * as UTF-8 and is never truncated. */
+BOOL W32API CiukiShellOpenFolder(HWND h,const char *path) {
+  U32_GUARD;
+  struct u32_window *w=u32_window(h);
+  if (!w || w->parent || !w->wire || w->tid!=u32_tid()) return u32_fail(1400);
+  if (!path || path[0]!='/' || !path[1]) return u32_fail(87);
+  uint8_t b[13+DESK_ARG_MAX+4];
+  /* u32_utf8 stops before a scalar that would not fit: a result this close
+   * to the capacity may have lost the end of the path. */
+  UINT n=u32_utf8((char *)b+13,DESK_ARG_MAX+4,path);
+  if (n>DESK_ARG_MAX) return u32_fail(206);
+  desk_put32(b,5); w32_copy(b+4,"files",5); desk_put32(b+9,n);
+  return u32_wire(w,DESK_V3_LAUNCH,b,13+n,-1);
+}
 BOOL W32API FlashWindow(HWND h,BOOL invert) {
   U32_GUARD;
   struct u32_window *w=u32_window(h);

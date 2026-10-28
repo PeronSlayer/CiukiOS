@@ -95,14 +95,7 @@ void channel_release(struct desktop_description *d) { (void)d; }
 #ifndef FILES_TEST_OWN_PLATFORM
 uint32_t pmm_alloc_contig(uint32_t count)
 {
-    if (fail_alloc()) return 0;
-    for (unsigned i=1;i+count<=HOST_PAGES;i++) {
-        unsigned n=0; while (n<count && !allocated[i+n]) n++;
-        if (n!=count) continue;
-        for (n=0;n<count;n++) { allocated[i+n]=true; pages_used++; memset(P2V((i+n)*PAGE_SIZE),0xa5,PAGE_SIZE); }
-        return i*PAGE_SIZE;
-    }
-    return 0;
+    return host_alloc_contig(count);
 }
 unsigned pci_count(void) { return 0; }
 const struct pci_func *pci_get(unsigned i) { (void)i; return 0; }
@@ -1531,7 +1524,7 @@ static void test_setup_metadata(void)
     struct ciuki_setup_fat q={.version=CIUKI_SETUP_FAT_VERSION,.size=sizeof(q),.cluster_index=CIUKI_SETUP_INDEX_NONE};
     CHECK(!ua_write(client->memory,USER,&q,sizeof(q)));
     CHECK(call(CIUKI_SYS_DEVCTL,fd,CIUKI_SETUP_FAT_QUERY,USER,sizeof(q),0)==-EPERM);
-    client->setup_capability=true;
+    client->setup_capability=true; client->subject->role=CIUKI_SECURITY_ROLE_SETUP;
     CHECK(call(CIUKI_SYS_DEVCTL,fd,CIUKI_SETUP_FAT_QUERY,USER,sizeof(q),0)==-EPERM);
     setup_test_mode=true;
     CHECK(!call(CIUKI_SYS_DEVCTL,fd,CIUKI_SETUP_FAT_QUERY,USER,sizeof(q),0));
@@ -1573,7 +1566,7 @@ static void test_setup_metadata(void)
     CHECK(!ua_write(client->memory,USER,&net,sizeof(net)));
     CHECK(!call(CIUKI_SYS_DEVCTL,netfd,CIUKI_SETUP_NET_QUERY,USER,sizeof(net),0));
     CHECK(!ua_read(client->memory,&net,USER,sizeof(net)) && net.count==0);
-    client->setup_capability=false;
+    client->setup_capability=false; client->subject->role=0;
     CHECK(call(CIUKI_SYS_DEVCTL,netfd,CIUKI_SETUP_NET_QUERY,USER,sizeof(net),0)==-EPERM);
     CHECK(!file_close(client,netfd));
     CHECK(file_setup_clock(client,&clock)==-EPERM);
@@ -1704,15 +1697,15 @@ static void test_file_info(void)
     CHECK(media_label_encode("\xc3\xa8", padded) == -EINVAL && media_label_encode("", padded) == 0 && !memcmp(padded, "           ", 11));
     struct ciuki_media_label request={.version=CIUKI_MEDIA_VERSION,.size=sizeof(request),.drive=2};
     CHECK(!ua_write(client->memory,USER2,&request,sizeof(request)));
-    CHECK(media_label(NULL,MEDIA_GET_LABEL,USER2,sizeof(request)-1)==-EINVAL);
-    CHECK(media_label(NULL,MEDIA_GET_LABEL,UINT32_MAX-8,sizeof(request))==-EFAULT);
-    CHECK(media_label(NULL,MEDIA_GET_LABEL,USER2,sizeof(request))==-ENOENT);
+    CHECK(media_label(client,client->subject,NULL,MEDIA_GET_LABEL,USER2,sizeof(request)-1)==-EINVAL);
+    CHECK(media_label(client,client->subject,NULL,MEDIA_GET_LABEL,UINT32_MAX-8,sizeof(request))==-EFAULT);
+    CHECK(media_label(client,client->subject,NULL,MEDIA_GET_LABEL,USER2,sizeof(request))==-ENOENT);
     request.version=1; CHECK(!ua_write(client->memory,USER2,&request,sizeof(request)));
-    CHECK(media_label(NULL,MEDIA_GET_LABEL,USER2,sizeof(request))==-EOPNOTSUPP);
+    CHECK(media_label(client,client->subject,NULL,MEDIA_GET_LABEL,USER2,sizeof(request))==-EOPNOTSUPP);
     request.version=CIUKI_MEDIA_VERSION; request.drive=26; CHECK(!ua_write(client->memory,USER2,&request,sizeof(request)));
-    CHECK(media_label(NULL,MEDIA_GET_LABEL,USER2,sizeof(request))==-EINVAL);
+    CHECK(media_label(client,client->subject,NULL,MEDIA_GET_LABEL,USER2,sizeof(request))==-EINVAL);
     request.drive=2; memset(request.label,'A',sizeof(request.label)); CHECK(!ua_write(client->memory,USER2,&request,sizeof(request)));
-    CHECK(media_label(NULL,MEDIA_SET_LABEL,USER2,sizeof(request))==-EINVAL);
+    CHECK(media_label(client,client->subject,NULL,MEDIA_SET_LABEL,USER2,sizeof(request))==-EINVAL);
     for (unsigned i = 0; i < mounted_volumes; i++) {
         struct ciuki_media_label label = {.drive = volume_drive(i)};
         int label_error=media_label_locked_apply(&vfs, &label, "DATA DISK  ");
@@ -1743,6 +1736,23 @@ static void test_file_info(void)
     CHECK(media_label_locked_apply(&vfs, &none, 0) == -ENOENT);
     puts("files G6 devices/synthetic nodes, volume labels (BS_VolLab + root entry, removal, rules, read-only) PASS");
 }
+static void test_security_cwd(void)
+{
+    struct process *boot=proc_supervisor();void *saved=boot->cwd;
+    void (*saved_retain)(void *)=boot->cwd_retain, (*saved_release)(void *)=boot->cwd_release;
+    boot->cwd=space->root;px_retain(boot->cwd);boot->cwd_retain=px_retain;boot->cwd_release=px_release;
+    struct process *child;CHECK(!proc_prepare(client,&child));
+    CHECK(!security_bootstrap_desktop(child));
+    CHECK(security_credential(child)->uid==1000 && !security_system(child) && !child->cwd);
+    CHECK(px_security_cwd(child,"relative")==-EINVAL && !child->cwd);
+    CHECK(px_security_cwd(child,"/missing-security-profile")==-ENOENT && !child->cwd);
+    CHECK(!px_security_cwd(child,"/") && child->cwd==space->root);
+    CHECK(px_security_cwd(child,"/")==-EINVAL);
+    uint32_t id=security_credential(child)->session_id,state;
+    proc_discard(child);CHECK(!security_session_end(id,true,&state) && state==3);
+    px_release(boot->cwd);boot->cwd=saved;boot->cwd_retain=saved_retain;boot->cwd_release=saved_release;
+    puts("files security cwd: uid 1000 bootstrap, fresh root lookup, relative/missing/second assignment denied, zero leaked references PASS");
+}
 int main(int argc, char **argv)
 {
     CHECK(argc==3 || argc==4 || argc==5);
@@ -1757,6 +1767,7 @@ int main(int argc, char **argv)
     CHECK(!files_attach(&vfs,&space));
     client_thread=make_process(proc_supervisor(),&client); g_current=client_thread->task; g_current->state=T_RUNNING;
     client->cwd=space->root; px_retain(client->cwd); client->cwd_retain=px_retain; client->cwd_release=px_release;
+    test_security_cwd();
     test_paths(); test_fds(); test_io(); test_namespace(); test_syscalls(); test_read_interruption(); test_peer_walk_copy(); test_lifetime_and_legacy(); test_overwrite_ctime(); test_concurrent_append(); test_clocks(); test_net_node(); test_media_node();
     test_com_nodes(); test_lpt_nodes(); test_uname(); test_optical_native();
     test_launch_reads(); test_launch_throughput(); test_launch_sparse(); test_launch_pe_view();

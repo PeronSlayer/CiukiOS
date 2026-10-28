@@ -139,7 +139,7 @@ blend and alpha test. All unimplemented entries select software. The existing
 | 9 mach64 | Mesa 7.11.2 `mach64`, historical out-of-tree DRM `mach64`, [Utah-GLX](https://utah-glx.sourceforge.net/) | Rage Pro: Mesa exposes 2 stages, 1024 textures, D16, B/A; one uploaded mip level | MMIO/GUI FIFO/DMA; not implemented; chips without triangle setup stay software |
 | 10 unichrome | Mesa 7.11.2 `unichrome`, Linux `via` | 2 units, default 512 textures (1024 with excess_mipmap), D16/D24S8/D32, B/A | MMIO/AGP command regulator; not implemented |
 | 11 sis | Mesa 7.11.2 `sis`, Linux `sis` | SiS300 2 units, 1024 textures, D16/D24/D32, B/A; 315 is not covered by this driver | MMIO/AGP queue; neither generation implemented |
-| 12 nv2d | Mesa classic `nouveau` nv04/nv10/nv20, Linux `nouveau`; 21.3 mainline then Amber | TNT 2 / GeForce1–2 2 / GeForce3–4 4 units; 1024/2048/4096 textures, D16/D24S8, B/A | PFIFO PIO/DMA push buffers; not implemented |
+| 12 nv2d | Mesa classic `nouveau` nv04/nv10/nv20, Linux `nouveau`; 21.3 mainline then Amber | TNT 2 / GeForce1–2 2 / GeForce3–4 4 units; 1024/2048/4096 textures, D16/D24S8, B/A | PFIFO PIO/DMA push buffers; software-only under f7-26, complete PIO 3D/context lifecycle not established ([evidence](f7-family-nvidia-nv04-nv20.md)) |
 | 13 riva128 | [Utah-GLX](https://utah-glx.sourceforge.net/), NVIDIA public NV3 class references; no Mesa classic DRI shipping claim | 1 unit, 1024 textures, D16, B/A restrictions need qualification | PIO FIFO; not implemented |
 | 14 i740 | Utah-GLX i740; no supported Mesa classic DRI/Linux DRM pairing established here | 1 unit, 1024 textures, D16, B/A restrictions need qualification | MMIO/FIFO/AGP; not implemented |
 | 15 s3virge | historical Mesa `s3v` / Utah-GLX; no maintained Linux DRM module; last release not established | 1 unit, 128/256 texture limits depend on revision, D16, restricted B/A | MMIO FIFO; not implemented |
@@ -319,240 +319,45 @@ Mesa 7.7 `savageDDDepthFunc_s4`, `savage_3d_reg.h`, `tileInfo_pro` and X.Org
 No additional register writes, hardware caps or silicon qualification follow
 from this host-model coverage.
 
-### f7-20 amendment: per-family backend model and family plan (2026-10-26)
+### f7-14 implementation note (2026-10-26): native API and Graphics Demo consumer
 
-Owner decisions: 2026-10-25, "the contract must be 3D for all integrated GPU
-families with drivers"; 2026-10-26 16:49, close the whole 3D question, the
-other families follow the Savage. Directive:
-[f7-20](../directives/f7-20-other-families.md). This section is the umbrella
-the per-family design documents `f7-family-<slug>.md` (f7-21 and later) plug
-into. It changes no code and advertises no hardware feature: every family
-below stays `R3D_NOT_IMPLEMENTED` until its own backend, fake engine and
-boot qualification exist, and every descriptor still advertises zero
-hardware features until the current boot's qualification passes on the
-real chip. Research date for this section: **2026-10-26** (`date` on the
-workstation). Only the Savage can be tested on real hardware now; QEMU
-emulates none of these 3D engines (its `vmware-svga` has no SVGA3D either,
-see the vmwaresvga row).
+[f7-14](../directives/f7-14-native-gl-hardware.md) implements the native half
+of section 7 and the f7-05 consumer with the native OpenGL library instead of
+a separate `ciuki3d_` API: `libgl` builds the opengl32 engine, journal,
+admission and provider sources, so native and Win32 programs share one GL
+semantics, capability snapshot and whole-context fallback (7.2). The backend
+policy of 7.1 is `ciuki_gl_set_backend` (automatic, software, hardware with
+`-ENODEV` when unavailable); completion accounting is `ciuki_gl_status`;
+full screen is the common lease of section 6 (v2 `DESK_LEASE`, kernel grant
+to the desktop's channel peer) presented by `ciuki_gl_present` as `gpu-copy`
+or `cpu-copy`. Graphics Demo gains the backend, native-resolution and
+full-screen controls and logs completed-copy FPS with GPU/CPU frame counts,
+refusals and fallbacks. Decisions and evidence:
+[opengl-software.md](opengl-software.md), [graphics-demo.md](graphics-demo.md),
+[f7-14 validation](../validation/f7-14-native-gl.md). The T2 textured scene
+(floor, wall, eight cubes) is not part of f7-14.
 
-#### A. The per-family backend model
+### f7-27 integration 6: Mach64 backend (2026-10-28)
 
-A family backend is one implementation of `struct render3d_backend`
-(`render3d.h`) nominated by the family's existing `display_driver.render3d`
-descriptor, exactly as `s3savage_register.c` nominates `savage3d_backend`.
-The family-neutral service (`render3d.c`: contexts, ring, fences, resource
-lifetime, admission bounds, scalar fallback), the copied transport
-(`render3d_transport.c`), the durable attempt markers (`attempt.c`), the
-native/opengl32 adapters and the scalar reference (`render3d_scalar.c`) are
-shared and never duplicated per family. A backend owns only what the engine
-makes different. Each backend consists of the following facets; a family
-design document must cover every one, with file:line citations into its
-pinned sources, before its code is written:
+The [Mach64 family design](f7-family-ati-mach64.md) records the existing
+Rage Pro/Mobility backend, register sources, Q1–Q4 probes and containment
+rules. The descriptor is `R3D_UNQUALIFIED`; only qualification for the
+current device generation can expose capabilities. Host register models
+provide no silicon qualification. CPU MMIO and the claimed local VRAM heap
+remain the only transport and storage; no AGP or bus-master DMA is enabled.
 
-| Facet | Contract (same for every family) | Savage reference |
-| --- | --- | --- |
-| Nomination | `render3d_family` in the 2D driver's registration unit; `status` moves from `R3D_NOT_IMPLEMENTED` to `R3D_UNQUALIFIED` only when `backend` is set. The existing 2D PCI match table is authoritative; a backend never widens it. | `s3savage_register.c:9` |
-| Device record | Private `<family>3d_device`: engine pointer, memory callbacks (read/write/enter/leave, owner-only), claimed heap extent, generation, `qualified/probing/locked/lost`, fullsize/perspective qualification flags, counters (`packets/triangles/copies`), `failed_phase`, expected/actual/guard records. No client ever sees device addresses. | `savage3d.h` `struct savage3d_device` |
-| Validation | `validate()` refuses every state the engine cannot express or the backend has not qualified **before** any emission: compare functions, blend factors, combine modes, filters, texture formats/sizes, REPEAT ranges, W range, target sizes, work bound. Refusal selects the scalar path for the whole context (whole-context fallback), never a partial hardware pass. | `savage3d.c` validate, `savage-fullsize-admission.md` |
-| Layout | `layout()` computes padded pitches, tiles/subtiles, mip offsets and guard pages for colour, depth and textures; pure functions, host-tested against independent fixtures. | `savage3d_texture_offset`, `savage3d_mip_offset`, `savage3d_plan_vram` |
-| Encoders | Pure packet/register encoders (vertex serialization, state image, clear, copy) with integer-only arithmetic (Q16.16 inputs, round-ties-to-even IEEE conversion where the engine takes floats). They are the fixtures the fake engine decodes. | `savage3d_triangle_packet`, `savage3d_hw_triangle_packet` |
-| Transport | Bounded submission with the existing idle signature, deadline, read cap and dead-MMIO detection; a watchdog on every wait; both-engine drain before an event/fence publishes. CPU PIO/MMIO first. **AGP, bus-master DMA and host-memory command rings stay unavailable** until a separate transport directive (unchanged rule). | `savage2d` BCI transport, `render3d_transport.c` |
-| Fences | Software 64-bit generation/sequence/ordinal fences as in the service; the engine's own event/tag mechanism only proves completion, it never authenticates a receipt. Zero or stale engine tags never complete. | lead amendment 2 |
-| VRAM | One disjoint heap claimed from the registry snapshot above the 2D lease and below cursor/firmware/COB reserves, after excluding every live MMIO reservation page-wise; guard pages on both sides of every allocation; the mode proposal must fit or hardware is disabled for that mode. Texture pool minimum 256 KiB; fenced upload and LRU eviction with canonical RAM shadows. | `savage3d_plan_vram`, `savage3d_mode_heap` |
-| Fake engine | A host model decoding exactly the packets/registers the encoders emit, rendering through an independent expected-pixel path (not the production scalar renderer), with guard checking, stuck-clock/dead-MMIO/FIFO-full models and the 63 feature-flag combinations. | `tests/host/savage3d_backend_test.c` and `.inc` fixtures |
-| Boot qualification | Phases Q1–Q4 of section B, run by the common orchestration (f7-13's background, budgeted job when merged; until then the driver's `record` hook that the lead adapts). Writes only inside the claimed heap; save/restore of every touched register on every path. | `savage3d_probe`, `savage3d_fullsize_probe`, 23 precision phases |
-| Admission | `qualified()` per device generation and mode; framebuffer-format predicate; work bound (`max_pixel_work`, private interface version 2) with batch splitting; whole-context fallback; `3d=probe`/marker policy of section B. | f7-11 amendments 4–5 |
-| Quarantine and loss | Engine, guard or restore failure quarantines both 2D and 3D domains, retains the marker, allocations and claims; mode change/revocation closes admission and cancels queued work before mappings go. | `savage3d_owner.c`, `render3d_device_lost` |
-| Capability snapshot | `ciuki_r3d_caps` filled from **implemented and qualified** features only; the family's potential units/sizes are research metadata. opengl32 and native GL consume the same snapshot. | `render3d_backend_caps` |
-| Observability | `[3d] probe phase=... elapsed_us=...` serial/boot-log records, counters in the display driver's own records (family names stay inside the driver tree, DM12 `tests/host/test_display_driver_names.py`). | `klog("[3d] ...")` in `savage3d_owner.c` |
+The private backend's optional `whole_context_fallback` policy preserves
+Mach64's AUTO-context latch after a refused state; it defaults to false for
+the other backends. Mach64 synchronizes its attachments during execute and
+has no on-demand `download` hook. Integration 6's reservation, scanout and
+download hooks and the qualified Savage implementation remain intact.
 
-File layout convention: `src/kernel/drivers/video/<family>/<family>3d.c`,
-`<family>3d.h`, `<family>3d_owner.c`, `<family>3d_precision.h`;
-`tests/host/<family>3d_backend_test.c` plus `.inc` fixtures;
-`docs/design/f7-family-<slug>.md`; durable marker key `3d-<family>` with the
-detected vendor/device. Generic code (`render3d*.c`, opengl32, native GL,
-the display registry) stays free of family names and family policy.
-
-#### B. Common boot qualification and admission rules
-
-These rules bind every family, including the Savage after f7-13:
-
-1. **Off the startup path, bounded.** Qualification is a background job on
-   a low-priority worker after the desktop is up, with a total wall-clock
-   budget and per-phase deadlines, yielding between chunks, never holding
-   the presenter or display locks across CPU work and never leaving IRQs
-   off beyond the existing bounded engine windows. Budget overrun refuses
-   admission cleanly (restore, no quarantine of a healthy engine, a record
-   of why). The engine stays in software meanwhile.
-2. **Refuse before the first write** when any prerequisite is missing:
-   pinned sources for every register used, registry claim of the heap,
-   durable marker store, a fresh (not retained) marker, the exact
-   device/revision match, a supported mode and framebuffer format.
-3. **Marker semantics.** The marker `3d-<family>`+vendor/device is written
-   before the first engine write and cleared only after a successful
-   restore. A retained marker (a probe that never finished) disables the
-   next probe until an administrator clears it (`display_attempt_marker`
-   path). Qualification is per boot; nothing persists a "qualified" state.
-4. **Containment.** Every write lands inside the claimed heap or in
-   registers whose previous value was read and is restored on every path
-   (success, refusal, timeout, fault). Scanout, streams, clocks, PLLs,
-   memory controller and bus-mastering are never touched. Guard pages
-   before and after every probe surface are checked after every phase.
-5. **Phases.** Q1 minimum: one <=64x64 colour+D16 target, one Gouraud
-   triangle, one textured triangle, clear, copy into an owned linear
-   buffer; tolerances +/-2 channel levels at the Gouraud sample, +/-1 D16;
-   missing coverage, wrong quadrant, guard damage, copy mismatch or failed
-   restore is an error. Q2 full-size: the mode-sized scenes of f7-11
-   (clear, textured, perspective, copy) with chunked readback and
-   independent restoration, admitting the current mode only. Q3 precision
-   envelope: the 23 sampling phases of f7-11 (filter fractions, mip LOD,
-   two stages, alpha test, blend factors, REPEAT/large coordinates)
-   against the §8.2 tolerances; a family may reduce its claims honestly
-   (fewer advertised features) but not its tolerances. Q4 admission: the
-   framebuffer-format predicate, `max_pixel_work`, texture pool size and
-   the whole-context fallback latch become active for this boot only.
-6. **No admission without qualification on the real chip.** Host fake
-   engines prove transport/layout/semantics only. A family with no owner
-   hardware stays inert in every image until an owner with that card runs
-   the probe and the lead records the evidence (image SHA-256, serial
-   capture, `[3d]` records).
-7. **Transport policy.** CPU-fed MMIO/PIO submission first for every
-   family; AGP/DMA engines (SiS AGP command queue, VIA AGP regulator,
-   mach64 bus-master pseudo-DMA, Intel/ATI/NVIDIA host rings) are research
-   notes until a separate transport directive qualifies them.
-8. **Same evidence everywhere.** Differential tests against the scalar
-   reference over the same case families (flat, Gouraud, textured; depth
-   functions; blend and alpha; two stages; mipmaps; perspective), packet
-   and validator fuzzing, probe containment, software fallback on an
-   unqualified chip, the H1 Quake III replay through the family's fake
-   engine with GPU/CPU counts, and the existing suites green.
-
-#### C. Inventory and decisions
-
-Prevalence is the lead's qualitative judgement for assembled 1998–2004 PCs
-and the two qualified laptops (`hardware-baseline.md`), not a measured
-survey: A = very common (integrated OEM or best-selling add-in), B = common,
-C = niche or outside the window. "Q3" summarizes what Quake III's state set
-(f7-11) needs from the engine: two stages or two-pass fallback, textures
->=256 (512 preferred), alpha blend (ONE/ONE, SRC_ALPHA, DST_COLOR/ZERO),
-alpha test, D16 with LESS/LEQUAL and write mask, mip filters, REPEAT.
-
-| Family (2D driver, matched IDs) | 3D engine | Primary sources (pinned) | Prevalence | Q3 fit | Decision |
-| --- | --- | --- | --- | --- | --- |
-| s3savage (5333:8c2e and Savage4-class table) | 2 units, 2048 textures, D16 (D24/S8 under f7-12 research), B/A | Mesa 7.7/7.11.2 `savage`, Linux v6.1 `savage`, X.Org savage 2.3.9 | A (T23) | full | **backend merged** (f7-02..f7-11); f7-12/f7-13/f7-14 in flight |
-| i810 (8086 i810/i815 table) | 2 units, 2048 textures, D16, B/A | Mesa 7.11.2 `i810` (`i810context.c`), Linux v6.1 `i810` | A (1999–2001 OEM) | full | **launched f7-21** |
-| intel2d (830M–865G) | 4 units, 2048 textures, D16/D24S8, B/A | Mesa 7.11.2 `i915` i830 files, Linux v6.1 i915 gen2, xf86-video-intel `i830_render.c` | A (2002–2004 OEM/laptops) | full | **launched f7-22** |
-| rage128 (1002 Rage 128/Pro/Mobility 128) | 2 units, 1024 textures, D16/D24, B/A | Mesa 7.11.2 `r128`, Linux v6.1 `r128`, xf86-video-r128 | B (1999–2000) | full | **launched f7-23** |
-| radeon2d (R100/R200) | R100 3 / R200 6 units, 2048 textures, D16/D24S8, B/A | Mesa 7.11.2 `radeon`/`r200`, Linux v6.1 `radeon` | A (2000–2004) | full | **launched f7-24**; R300+ separate descriptors |
-| matrox (G200–G550) | G200 1 / G400+ 2 units, 2048 textures, D16/D24/D32, B/A | Mesa 7.11.2 `mga`, Linux v6.1 `mga`, xf86-video-mga | B (1998–2001 OEM) | full on G400+ | **launched f7-25** |
-| nv2d (NV04–NV20) | 2/2/4 units, 1024/2048/4096 textures, D16/D24S8, B/A | Mesa 7.11.2 `nouveau` (nouveau_vieux), Linux v6.1 nouveau nv04/nv10, envytools rnndb | A (largest add-in share 1998–2004) | full | **launched f7-26** |
-| mach64 (1002:4742/4744/4749/4750/4751/4c4d/4c4e/4c52/4c53 = Rage Pro, LT Pro, Mobility P/M/L) | Rage Pro setup engine: 2 exposed stages (one uploaded mip level), 1024 textures, D16, B/A | Mesa 7.11.2 `mach64` (`mach64_context.c:188-195`, `mach64_reg.h`, `mach64_tris.c:422`, `mach64_state.c:911`); DRM mach64 out of mainline: FreeBSD `release/8.4.0` `sys/dev/drm/mach64_{dma,state,drv,irq}.c`, freedesktop drm git before the 2009-11-17 "Drop shared-core" commit; [DRI ATIMach64](https://wiki.freedesktop.org/dri/ATIMach64/) (all chips with triangle setup; VT/Rage II/LT excluded); Utah-GLX: "partially works, DMA code needs fixing" | A (1998–2000 OEM desktops and laptops; **the owner's E500 is 1002:4C4D**) | partial: two-pass lightmaps, no mip chain, 1024 textures; demo/Quake-II class | **backend, directive f7-27**; first of the new ones because the E500 can qualify it |
-| vmwaresvga (15ad:0405) | SVGA3D (VGPU9 class): host caps decide units/sizes/formats; D16/D24S8, B/A, shaders not needed | Linux v6.1 `vmwgfx/device_include/svga3d_{reg,cmd,types,limits,devcaps,surfacedefs}.h`, `svga_reg.h`; Mesa 21.3.9 Gallium `svga` (`svga_cmd.c`, `svga_winsys.h`); VirtualBox `src/VBox/Devices/Graphics/DevVGA-SVGA3d*.cpp`, `DevVGA-SVGA-cmd.cpp`; local `svga_reg.h` (X.Org 8f0cf7c: `SVGA_CAP_3D` l.438, `SVGA_FIFO_3D_HWVERSION` l.506) | A for the release VM images (VirtualBox/VMware); QEMU `vmware_vga.c` reports no `SVGA_CAP_3D` and decodes only `SVGA_CMD_*` 0–30 | full (host GPU) | **backend, directive f7-31**; the only family testable without silicon (VirtualBox VMSVGA), not on QEMU |
-| tdfx (121a:0005 Voodoo3, 121a:0009 Voodoo4/5; Banshee 121a:0003 not matched) | Voodoo3 2 units, 256 textures, 16-bit colour, D16; VSA-100 2 units, 2048 textures, 32-bit, D24S8; B/A | Mesa 7.11.2 `tdfx` (`tdfx_context.c:283-289`, `tdfx_context.h:187-203`, Glide calls `grDrawTriangle`, `grTexDownloadMipMapLevel`, `grBufferClear`); register programming in Glide3: [sezero/glide](https://github.com/sezero/glide) `glide-devel-sezero` @ `2f226f0f9225ce8ee83e6a4a7042981e719d19ee` (`glide3x/h3/glide3/src/{fifo.c,gglide.c,gdraw.c,gtex.c,gtexdl.c,gsst.c,distate.c,fxglide.h,fxcmd.h,gsstdef.h}`, `glide3x/h5/...`); Linux v6.1 `tdfx` is map management only | B (1998–2000 gamer add-in) | Voodoo3: 256 textures and 16-bit only (Q3 playable at 16 bpp with picmip); VSA-100 full | **backend, directive f7-28**; Banshee only after the 2D match is extended |
-| sis, SiS 300 generation (1039:0300/5300/6300 = 300/305, 540, 630) | 2 units, 1024 textures, D16/D24/D32, B/A (6326 is not matched) | Mesa 7.11.2 `sis` (`sis_context.c:242-250`, `sis_reg.h`, `sis_tris.c:127-137` MMIO vertex path, `:935-1012` AGP/PCI flush, `sis_context.h:425-429` queue wait); Linux v6.1 `sis` is memory management only; X.Org sis (Winischhofer) 2D | B (1999–2001 budget OEM boards) | full at 1024 textures | **backend, directive f7-29** |
-| sis, SiS 315 generation (1039:0310/0315/0325/5315/6325/0330/6330) | 315/330 Xabre engine exists | no open 3D driver ever shipped: [DRI SiS](https://wiki.freedesktop.org/dri/SiS/) "315 and Xabre series are not supported", kernel `sisfb` "DRI/DRM not supported for 315/330" | B (2001–2003 budget) | — | **software**: no usable sources |
-| unichrome (1106:3122 CLE266, 7205 KM400, 3108 K8M800, 3118 PM800/CN400) | 2 units, 512 textures (1024 with `excess_mipmap`), D16/D24S8/D32, B/A | Mesa 7.11.2 `unichrome` (`via_context.c:557-563`, `via_context.h:48-51` CLE266/KM400/K8M800/PM800, `via_3d_reg.h` 1652 lines, `via_ioctl.c:676-728` CMDBUFFER/PCICMD, `:802` flush, `via_state.c`); Linux v6.1 `via/via_dri1.c` (command verifier, PCI and AGP paths) and `via_3d_reg.h`; libdrm 2.4.15 `shared-core/via_3d_reg.h` | B (2001–2004 budget boards, mini-ITX) | full at 512/1024 textures | **backend, directive f7-30** |
-| s3virge (5333:5631 ViRGE, 883d VX, 8a01 DX/GX, 8a10 GX2, 8c01 MX, 8c03 MX+) | S3d engine: 1 unit, 256 textures (revision-dependent), D16, flat/Gouraud, perspective, bilinear, alpha blend, fog; no multitexture | [ViRGE Integrated 3D Accelerator databook](https://vgamuseum.info/images/doc/s3/virge.pdf) (sha256 `9178eb4f…d34f`: §15.4 S3d Engine Programming, 15.4.5.2 3D Triangle Drawing, 15.4.6 Z-Buffering, 15.4.8 Pixel Color Generation; §19 S3d Engine Registers, 19.4 3D Registers; App. B.4); Mesa 6.5.3 `s3v` (26 files, archive sha256 `4818e4bad10155dcf0507c5290aec38e21aa029a260fd272754baddf23a06caf`; present in Debian 6.5.1 and 7.0.3, absent in 7.7.1); Utah-GLX ViRGE xfree3-only | C (1996–1998; still present in 1998 budget PCs) | no: single stage, 256 textures, 1996-class fill rate; demo class only | **backend feasible, low value: directive f7-32, optional and last** |
-| trident (1023:9880 Blade3D, 8400/8420/8500/8520/8600/8620 CyberBlade, 8820 XP) | Blade3D/CyberBlade engine exists | Mesa 6.5.3 `trident` (8 files, unfinished); [DRI Trident](https://wiki.freedesktop.org/dri/Trident/): "not yet finished", DRM/DDX on a dead CVS branch, CyberBLADE i1 spec only on a defunct VIA page | B (1999–2001 cheap laptops) | — | **software**: no complete source, no spec in hand; reopen only if the owner obtains the CyberBLADE/Blade3D register spec |
-| i740 (8086:7800, 00d1) | 1 unit, 1024 textures, D16, B/A, textures in AGP memory | [Intel740 datasheet 290618-002](https://vgamuseum.info/images/doc/intel/i740.pdf) is a feature overview ("rich set of 3D instructions", no register reference); X.Org i740 and Linux `i740fb` are 2D/mode only; no Utah-GLX or Mesa i740 driver | C (1998 only) | — | **software**: no register-level source |
-| riva128 (12d2:0018 NV3) | 1 unit, 1024 textures, D16, restricted B/A | nouveau_vieux starts at NV04; the only open 3D code is Utah-GLX's XFree86-3.3-era `nv` driver | C (1997–1998) | — | **software** (lead decision in f7-26's title); reopen only with a pinned Utah-GLX NV3 source review |
-| cirrus (GD54xx), chipshiqv (65550/554/555), neomagic, s3trio64, s3legacy | no 3D engine in the matched chips (Laguna3D GD5465 and MagicMedia 256XL+ 3D are not matched and have no sources) | existing 2D imports | A/B as 2D | — | **software-only** |
-
-#### D. Order by value and parallelism
-
-Value = prevalence x feasibility x testability. The six launched families
-(f7-21..f7-26) run in parallel now. The new directives, in order:
-
-1. **f7-27 mach64** — the E500 is in the owner's hands; the first family
-   after the Savage that can be qualified on real silicon. Runs in parallel
-   with everything.
-2. **f7-31 vmwaresvga SVGA3D** — every stable release ships VM images; the
-   backend is testable on VirtualBox VMSVGA without silicon (not QEMU).
-   Independent transport (FIFO commands, surfaces/contexts) so it shares no
-   encoder with the others; parallel.
-3. **f7-28 tdfx Voodoo3/VSA-100** — complete Glide3 sources; Voodoo3's
-   16-bit-only rendering needs a conversion copy into the XRGB8888 lease
-   (research item); parallel.
-4. **f7-29 SiS 300/540/630** — complete MMIO driver; parallel.
-5. **f7-30 VIA Unichrome** — complete Mesa + kernel verifier; the PCI
-   (MMIO) command path first; parallel.
-6. **f7-32 S3 ViRGE** — optional; only when the lead wants the "every
-   family with a 3D engine" claim closed; demo-class expectations.
-
-Parallelism limit: at most one heavy host suite at a time per the resource
-rules; worktrees are independent because each family touches only its
-driver directory, its tests and its design document. Merge conflicts are
-expected only in `tests/host/test_display_driver_names.py` (no change is
-needed there: every family directory is already listed) and in the shared
-Makefile test lists.
-
-#### E. Shared work every backend reuses, and the consolidation step
-
-Reused now: the render3d service, ring, fences and admission bounds; the
-scalar reference and its slices; the transport and `ciuki_r3d_caps`
-snapshot; `display_attempt_marker`; the registry heap-snapshot exclusion;
-the f7-11 sample-space policy and tolerances; the H1 Quake III replay
-harness; the f7-13 background orchestration (when merged). Duplicated for
-now, by the lead's decision to run families in parallel: the precision
-envelope scene generator (`savage3d_precision.h`), the 23-phase driver, the
-VRAM plan helper and the fake-engine harness skeleton. After the first two
-non-Savage backends land, a consolidation directive (proposed f7-33, lead
-to schedule) moves the family-neutral parts into `render3d_qualify.c`/
-`render3d_precision.h` and the family backends keep only their encoders,
-layout and transport. Doing that extraction before the parallel backends
-exist would block them; doing it never would leave seven copies.
-
-#### F. Risks
-
-* Untestable silicon: six families have no owner hardware; their backends
-  stay inert until someone with the card runs the probe. Documented
-  qualification procedures are part of every directive's report.
-* QEMU emulates none of these engines; only the vmwaresvga backend has a
-  software test host (VirtualBox VMSVGA), and that host's SVGA3D behaviour
-  is itself an implementation, not a specification.
-* Transport: every family's production driver used DMA/AGP paths (SiS AGP
-  queue, VIA regulator, mach64 pseudo-DMA, Glide CMDFIFO in host memory).
-  CPU MMIO paths exist in the sources for SiS, VIA (PCI command path) and
-  mach64 (register writes); Voodoo3 accepts direct register writes and a
-  VRAM-resident CMDFIFO (research item in f7-28). Throughput on the
-  Pentium III is bounded by `test_render3d.py`'s cost model, not by the
-  engine.
-* Colour formats: Voodoo3 renders 16-bit only; ViRGE revisions differ in
-  texture limits; SiS 300 and VIA depth formats depend on the mode. The
-  framebuffer-format predicate and f7-12's accelerated-format ranking must
-  carry each family's real formats.
-* Licences: Glide3 is under the 3dfx Glide source licence, Mesa/X.Org MIT,
-  DRM/kernel GPL; per the owner's rule all are usable, notices preserved;
-  the read-only driver pack under `third_party/` is never copied.
-* Sources outside the Mesa archive: mach64 DRM only in FreeBSD/old drm git;
-  s3v/trident only in Mesa <=7.0.x; CyberBLADE spec unavailable. Pins are
-  given above; the implementer records SHA-256 for each download.
-
-#### G. Open questions for the lead
-
-1. Whether to extend the tdfx 2D match to Banshee (121a:0003) so the 3D
-   backend covers it (Mesa treats Banshee as one TMU; otherwise identical).
-2. Whether VirtualBox VMSVGA counts as an allowed test host for f7-31 (the
-   owner's rules name QEMU only; QEMU cannot run SVGA3D).
-3. Whether f7-32 (ViRGE) is worth its days given demo-class results, or the
-   "every family with a 3D engine" claim is closed with the software path
-   and the reasons above.
-4. Whether Riva 128 should get a research-only directive on the Utah-GLX
-   NV3 code, or stays software by the f7-26 decision.
-5. Scheduling of the consolidation directive (section E).
-
-Sources for this section, besides the per-row links: [Linux 6.3 removal of
-i810/mga/r128/savage/sis/tdfx/via](https://lkml.iu.edu/hypermail/linux/kernel/2212.1/00712.html)
-(v6.1 is the last mainline tree with them); [Utah-GLX status
-page](https://utah-glx.sourceforge.net/); [Mesa 8.0 removals](https://docs.mesa3d.org/relnotes/8.0.html);
-Debian source listings of Mesa 6.5.1-0.6, 7.0.3-7 and 7.7.1-6 (`s3v` and
-`trident` present in the first two, absent in the third);
-[libdrm 2.4.15](https://dri.freedesktop.org/libdrm/libdrm-2.4.15.tar.gz)
-(sha256 `6aa54bacb581f3d4fda6d9a0153446a61f238f5b57b3f9714f1346916bdb373d`,
-ships only `shared-core/{mach64_drm.h,via_drm.h,via_3d_reg.h,sis_drm.h}`);
-[FreeBSD release/8.4.0 sys/dev/drm](https://cgit.freebsd.org/src/tree/sys/dev/drm?h=release/8.4.0);
-[QEMU hw/display/vmware_vga.c](https://gitlab.com/qemu-project/qemu/-/raw/master/hw/display/vmware_vga.c);
-[VirtualBox Devices/Graphics](https://github.com/VirtualBox/virtualbox/tree/main/src/VBox/Devices/Graphics).
+Research recheck: [Mesa 7.11.2](https://archive.mesa3d.org/older-versions/7.x/7.11.2/),
+`mach64_context.c:180–200` and `mach64_tris.c:422–439`, confirms two exposed
+texture stages, one uploaded mip level and two fractional vertex bits.
+Keep the existing mip-filter and quarter-pixel admission refusals. The H1
+replay therefore remains software at 640×480 and 1024×768. No feature claim
+or precision tolerance is widened by this merge.
 
 Research and repository comparison: **2026-10-14**. Directive:
 [f7-00](../directives/f7-00-3d-acceleration-contract.md). Status: original research contract; the amendments above record the f7-02 implementation

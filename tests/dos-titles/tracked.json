@@ -2345,6 +2345,4276 @@
         "xms_kib": 8192,
         "dpmi": "dos4gw"
       }
+    },
+    {
+      "id": "heretic",
+      "name": "Heretic shareware",
+      "year": 1994,
+      "publisher": "Raven Software / id Software",
+      "licence": {
+        "class": "test-media",
+        "citation": "third_party/games/heretic-shareware/UPSTREAM.json",
+        "conditions": "Original shareware package only. Exact package terms and licence member hashes await lead download/read-back; no bundling grant asserted."
+      },
+      "install": {
+        "layout": "zip",
+        "pin": "heretic",
+        "source": null,
+        "target": "HERETIC",
+        "files": [],
+        "steps": [
+          "Fetch only the original package at config/dos-titles.json URL into build/downloads/dos-titles.",
+          "Lead pins SHA-256, reads the exact licence, runs original installer and pins the installed tree.",
+          "Sound setup: SB16 220h IRQ 7 DMA 1/5; OPL or General MIDI as documented by this edition.",
+          "Proposed inputs and checkpoints require lead calibration; no compatibility claim yet."
+        ]
+      },
+      "executable": "HERETIC.EXE",
+      "args": [],
+      "checkpoints": [
+        {
+          "name": "boot",
+          "at_ms": 1000,
+          "deadline_ms": 10000,
+          "kind": "sha256",
+          "value": null
+        },
+        {
+          "name": "menu",
+          "at_ms": 5000,
+          "deadline_ms": 30000,
+          "kind": "sha256",
+          "value": null
+        },
+        {
+          "name": "gameplay",
+          "at_ms": 10000,
+          "deadline_ms": 60000,
+          "kind": "sha256",
+          "value": null
+        }
+      ],
+      "input": [
+        {
+          "phase": "launch",
+          "at_ms": 4000,
+          "code": 28,
+          "down": true
+        },
+        {
+          "phase": "launch",
+          "at_ms": 4080,
+          "code": 28,
+          "down": false
+        },
+        {
+          "phase": "launch",
+          "at_ms": 5000,
+          "code": 1,
+          "down": true
+        },
+        {
+          "phase": "launch",
+          "at_ms": 5080,
+          "code": 1,
+          "down": false
+        },
+        {
+          "phase": "launch",
+          "at_ms": 6000,
+          "code": 28,
+          "down": true
+        },
+        {
+          "phase": "launch",
+          "at_ms": 6080,
+          "code": 28,
+          "down": false
+        },
+        {
+          "phase": "launch",
+          "at_ms": 7000,
+          "code": 28,
+          "down": true
+        },
+        {
+          "phase": "launch",
+          "at_ms": 7080,
+          "code": 28,
+          "down": false
+        },
+        {
+          "phase": "launch",
+          "at_ms": 8000,
+          "code": 28,
+          "down": true
+        },
+        {
+          "phase": "launch",
+          "at_ms": 8080,
+          "code": 28,
+          "down": false
+        },
+        {
+          "phase": "play",
+          "at_ms": 1000,
+          "code": 72,
+          "down": true
+        },
+        {
+          "phase": "play",
+          "at_ms": 1080,
+          "code": 72,
+          "down": false
+        },
+        {
+          "phase": "play",
+          "at_ms": 1500,
+          "code": 29,
+          "down": true
+        },
+        {
+          "phase": "play",
+          "at_ms": 1580,
+          "code": 29,
+          "down": false
+        },
+        {
+          "phase": "play",
+          "at_ms": 5000,
+          "code": 72,
+          "down": true
+        },
+        {
+          "phase": "play",
+          "at_ms": 5080,
+          "code": 72,
+          "down": false
+        },
+        {
+          "phase": "play",
+          "at_ms": 5500,
+          "code": 29,
+          "down": true
+        },
+        {
+          "phase": "play",
+          "at_ms": 5580,
+          "code": 29,
+          "down": false
+        },
+        {
+          "phase": "play",
+          "at_ms": 9000,
+          "code": 72,
+          "down": true
+        },
+        {
+          "phase": "play",
+          "at_ms": 9080,
+          "code": 72,
+          "down": false
+        },
+        {
+          "phase": "play",
+          "at_ms": 9500,
+          "code": 29,
+          "down": true
+        },
+        {
+          "phase": "play",
+          "at_ms": 9580,
+          "code": 29,
+          "down": false
+        },
+        {
+          "phase": "play",
+          "at_ms": 13000,
+          "code": 72,
+          "down": true
+        },
+        {
+          "phase": "play",
+          "at_ms": 13080,
+          "code": 72,
+          "down": false
+        },
+        {
+          "phase": "play",
+          "at_ms": 13500,
+          "code": 29,
+          "down": true
+        },
+        {
+          "phase": "play",
+          "at_ms": 13580,
+          "code": 29,
+          "down": false
+        },
+        {
+          "phase": "play",
+          "at_ms": 17000,
+          "code": 72,
+          "down": true
+        },
+        {
+          "phase": "play",
+          "at_ms": 17080,
+          "code": 72,
+          "down": false
+        },
+        {
+          "phase": "play",
+          "at_ms": 17500,
+          "code": 29,
+          "down": true
+        },
+        {
+          "phase": "play",
+          "at_ms": 17580,
+          "code": 29,
+          "down": false
+        },
+        {
+          "phase": "play",
+          "at_ms": 21000,
+          "code": 72,
+          "down": true
+        },
+        {
+          "phase": "play",
+          "at_ms": 21080,
+          "code": 72,
+          "down": false
+        },
+        {
+          "phase": "play",
+          "at_ms": 21500,
+          "code": 29,
+          "down": true
+        },
+        {
+          "phase": "play",
+          "at_ms": 21580,
+          "code": 29,
+          "down": false
+        },
+        {
+          "phase": "exit",
+          "at_ms": 0,
+          "code": 68,
+          "down": true
+        },
+        {
+          "phase": "exit",
+          "at_ms": 80,
+          "code": 68,
+          "down": false
+        },
+        {
+          "phase": "exit",
+          "at_ms": 500,
+          "code": 21,
+          "down": true
+        },
+        {
+          "phase": "exit",
+          "at_ms": 580,
+          "code": 21,
+          "down": false
+        },
+        {
+          "phase": "exit",
+          "at_ms": 1000,
+          "code": 28,
+          "down": true
+        },
+        {
+          "phase": "exit",
+          "at_ms": 1080,
+          "code": 28,
+          "down": false
+        }
+      ],
+      "audio": {
+        "expectation": "both",
+        "base": 544,
+        "irq": 7,
+        "dma8": 1,
+        "dma16": 5
+      },
+      "lan": "ipx",
+      "memory": {
+        "conventional_kib": 560,
+        "ems_kib": 0,
+        "xms_kib": 8192,
+        "dpmi": "dos4gw"
+      }
+    },
+    {
+      "id": "hexen",
+      "name": "Hexen demo",
+      "year": 1995,
+      "publisher": "Raven Software / id Software",
+      "licence": {
+        "class": "test-media",
+        "citation": "third_party/games/hexen-demo/UPSTREAM.json",
+        "conditions": "Original demo package only. Exact package terms and licence member hashes await lead download/read-back; no bundling grant asserted."
+      },
+      "install": {
+        "layout": "zip",
+        "pin": "hexen",
+        "source": null,
+        "target": "HEXEN",
+        "files": [],
+        "steps": [
+          "Fetch only the original package at config/dos-titles.json URL into build/downloads/dos-titles.",
+          "Lead pins SHA-256, reads the exact licence, runs original installer and pins the installed tree.",
+          "Sound setup: SB16 220h IRQ 7 DMA 1/5; OPL or General MIDI as documented by this edition.",
+          "Proposed inputs and checkpoints require lead calibration; no compatibility claim yet."
+        ]
+      },
+      "executable": "HEXEN.EXE",
+      "args": [],
+      "checkpoints": [
+        {
+          "name": "boot",
+          "at_ms": 1000,
+          "deadline_ms": 10000,
+          "kind": "sha256",
+          "value": null
+        },
+        {
+          "name": "menu",
+          "at_ms": 5000,
+          "deadline_ms": 30000,
+          "kind": "sha256",
+          "value": null
+        },
+        {
+          "name": "gameplay",
+          "at_ms": 10000,
+          "deadline_ms": 60000,
+          "kind": "sha256",
+          "value": null
+        }
+      ],
+      "input": [
+        {
+          "phase": "launch",
+          "at_ms": 4000,
+          "code": 28,
+          "down": true
+        },
+        {
+          "phase": "launch",
+          "at_ms": 4080,
+          "code": 28,
+          "down": false
+        },
+        {
+          "phase": "launch",
+          "at_ms": 5000,
+          "code": 1,
+          "down": true
+        },
+        {
+          "phase": "launch",
+          "at_ms": 5080,
+          "code": 1,
+          "down": false
+        },
+        {
+          "phase": "launch",
+          "at_ms": 6000,
+          "code": 28,
+          "down": true
+        },
+        {
+          "phase": "launch",
+          "at_ms": 6080,
+          "code": 28,
+          "down": false
+        },
+        {
+          "phase": "launch",
+          "at_ms": 7000,
+          "code": 28,
+          "down": true
+        },
+        {
+          "phase": "launch",
+          "at_ms": 7080,
+          "code": 28,
+          "down": false
+        },
+        {
+          "phase": "launch",
+          "at_ms": 8000,
+          "code": 28,
+          "down": true
+        },
+        {
+          "phase": "launch",
+          "at_ms": 8080,
+          "code": 28,
+          "down": false
+        },
+        {
+          "phase": "play",
+          "at_ms": 1000,
+          "code": 72,
+          "down": true
+        },
+        {
+          "phase": "play",
+          "at_ms": 1080,
+          "code": 72,
+          "down": false
+        },
+        {
+          "phase": "play",
+          "at_ms": 1500,
+          "code": 29,
+          "down": true
+        },
+        {
+          "phase": "play",
+          "at_ms": 1580,
+          "code": 29,
+          "down": false
+        },
+        {
+          "phase": "play",
+          "at_ms": 5000,
+          "code": 72,
+          "down": true
+        },
+        {
+          "phase": "play",
+          "at_ms": 5080,
+          "code": 72,
+          "down": false
+        },
+        {
+          "phase": "play",
+          "at_ms": 5500,
+          "code": 29,
+          "down": true
+        },
+        {
+          "phase": "play",
+          "at_ms": 5580,
+          "code": 29,
+          "down": false
+        },
+        {
+          "phase": "play",
+          "at_ms": 9000,
+          "code": 72,
+          "down": true
+        },
+        {
+          "phase": "play",
+          "at_ms": 9080,
+          "code": 72,
+          "down": false
+        },
+        {
+          "phase": "play",
+          "at_ms": 9500,
+          "code": 29,
+          "down": true
+        },
+        {
+          "phase": "play",
+          "at_ms": 9580,
+          "code": 29,
+          "down": false
+        },
+        {
+          "phase": "play",
+          "at_ms": 13000,
+          "code": 72,
+          "down": true
+        },
+        {
+          "phase": "play",
+          "at_ms": 13080,
+          "code": 72,
+          "down": false
+        },
+        {
+          "phase": "play",
+          "at_ms": 13500,
+          "code": 29,
+          "down": true
+        },
+        {
+          "phase": "play",
+          "at_ms": 13580,
+          "code": 29,
+          "down": false
+        },
+        {
+          "phase": "play",
+          "at_ms": 17000,
+          "code": 72,
+          "down": true
+        },
+        {
+          "phase": "play",
+          "at_ms": 17080,
+          "code": 72,
+          "down": false
+        },
+        {
+          "phase": "play",
+          "at_ms": 17500,
+          "code": 29,
+          "down": true
+        },
+        {
+          "phase": "play",
+          "at_ms": 17580,
+          "code": 29,
+          "down": false
+        },
+        {
+          "phase": "play",
+          "at_ms": 21000,
+          "code": 72,
+          "down": true
+        },
+        {
+          "phase": "play",
+          "at_ms": 21080,
+          "code": 72,
+          "down": false
+        },
+        {
+          "phase": "play",
+          "at_ms": 21500,
+          "code": 29,
+          "down": true
+        },
+        {
+          "phase": "play",
+          "at_ms": 21580,
+          "code": 29,
+          "down": false
+        },
+        {
+          "phase": "exit",
+          "at_ms": 0,
+          "code": 68,
+          "down": true
+        },
+        {
+          "phase": "exit",
+          "at_ms": 80,
+          "code": 68,
+          "down": false
+        },
+        {
+          "phase": "exit",
+          "at_ms": 500,
+          "code": 21,
+          "down": true
+        },
+        {
+          "phase": "exit",
+          "at_ms": 580,
+          "code": 21,
+          "down": false
+        },
+        {
+          "phase": "exit",
+          "at_ms": 1000,
+          "code": 28,
+          "down": true
+        },
+        {
+          "phase": "exit",
+          "at_ms": 1080,
+          "code": 28,
+          "down": false
+        }
+      ],
+      "audio": {
+        "expectation": "both",
+        "base": 544,
+        "irq": 7,
+        "dma8": 1,
+        "dma16": 5
+      },
+      "lan": "ipx",
+      "memory": {
+        "conventional_kib": 560,
+        "ems_kib": 0,
+        "xms_kib": 8192,
+        "dpmi": "dos4gw"
+      }
+    },
+    {
+      "id": "descent",
+      "name": "Descent shareware",
+      "year": 1995,
+      "publisher": "Parallax Software / Interplay",
+      "licence": {
+        "class": "test-media",
+        "citation": "third_party/games/descent-shareware/UPSTREAM.json",
+        "conditions": "Original shareware package only. Exact package terms and licence member hashes await lead download/read-back; no bundling grant asserted."
+      },
+      "install": {
+        "layout": "zip",
+        "pin": "descent",
+        "source": null,
+        "target": "DESCENT",
+        "files": [],
+        "steps": [
+          "Fetch only the original package at config/dos-titles.json URL into build/downloads/dos-titles.",
+          "Lead pins SHA-256, reads the exact licence, runs original installer and pins the installed tree.",
+          "Sound setup: SB16 220h IRQ 7 DMA 1/5; OPL or General MIDI as documented by this edition.",
+          "Proposed inputs and checkpoints require lead calibration; no compatibility claim yet."
+        ]
+      },
+      "executable": "DESCENT.EXE",
+      "args": [],
+      "checkpoints": [
+        {
+          "name": "boot",
+          "at_ms": 1000,
+          "deadline_ms": 10000,
+          "kind": "sha256",
+          "value": null
+        },
+        {
+          "name": "menu",
+          "at_ms": 5000,
+          "deadline_ms": 30000,
+          "kind": "sha256",
+          "value": null
+        },
+        {
+          "name": "gameplay",
+          "at_ms": 10000,
+          "deadline_ms": 60000,
+          "kind": "sha256",
+          "value": null
+        }
+      ],
+      "input": [
+        {
+          "phase": "launch",
+          "at_ms": 4000,
+          "code": 28,
+          "down": true
+        },
+        {
+          "phase": "launch",
+          "at_ms": 4080,
+          "code": 28,
+          "down": false
+        },
+        {
+          "phase": "launch",
+          "at_ms": 5000,
+          "code": 1,
+          "down": true
+        },
+        {
+          "phase": "launch",
+          "at_ms": 5080,
+          "code": 1,
+          "down": false
+        },
+        {
+          "phase": "launch",
+          "at_ms": 6000,
+          "code": 28,
+          "down": true
+        },
+        {
+          "phase": "launch",
+          "at_ms": 6080,
+          "code": 28,
+          "down": false
+        },
+        {
+          "phase": "launch",
+          "at_ms": 7000,
+          "code": 28,
+          "down": true
+        },
+        {
+          "phase": "launch",
+          "at_ms": 7080,
+          "code": 28,
+          "down": false
+        },
+        {
+          "phase": "launch",
+          "at_ms": 8000,
+          "code": 28,
+          "down": true
+        },
+        {
+          "phase": "launch",
+          "at_ms": 8080,
+          "code": 28,
+          "down": false
+        },
+        {
+          "phase": "play",
+          "at_ms": 1000,
+          "code": 72,
+          "down": true
+        },
+        {
+          "phase": "play",
+          "at_ms": 1080,
+          "code": 72,
+          "down": false
+        },
+        {
+          "phase": "play",
+          "at_ms": 1500,
+          "code": 29,
+          "down": true
+        },
+        {
+          "phase": "play",
+          "at_ms": 1580,
+          "code": 29,
+          "down": false
+        },
+        {
+          "phase": "play",
+          "at_ms": 5000,
+          "code": 72,
+          "down": true
+        },
+        {
+          "phase": "play",
+          "at_ms": 5080,
+          "code": 72,
+          "down": false
+        },
+        {
+          "phase": "play",
+          "at_ms": 5500,
+          "code": 29,
+          "down": true
+        },
+        {
+          "phase": "play",
+          "at_ms": 5580,
+          "code": 29,
+          "down": false
+        },
+        {
+          "phase": "play",
+          "at_ms": 9000,
+          "code": 72,
+          "down": true
+        },
+        {
+          "phase": "play",
+          "at_ms": 9080,
+          "code": 72,
+          "down": false
+        },
+        {
+          "phase": "play",
+          "at_ms": 9500,
+          "code": 29,
+          "down": true
+        },
+        {
+          "phase": "play",
+          "at_ms": 9580,
+          "code": 29,
+          "down": false
+        },
+        {
+          "phase": "play",
+          "at_ms": 13000,
+          "code": 72,
+          "down": true
+        },
+        {
+          "phase": "play",
+          "at_ms": 13080,
+          "code": 72,
+          "down": false
+        },
+        {
+          "phase": "play",
+          "at_ms": 13500,
+          "code": 29,
+          "down": true
+        },
+        {
+          "phase": "play",
+          "at_ms": 13580,
+          "code": 29,
+          "down": false
+        },
+        {
+          "phase": "play",
+          "at_ms": 17000,
+          "code": 72,
+          "down": true
+        },
+        {
+          "phase": "play",
+          "at_ms": 17080,
+          "code": 72,
+          "down": false
+        },
+        {
+          "phase": "play",
+          "at_ms": 17500,
+          "code": 29,
+          "down": true
+        },
+        {
+          "phase": "play",
+          "at_ms": 17580,
+          "code": 29,
+          "down": false
+        },
+        {
+          "phase": "play",
+          "at_ms": 21000,
+          "code": 72,
+          "down": true
+        },
+        {
+          "phase": "play",
+          "at_ms": 21080,
+          "code": 72,
+          "down": false
+        },
+        {
+          "phase": "play",
+          "at_ms": 21500,
+          "code": 29,
+          "down": true
+        },
+        {
+          "phase": "play",
+          "at_ms": 21580,
+          "code": 29,
+          "down": false
+        },
+        {
+          "phase": "exit",
+          "at_ms": 0,
+          "code": 68,
+          "down": true
+        },
+        {
+          "phase": "exit",
+          "at_ms": 80,
+          "code": 68,
+          "down": false
+        },
+        {
+          "phase": "exit",
+          "at_ms": 500,
+          "code": 21,
+          "down": true
+        },
+        {
+          "phase": "exit",
+          "at_ms": 580,
+          "code": 21,
+          "down": false
+        },
+        {
+          "phase": "exit",
+          "at_ms": 1000,
+          "code": 28,
+          "down": true
+        },
+        {
+          "phase": "exit",
+          "at_ms": 1080,
+          "code": 28,
+          "down": false
+        }
+      ],
+      "audio": {
+        "expectation": "both",
+        "base": 544,
+        "irq": 7,
+        "dma8": 1,
+        "dma16": 5
+      },
+      "lan": "ipx",
+      "memory": {
+        "conventional_kib": 560,
+        "ems_kib": 0,
+        "xms_kib": 8192,
+        "dpmi": "dos4gw"
+      }
+    },
+    {
+      "id": "descent2",
+      "name": "Descent II demo",
+      "year": 1996,
+      "publisher": "Parallax Software / Interplay",
+      "licence": {
+        "class": "test-media",
+        "citation": "third_party/games/descent2-demo/UPSTREAM.json",
+        "conditions": "Original demo package only. Exact package terms and licence member hashes await lead download/read-back; no bundling grant asserted."
+      },
+      "install": {
+        "layout": "zip",
+        "pin": "descent2",
+        "source": null,
+        "target": "DESCENT2",
+        "files": [],
+        "steps": [
+          "Fetch only the original package at config/dos-titles.json URL into build/downloads/dos-titles.",
+          "Lead pins SHA-256, reads the exact licence, runs original installer and pins the installed tree.",
+          "Sound setup: SB16 220h IRQ 7 DMA 1/5; OPL or General MIDI as documented by this edition.",
+          "Proposed inputs and checkpoints require lead calibration; no compatibility claim yet."
+        ]
+      },
+      "executable": "D2DEMO.EXE",
+      "args": [],
+      "checkpoints": [
+        {
+          "name": "boot",
+          "at_ms": 1000,
+          "deadline_ms": 10000,
+          "kind": "sha256",
+          "value": null
+        },
+        {
+          "name": "menu",
+          "at_ms": 5000,
+          "deadline_ms": 30000,
+          "kind": "sha256",
+          "value": null
+        },
+        {
+          "name": "gameplay",
+          "at_ms": 10000,
+          "deadline_ms": 60000,
+          "kind": "sha256",
+          "value": null
+        }
+      ],
+      "input": [
+        {
+          "phase": "launch",
+          "at_ms": 4000,
+          "code": 28,
+          "down": true
+        },
+        {
+          "phase": "launch",
+          "at_ms": 4080,
+          "code": 28,
+          "down": false
+        },
+        {
+          "phase": "launch",
+          "at_ms": 5000,
+          "code": 1,
+          "down": true
+        },
+        {
+          "phase": "launch",
+          "at_ms": 5080,
+          "code": 1,
+          "down": false
+        },
+        {
+          "phase": "launch",
+          "at_ms": 6000,
+          "code": 28,
+          "down": true
+        },
+        {
+          "phase": "launch",
+          "at_ms": 6080,
+          "code": 28,
+          "down": false
+        },
+        {
+          "phase": "launch",
+          "at_ms": 7000,
+          "code": 28,
+          "down": true
+        },
+        {
+          "phase": "launch",
+          "at_ms": 7080,
+          "code": 28,
+          "down": false
+        },
+        {
+          "phase": "launch",
+          "at_ms": 8000,
+          "code": 28,
+          "down": true
+        },
+        {
+          "phase": "launch",
+          "at_ms": 8080,
+          "code": 28,
+          "down": false
+        },
+        {
+          "phase": "play",
+          "at_ms": 1000,
+          "code": 72,
+          "down": true
+        },
+        {
+          "phase": "play",
+          "at_ms": 1080,
+          "code": 72,
+          "down": false
+        },
+        {
+          "phase": "play",
+          "at_ms": 1500,
+          "code": 29,
+          "down": true
+        },
+        {
+          "phase": "play",
+          "at_ms": 1580,
+          "code": 29,
+          "down": false
+        },
+        {
+          "phase": "play",
+          "at_ms": 5000,
+          "code": 72,
+          "down": true
+        },
+        {
+          "phase": "play",
+          "at_ms": 5080,
+          "code": 72,
+          "down": false
+        },
+        {
+          "phase": "play",
+          "at_ms": 5500,
+          "code": 29,
+          "down": true
+        },
+        {
+          "phase": "play",
+          "at_ms": 5580,
+          "code": 29,
+          "down": false
+        },
+        {
+          "phase": "play",
+          "at_ms": 9000,
+          "code": 72,
+          "down": true
+        },
+        {
+          "phase": "play",
+          "at_ms": 9080,
+          "code": 72,
+          "down": false
+        },
+        {
+          "phase": "play",
+          "at_ms": 9500,
+          "code": 29,
+          "down": true
+        },
+        {
+          "phase": "play",
+          "at_ms": 9580,
+          "code": 29,
+          "down": false
+        },
+        {
+          "phase": "play",
+          "at_ms": 13000,
+          "code": 72,
+          "down": true
+        },
+        {
+          "phase": "play",
+          "at_ms": 13080,
+          "code": 72,
+          "down": false
+        },
+        {
+          "phase": "play",
+          "at_ms": 13500,
+          "code": 29,
+          "down": true
+        },
+        {
+          "phase": "play",
+          "at_ms": 13580,
+          "code": 29,
+          "down": false
+        },
+        {
+          "phase": "play",
+          "at_ms": 17000,
+          "code": 72,
+          "down": true
+        },
+        {
+          "phase": "play",
+          "at_ms": 17080,
+          "code": 72,
+          "down": false
+        },
+        {
+          "phase": "play",
+          "at_ms": 17500,
+          "code": 29,
+          "down": true
+        },
+        {
+          "phase": "play",
+          "at_ms": 17580,
+          "code": 29,
+          "down": false
+        },
+        {
+          "phase": "play",
+          "at_ms": 21000,
+          "code": 72,
+          "down": true
+        },
+        {
+          "phase": "play",
+          "at_ms": 21080,
+          "code": 72,
+          "down": false
+        },
+        {
+          "phase": "play",
+          "at_ms": 21500,
+          "code": 29,
+          "down": true
+        },
+        {
+          "phase": "play",
+          "at_ms": 21580,
+          "code": 29,
+          "down": false
+        },
+        {
+          "phase": "exit",
+          "at_ms": 0,
+          "code": 68,
+          "down": true
+        },
+        {
+          "phase": "exit",
+          "at_ms": 80,
+          "code": 68,
+          "down": false
+        },
+        {
+          "phase": "exit",
+          "at_ms": 500,
+          "code": 21,
+          "down": true
+        },
+        {
+          "phase": "exit",
+          "at_ms": 580,
+          "code": 21,
+          "down": false
+        },
+        {
+          "phase": "exit",
+          "at_ms": 1000,
+          "code": 28,
+          "down": true
+        },
+        {
+          "phase": "exit",
+          "at_ms": 1080,
+          "code": 28,
+          "down": false
+        }
+      ],
+      "audio": {
+        "expectation": "both",
+        "base": 544,
+        "irq": 7,
+        "dma8": 1,
+        "dma16": 5
+      },
+      "lan": "ipx",
+      "memory": {
+        "conventional_kib": 560,
+        "ems_kib": 0,
+        "xms_kib": 8192,
+        "dpmi": "dos4gw"
+      }
+    },
+    {
+      "id": "shadowwarrior",
+      "name": "Shadow Warrior shareware",
+      "year": 1997,
+      "publisher": "3D Realms",
+      "licence": {
+        "class": "test-media",
+        "citation": "third_party/games/shadowwarrior-shareware/UPSTREAM.json",
+        "conditions": "Original shareware package only. Exact package terms and licence member hashes await lead download/read-back; no bundling grant asserted."
+      },
+      "install": {
+        "layout": "zip",
+        "pin": "shadowwarrior",
+        "source": null,
+        "target": "SW",
+        "files": [],
+        "steps": [
+          "Fetch only the original package at config/dos-titles.json URL into build/downloads/dos-titles.",
+          "Lead pins SHA-256, reads the exact licence, runs original installer and pins the installed tree.",
+          "Sound setup: SB16 220h IRQ 7 DMA 1/5; OPL or General MIDI as documented by this edition.",
+          "Proposed inputs and checkpoints require lead calibration; no compatibility claim yet."
+        ]
+      },
+      "executable": "SW.EXE",
+      "args": [],
+      "checkpoints": [
+        {
+          "name": "boot",
+          "at_ms": 1000,
+          "deadline_ms": 10000,
+          "kind": "sha256",
+          "value": null
+        },
+        {
+          "name": "menu",
+          "at_ms": 5000,
+          "deadline_ms": 30000,
+          "kind": "sha256",
+          "value": null
+        },
+        {
+          "name": "gameplay",
+          "at_ms": 10000,
+          "deadline_ms": 60000,
+          "kind": "sha256",
+          "value": null
+        }
+      ],
+      "input": [
+        {
+          "phase": "launch",
+          "at_ms": 4000,
+          "code": 28,
+          "down": true
+        },
+        {
+          "phase": "launch",
+          "at_ms": 4080,
+          "code": 28,
+          "down": false
+        },
+        {
+          "phase": "launch",
+          "at_ms": 5000,
+          "code": 1,
+          "down": true
+        },
+        {
+          "phase": "launch",
+          "at_ms": 5080,
+          "code": 1,
+          "down": false
+        },
+        {
+          "phase": "launch",
+          "at_ms": 6000,
+          "code": 28,
+          "down": true
+        },
+        {
+          "phase": "launch",
+          "at_ms": 6080,
+          "code": 28,
+          "down": false
+        },
+        {
+          "phase": "launch",
+          "at_ms": 7000,
+          "code": 28,
+          "down": true
+        },
+        {
+          "phase": "launch",
+          "at_ms": 7080,
+          "code": 28,
+          "down": false
+        },
+        {
+          "phase": "launch",
+          "at_ms": 8000,
+          "code": 28,
+          "down": true
+        },
+        {
+          "phase": "launch",
+          "at_ms": 8080,
+          "code": 28,
+          "down": false
+        },
+        {
+          "phase": "play",
+          "at_ms": 1000,
+          "code": 72,
+          "down": true
+        },
+        {
+          "phase": "play",
+          "at_ms": 1080,
+          "code": 72,
+          "down": false
+        },
+        {
+          "phase": "play",
+          "at_ms": 1500,
+          "code": 29,
+          "down": true
+        },
+        {
+          "phase": "play",
+          "at_ms": 1580,
+          "code": 29,
+          "down": false
+        },
+        {
+          "phase": "play",
+          "at_ms": 5000,
+          "code": 72,
+          "down": true
+        },
+        {
+          "phase": "play",
+          "at_ms": 5080,
+          "code": 72,
+          "down": false
+        },
+        {
+          "phase": "play",
+          "at_ms": 5500,
+          "code": 29,
+          "down": true
+        },
+        {
+          "phase": "play",
+          "at_ms": 5580,
+          "code": 29,
+          "down": false
+        },
+        {
+          "phase": "play",
+          "at_ms": 9000,
+          "code": 72,
+          "down": true
+        },
+        {
+          "phase": "play",
+          "at_ms": 9080,
+          "code": 72,
+          "down": false
+        },
+        {
+          "phase": "play",
+          "at_ms": 9500,
+          "code": 29,
+          "down": true
+        },
+        {
+          "phase": "play",
+          "at_ms": 9580,
+          "code": 29,
+          "down": false
+        },
+        {
+          "phase": "play",
+          "at_ms": 13000,
+          "code": 72,
+          "down": true
+        },
+        {
+          "phase": "play",
+          "at_ms": 13080,
+          "code": 72,
+          "down": false
+        },
+        {
+          "phase": "play",
+          "at_ms": 13500,
+          "code": 29,
+          "down": true
+        },
+        {
+          "phase": "play",
+          "at_ms": 13580,
+          "code": 29,
+          "down": false
+        },
+        {
+          "phase": "play",
+          "at_ms": 17000,
+          "code": 72,
+          "down": true
+        },
+        {
+          "phase": "play",
+          "at_ms": 17080,
+          "code": 72,
+          "down": false
+        },
+        {
+          "phase": "play",
+          "at_ms": 17500,
+          "code": 29,
+          "down": true
+        },
+        {
+          "phase": "play",
+          "at_ms": 17580,
+          "code": 29,
+          "down": false
+        },
+        {
+          "phase": "play",
+          "at_ms": 21000,
+          "code": 72,
+          "down": true
+        },
+        {
+          "phase": "play",
+          "at_ms": 21080,
+          "code": 72,
+          "down": false
+        },
+        {
+          "phase": "play",
+          "at_ms": 21500,
+          "code": 29,
+          "down": true
+        },
+        {
+          "phase": "play",
+          "at_ms": 21580,
+          "code": 29,
+          "down": false
+        },
+        {
+          "phase": "exit",
+          "at_ms": 0,
+          "code": 68,
+          "down": true
+        },
+        {
+          "phase": "exit",
+          "at_ms": 80,
+          "code": 68,
+          "down": false
+        },
+        {
+          "phase": "exit",
+          "at_ms": 500,
+          "code": 21,
+          "down": true
+        },
+        {
+          "phase": "exit",
+          "at_ms": 580,
+          "code": 21,
+          "down": false
+        },
+        {
+          "phase": "exit",
+          "at_ms": 1000,
+          "code": 28,
+          "down": true
+        },
+        {
+          "phase": "exit",
+          "at_ms": 1080,
+          "code": 28,
+          "down": false
+        }
+      ],
+      "audio": {
+        "expectation": "both",
+        "base": 544,
+        "irq": 7,
+        "dma8": 1,
+        "dma16": 5
+      },
+      "lan": "ipx",
+      "memory": {
+        "conventional_kib": 560,
+        "ems_kib": 0,
+        "xms_kib": 8192,
+        "dpmi": "dos4gw"
+      }
+    },
+    {
+      "id": "wacky",
+      "name": "Wacky Wheels shareware",
+      "year": 1994,
+      "publisher": "Beavis Soft / Apogee",
+      "licence": {
+        "class": "test-media",
+        "citation": "third_party/games/wacky-shareware/UPSTREAM.json",
+        "conditions": "Original shareware package only. Exact package terms and licence member hashes await lead download/read-back; no bundling grant asserted."
+      },
+      "install": {
+        "layout": "zip",
+        "pin": "wacky",
+        "source": null,
+        "target": "WACKY",
+        "files": [],
+        "steps": [
+          "Fetch only the original package at config/dos-titles.json URL into build/downloads/dos-titles.",
+          "Lead pins SHA-256, reads the exact licence, runs original installer and pins the installed tree.",
+          "Sound setup: SB16 220h IRQ 7 DMA 1/5; OPL or General MIDI as documented by this edition.",
+          "Proposed inputs and checkpoints require lead calibration; no compatibility claim yet."
+        ]
+      },
+      "executable": "WW.EXE",
+      "args": [],
+      "checkpoints": [
+        {
+          "name": "boot",
+          "at_ms": 1000,
+          "deadline_ms": 10000,
+          "kind": "sha256",
+          "value": null
+        },
+        {
+          "name": "menu",
+          "at_ms": 5000,
+          "deadline_ms": 30000,
+          "kind": "sha256",
+          "value": null
+        },
+        {
+          "name": "gameplay",
+          "at_ms": 10000,
+          "deadline_ms": 60000,
+          "kind": "sha256",
+          "value": null
+        }
+      ],
+      "input": [
+        {
+          "phase": "launch",
+          "at_ms": 4000,
+          "code": 28,
+          "down": true
+        },
+        {
+          "phase": "launch",
+          "at_ms": 4080,
+          "code": 28,
+          "down": false
+        },
+        {
+          "phase": "launch",
+          "at_ms": 5000,
+          "code": 1,
+          "down": true
+        },
+        {
+          "phase": "launch",
+          "at_ms": 5080,
+          "code": 1,
+          "down": false
+        },
+        {
+          "phase": "launch",
+          "at_ms": 6000,
+          "code": 28,
+          "down": true
+        },
+        {
+          "phase": "launch",
+          "at_ms": 6080,
+          "code": 28,
+          "down": false
+        },
+        {
+          "phase": "launch",
+          "at_ms": 7000,
+          "code": 28,
+          "down": true
+        },
+        {
+          "phase": "launch",
+          "at_ms": 7080,
+          "code": 28,
+          "down": false
+        },
+        {
+          "phase": "launch",
+          "at_ms": 8000,
+          "code": 28,
+          "down": true
+        },
+        {
+          "phase": "launch",
+          "at_ms": 8080,
+          "code": 28,
+          "down": false
+        },
+        {
+          "phase": "play",
+          "at_ms": 1000,
+          "code": 72,
+          "down": true
+        },
+        {
+          "phase": "play",
+          "at_ms": 1080,
+          "code": 72,
+          "down": false
+        },
+        {
+          "phase": "play",
+          "at_ms": 1500,
+          "code": 29,
+          "down": true
+        },
+        {
+          "phase": "play",
+          "at_ms": 1580,
+          "code": 29,
+          "down": false
+        },
+        {
+          "phase": "play",
+          "at_ms": 5000,
+          "code": 72,
+          "down": true
+        },
+        {
+          "phase": "play",
+          "at_ms": 5080,
+          "code": 72,
+          "down": false
+        },
+        {
+          "phase": "play",
+          "at_ms": 5500,
+          "code": 29,
+          "down": true
+        },
+        {
+          "phase": "play",
+          "at_ms": 5580,
+          "code": 29,
+          "down": false
+        },
+        {
+          "phase": "play",
+          "at_ms": 9000,
+          "code": 72,
+          "down": true
+        },
+        {
+          "phase": "play",
+          "at_ms": 9080,
+          "code": 72,
+          "down": false
+        },
+        {
+          "phase": "play",
+          "at_ms": 9500,
+          "code": 29,
+          "down": true
+        },
+        {
+          "phase": "play",
+          "at_ms": 9580,
+          "code": 29,
+          "down": false
+        },
+        {
+          "phase": "play",
+          "at_ms": 13000,
+          "code": 72,
+          "down": true
+        },
+        {
+          "phase": "play",
+          "at_ms": 13080,
+          "code": 72,
+          "down": false
+        },
+        {
+          "phase": "play",
+          "at_ms": 13500,
+          "code": 29,
+          "down": true
+        },
+        {
+          "phase": "play",
+          "at_ms": 13580,
+          "code": 29,
+          "down": false
+        },
+        {
+          "phase": "play",
+          "at_ms": 17000,
+          "code": 72,
+          "down": true
+        },
+        {
+          "phase": "play",
+          "at_ms": 17080,
+          "code": 72,
+          "down": false
+        },
+        {
+          "phase": "play",
+          "at_ms": 17500,
+          "code": 29,
+          "down": true
+        },
+        {
+          "phase": "play",
+          "at_ms": 17580,
+          "code": 29,
+          "down": false
+        },
+        {
+          "phase": "play",
+          "at_ms": 21000,
+          "code": 72,
+          "down": true
+        },
+        {
+          "phase": "play",
+          "at_ms": 21080,
+          "code": 72,
+          "down": false
+        },
+        {
+          "phase": "play",
+          "at_ms": 21500,
+          "code": 29,
+          "down": true
+        },
+        {
+          "phase": "play",
+          "at_ms": 21580,
+          "code": 29,
+          "down": false
+        },
+        {
+          "phase": "exit",
+          "at_ms": 0,
+          "code": 68,
+          "down": true
+        },
+        {
+          "phase": "exit",
+          "at_ms": 80,
+          "code": 68,
+          "down": false
+        },
+        {
+          "phase": "exit",
+          "at_ms": 500,
+          "code": 21,
+          "down": true
+        },
+        {
+          "phase": "exit",
+          "at_ms": 580,
+          "code": 21,
+          "down": false
+        },
+        {
+          "phase": "exit",
+          "at_ms": 1000,
+          "code": 28,
+          "down": true
+        },
+        {
+          "phase": "exit",
+          "at_ms": 1080,
+          "code": 28,
+          "down": false
+        }
+      ],
+      "audio": {
+        "expectation": "both",
+        "base": 544,
+        "irq": 7,
+        "dma8": 1,
+        "dma16": 5
+      },
+      "lan": "none",
+      "memory": {
+        "conventional_kib": 560,
+        "ems_kib": 0,
+        "xms_kib": 8192,
+        "dpmi": "none"
+      }
+    },
+    {
+      "id": "cosmo",
+      "name": "Cosmo's Cosmic Adventure shareware",
+      "year": 1992,
+      "publisher": "Apogee",
+      "licence": {
+        "class": "test-media",
+        "citation": "third_party/games/cosmo-shareware/UPSTREAM.json",
+        "conditions": "Original shareware package only. Exact package terms and licence member hashes await lead download/read-back; no bundling grant asserted."
+      },
+      "install": {
+        "layout": "zip",
+        "pin": "cosmo",
+        "source": null,
+        "target": "COSMO",
+        "files": [],
+        "steps": [
+          "Fetch only the original package at config/dos-titles.json URL into build/downloads/dos-titles.",
+          "Lead pins SHA-256, reads the exact licence, runs original installer and pins the installed tree.",
+          "Sound setup: SB16 220h IRQ 7 DMA 1/5; OPL or General MIDI as documented by this edition.",
+          "Proposed inputs and checkpoints require lead calibration; no compatibility claim yet."
+        ]
+      },
+      "executable": "COSMO1.EXE",
+      "args": [],
+      "checkpoints": [
+        {
+          "name": "boot",
+          "at_ms": 1000,
+          "deadline_ms": 10000,
+          "kind": "sha256",
+          "value": null
+        },
+        {
+          "name": "menu",
+          "at_ms": 5000,
+          "deadline_ms": 30000,
+          "kind": "sha256",
+          "value": null
+        },
+        {
+          "name": "gameplay",
+          "at_ms": 10000,
+          "deadline_ms": 60000,
+          "kind": "sha256",
+          "value": null
+        }
+      ],
+      "input": [
+        {
+          "phase": "launch",
+          "at_ms": 4000,
+          "code": 28,
+          "down": true
+        },
+        {
+          "phase": "launch",
+          "at_ms": 4080,
+          "code": 28,
+          "down": false
+        },
+        {
+          "phase": "launch",
+          "at_ms": 5000,
+          "code": 1,
+          "down": true
+        },
+        {
+          "phase": "launch",
+          "at_ms": 5080,
+          "code": 1,
+          "down": false
+        },
+        {
+          "phase": "launch",
+          "at_ms": 6000,
+          "code": 28,
+          "down": true
+        },
+        {
+          "phase": "launch",
+          "at_ms": 6080,
+          "code": 28,
+          "down": false
+        },
+        {
+          "phase": "launch",
+          "at_ms": 7000,
+          "code": 28,
+          "down": true
+        },
+        {
+          "phase": "launch",
+          "at_ms": 7080,
+          "code": 28,
+          "down": false
+        },
+        {
+          "phase": "launch",
+          "at_ms": 8000,
+          "code": 28,
+          "down": true
+        },
+        {
+          "phase": "launch",
+          "at_ms": 8080,
+          "code": 28,
+          "down": false
+        },
+        {
+          "phase": "play",
+          "at_ms": 1000,
+          "code": 72,
+          "down": true
+        },
+        {
+          "phase": "play",
+          "at_ms": 1080,
+          "code": 72,
+          "down": false
+        },
+        {
+          "phase": "play",
+          "at_ms": 1500,
+          "code": 29,
+          "down": true
+        },
+        {
+          "phase": "play",
+          "at_ms": 1580,
+          "code": 29,
+          "down": false
+        },
+        {
+          "phase": "play",
+          "at_ms": 5000,
+          "code": 72,
+          "down": true
+        },
+        {
+          "phase": "play",
+          "at_ms": 5080,
+          "code": 72,
+          "down": false
+        },
+        {
+          "phase": "play",
+          "at_ms": 5500,
+          "code": 29,
+          "down": true
+        },
+        {
+          "phase": "play",
+          "at_ms": 5580,
+          "code": 29,
+          "down": false
+        },
+        {
+          "phase": "play",
+          "at_ms": 9000,
+          "code": 72,
+          "down": true
+        },
+        {
+          "phase": "play",
+          "at_ms": 9080,
+          "code": 72,
+          "down": false
+        },
+        {
+          "phase": "play",
+          "at_ms": 9500,
+          "code": 29,
+          "down": true
+        },
+        {
+          "phase": "play",
+          "at_ms": 9580,
+          "code": 29,
+          "down": false
+        },
+        {
+          "phase": "play",
+          "at_ms": 13000,
+          "code": 72,
+          "down": true
+        },
+        {
+          "phase": "play",
+          "at_ms": 13080,
+          "code": 72,
+          "down": false
+        },
+        {
+          "phase": "play",
+          "at_ms": 13500,
+          "code": 29,
+          "down": true
+        },
+        {
+          "phase": "play",
+          "at_ms": 13580,
+          "code": 29,
+          "down": false
+        },
+        {
+          "phase": "play",
+          "at_ms": 17000,
+          "code": 72,
+          "down": true
+        },
+        {
+          "phase": "play",
+          "at_ms": 17080,
+          "code": 72,
+          "down": false
+        },
+        {
+          "phase": "play",
+          "at_ms": 17500,
+          "code": 29,
+          "down": true
+        },
+        {
+          "phase": "play",
+          "at_ms": 17580,
+          "code": 29,
+          "down": false
+        },
+        {
+          "phase": "play",
+          "at_ms": 21000,
+          "code": 72,
+          "down": true
+        },
+        {
+          "phase": "play",
+          "at_ms": 21080,
+          "code": 72,
+          "down": false
+        },
+        {
+          "phase": "play",
+          "at_ms": 21500,
+          "code": 29,
+          "down": true
+        },
+        {
+          "phase": "play",
+          "at_ms": 21580,
+          "code": 29,
+          "down": false
+        },
+        {
+          "phase": "exit",
+          "at_ms": 0,
+          "code": 68,
+          "down": true
+        },
+        {
+          "phase": "exit",
+          "at_ms": 80,
+          "code": 68,
+          "down": false
+        },
+        {
+          "phase": "exit",
+          "at_ms": 500,
+          "code": 21,
+          "down": true
+        },
+        {
+          "phase": "exit",
+          "at_ms": 580,
+          "code": 21,
+          "down": false
+        },
+        {
+          "phase": "exit",
+          "at_ms": 1000,
+          "code": 28,
+          "down": true
+        },
+        {
+          "phase": "exit",
+          "at_ms": 1080,
+          "code": 28,
+          "down": false
+        }
+      ],
+      "audio": {
+        "expectation": "opl",
+        "base": 544,
+        "irq": 7,
+        "dma8": 1,
+        "dma16": 5
+      },
+      "lan": "none",
+      "memory": {
+        "conventional_kib": 560,
+        "ems_kib": 0,
+        "xms_kib": 8192,
+        "dpmi": "none"
+      }
+    },
+    {
+      "id": "duke2",
+      "name": "Duke Nukem II shareware",
+      "year": 1993,
+      "publisher": "Apogee",
+      "licence": {
+        "class": "test-media",
+        "citation": "third_party/games/duke2-shareware/UPSTREAM.json",
+        "conditions": "Original shareware package only. Exact package terms and licence member hashes await lead download/read-back; no bundling grant asserted."
+      },
+      "install": {
+        "layout": "zip",
+        "pin": "duke2",
+        "source": null,
+        "target": "DUKE2",
+        "files": [],
+        "steps": [
+          "Fetch only the original package at config/dos-titles.json URL into build/downloads/dos-titles.",
+          "Lead pins SHA-256, reads the exact licence, runs original installer and pins the installed tree.",
+          "Sound setup: SB16 220h IRQ 7 DMA 1/5; OPL or General MIDI as documented by this edition.",
+          "Proposed inputs and checkpoints require lead calibration; no compatibility claim yet."
+        ]
+      },
+      "executable": "NUKEM2.EXE",
+      "args": [],
+      "checkpoints": [
+        {
+          "name": "boot",
+          "at_ms": 1000,
+          "deadline_ms": 10000,
+          "kind": "sha256",
+          "value": null
+        },
+        {
+          "name": "menu",
+          "at_ms": 5000,
+          "deadline_ms": 30000,
+          "kind": "sha256",
+          "value": null
+        },
+        {
+          "name": "gameplay",
+          "at_ms": 10000,
+          "deadline_ms": 60000,
+          "kind": "sha256",
+          "value": null
+        }
+      ],
+      "input": [
+        {
+          "phase": "launch",
+          "at_ms": 4000,
+          "code": 28,
+          "down": true
+        },
+        {
+          "phase": "launch",
+          "at_ms": 4080,
+          "code": 28,
+          "down": false
+        },
+        {
+          "phase": "launch",
+          "at_ms": 5000,
+          "code": 1,
+          "down": true
+        },
+        {
+          "phase": "launch",
+          "at_ms": 5080,
+          "code": 1,
+          "down": false
+        },
+        {
+          "phase": "launch",
+          "at_ms": 6000,
+          "code": 28,
+          "down": true
+        },
+        {
+          "phase": "launch",
+          "at_ms": 6080,
+          "code": 28,
+          "down": false
+        },
+        {
+          "phase": "launch",
+          "at_ms": 7000,
+          "code": 28,
+          "down": true
+        },
+        {
+          "phase": "launch",
+          "at_ms": 7080,
+          "code": 28,
+          "down": false
+        },
+        {
+          "phase": "launch",
+          "at_ms": 8000,
+          "code": 28,
+          "down": true
+        },
+        {
+          "phase": "launch",
+          "at_ms": 8080,
+          "code": 28,
+          "down": false
+        },
+        {
+          "phase": "play",
+          "at_ms": 1000,
+          "code": 72,
+          "down": true
+        },
+        {
+          "phase": "play",
+          "at_ms": 1080,
+          "code": 72,
+          "down": false
+        },
+        {
+          "phase": "play",
+          "at_ms": 1500,
+          "code": 29,
+          "down": true
+        },
+        {
+          "phase": "play",
+          "at_ms": 1580,
+          "code": 29,
+          "down": false
+        },
+        {
+          "phase": "play",
+          "at_ms": 5000,
+          "code": 72,
+          "down": true
+        },
+        {
+          "phase": "play",
+          "at_ms": 5080,
+          "code": 72,
+          "down": false
+        },
+        {
+          "phase": "play",
+          "at_ms": 5500,
+          "code": 29,
+          "down": true
+        },
+        {
+          "phase": "play",
+          "at_ms": 5580,
+          "code": 29,
+          "down": false
+        },
+        {
+          "phase": "play",
+          "at_ms": 9000,
+          "code": 72,
+          "down": true
+        },
+        {
+          "phase": "play",
+          "at_ms": 9080,
+          "code": 72,
+          "down": false
+        },
+        {
+          "phase": "play",
+          "at_ms": 9500,
+          "code": 29,
+          "down": true
+        },
+        {
+          "phase": "play",
+          "at_ms": 9580,
+          "code": 29,
+          "down": false
+        },
+        {
+          "phase": "play",
+          "at_ms": 13000,
+          "code": 72,
+          "down": true
+        },
+        {
+          "phase": "play",
+          "at_ms": 13080,
+          "code": 72,
+          "down": false
+        },
+        {
+          "phase": "play",
+          "at_ms": 13500,
+          "code": 29,
+          "down": true
+        },
+        {
+          "phase": "play",
+          "at_ms": 13580,
+          "code": 29,
+          "down": false
+        },
+        {
+          "phase": "play",
+          "at_ms": 17000,
+          "code": 72,
+          "down": true
+        },
+        {
+          "phase": "play",
+          "at_ms": 17080,
+          "code": 72,
+          "down": false
+        },
+        {
+          "phase": "play",
+          "at_ms": 17500,
+          "code": 29,
+          "down": true
+        },
+        {
+          "phase": "play",
+          "at_ms": 17580,
+          "code": 29,
+          "down": false
+        },
+        {
+          "phase": "play",
+          "at_ms": 21000,
+          "code": 72,
+          "down": true
+        },
+        {
+          "phase": "play",
+          "at_ms": 21080,
+          "code": 72,
+          "down": false
+        },
+        {
+          "phase": "play",
+          "at_ms": 21500,
+          "code": 29,
+          "down": true
+        },
+        {
+          "phase": "play",
+          "at_ms": 21580,
+          "code": 29,
+          "down": false
+        },
+        {
+          "phase": "exit",
+          "at_ms": 0,
+          "code": 68,
+          "down": true
+        },
+        {
+          "phase": "exit",
+          "at_ms": 80,
+          "code": 68,
+          "down": false
+        },
+        {
+          "phase": "exit",
+          "at_ms": 500,
+          "code": 21,
+          "down": true
+        },
+        {
+          "phase": "exit",
+          "at_ms": 580,
+          "code": 21,
+          "down": false
+        },
+        {
+          "phase": "exit",
+          "at_ms": 1000,
+          "code": 28,
+          "down": true
+        },
+        {
+          "phase": "exit",
+          "at_ms": 1080,
+          "code": 28,
+          "down": false
+        }
+      ],
+      "audio": {
+        "expectation": "both",
+        "base": 544,
+        "irq": 7,
+        "dma8": 1,
+        "dma16": 5
+      },
+      "lan": "none",
+      "memory": {
+        "conventional_kib": 560,
+        "ems_kib": 0,
+        "xms_kib": 8192,
+        "dpmi": "none"
+      }
+    },
+    {
+      "id": "raptor",
+      "name": "Raptor shareware",
+      "year": 1994,
+      "publisher": "Cygnus Studios / Apogee",
+      "licence": {
+        "class": "test-media",
+        "citation": "third_party/games/raptor-shareware/UPSTREAM.json",
+        "conditions": "Original shareware package only. Exact package terms and licence member hashes await lead download/read-back; no bundling grant asserted."
+      },
+      "install": {
+        "layout": "zip",
+        "pin": "raptor",
+        "source": null,
+        "target": "RAPTOR",
+        "files": [],
+        "steps": [
+          "Fetch only the original package at config/dos-titles.json URL into build/downloads/dos-titles.",
+          "Lead pins SHA-256, reads the exact licence, runs original installer and pins the installed tree.",
+          "Sound setup: SB16 220h IRQ 7 DMA 1/5; OPL or General MIDI as documented by this edition.",
+          "Proposed inputs and checkpoints require lead calibration; no compatibility claim yet."
+        ]
+      },
+      "executable": "RAP.EXE",
+      "args": [],
+      "checkpoints": [
+        {
+          "name": "boot",
+          "at_ms": 1000,
+          "deadline_ms": 10000,
+          "kind": "sha256",
+          "value": null
+        },
+        {
+          "name": "menu",
+          "at_ms": 5000,
+          "deadline_ms": 30000,
+          "kind": "sha256",
+          "value": null
+        },
+        {
+          "name": "gameplay",
+          "at_ms": 10000,
+          "deadline_ms": 60000,
+          "kind": "sha256",
+          "value": null
+        }
+      ],
+      "input": [
+        {
+          "phase": "launch",
+          "at_ms": 4000,
+          "code": 28,
+          "down": true
+        },
+        {
+          "phase": "launch",
+          "at_ms": 4080,
+          "code": 28,
+          "down": false
+        },
+        {
+          "phase": "launch",
+          "at_ms": 5000,
+          "code": 1,
+          "down": true
+        },
+        {
+          "phase": "launch",
+          "at_ms": 5080,
+          "code": 1,
+          "down": false
+        },
+        {
+          "phase": "launch",
+          "at_ms": 6000,
+          "code": 28,
+          "down": true
+        },
+        {
+          "phase": "launch",
+          "at_ms": 6080,
+          "code": 28,
+          "down": false
+        },
+        {
+          "phase": "launch",
+          "at_ms": 7000,
+          "code": 28,
+          "down": true
+        },
+        {
+          "phase": "launch",
+          "at_ms": 7080,
+          "code": 28,
+          "down": false
+        },
+        {
+          "phase": "launch",
+          "at_ms": 8000,
+          "code": 28,
+          "down": true
+        },
+        {
+          "phase": "launch",
+          "at_ms": 8080,
+          "code": 28,
+          "down": false
+        },
+        {
+          "phase": "play",
+          "at_ms": 1000,
+          "code": 72,
+          "down": true
+        },
+        {
+          "phase": "play",
+          "at_ms": 1080,
+          "code": 72,
+          "down": false
+        },
+        {
+          "phase": "play",
+          "at_ms": 1500,
+          "code": 29,
+          "down": true
+        },
+        {
+          "phase": "play",
+          "at_ms": 1580,
+          "code": 29,
+          "down": false
+        },
+        {
+          "phase": "play",
+          "at_ms": 5000,
+          "code": 72,
+          "down": true
+        },
+        {
+          "phase": "play",
+          "at_ms": 5080,
+          "code": 72,
+          "down": false
+        },
+        {
+          "phase": "play",
+          "at_ms": 5500,
+          "code": 29,
+          "down": true
+        },
+        {
+          "phase": "play",
+          "at_ms": 5580,
+          "code": 29,
+          "down": false
+        },
+        {
+          "phase": "play",
+          "at_ms": 9000,
+          "code": 72,
+          "down": true
+        },
+        {
+          "phase": "play",
+          "at_ms": 9080,
+          "code": 72,
+          "down": false
+        },
+        {
+          "phase": "play",
+          "at_ms": 9500,
+          "code": 29,
+          "down": true
+        },
+        {
+          "phase": "play",
+          "at_ms": 9580,
+          "code": 29,
+          "down": false
+        },
+        {
+          "phase": "play",
+          "at_ms": 13000,
+          "code": 72,
+          "down": true
+        },
+        {
+          "phase": "play",
+          "at_ms": 13080,
+          "code": 72,
+          "down": false
+        },
+        {
+          "phase": "play",
+          "at_ms": 13500,
+          "code": 29,
+          "down": true
+        },
+        {
+          "phase": "play",
+          "at_ms": 13580,
+          "code": 29,
+          "down": false
+        },
+        {
+          "phase": "play",
+          "at_ms": 17000,
+          "code": 72,
+          "down": true
+        },
+        {
+          "phase": "play",
+          "at_ms": 17080,
+          "code": 72,
+          "down": false
+        },
+        {
+          "phase": "play",
+          "at_ms": 17500,
+          "code": 29,
+          "down": true
+        },
+        {
+          "phase": "play",
+          "at_ms": 17580,
+          "code": 29,
+          "down": false
+        },
+        {
+          "phase": "play",
+          "at_ms": 21000,
+          "code": 72,
+          "down": true
+        },
+        {
+          "phase": "play",
+          "at_ms": 21080,
+          "code": 72,
+          "down": false
+        },
+        {
+          "phase": "play",
+          "at_ms": 21500,
+          "code": 29,
+          "down": true
+        },
+        {
+          "phase": "play",
+          "at_ms": 21580,
+          "code": 29,
+          "down": false
+        },
+        {
+          "phase": "exit",
+          "at_ms": 0,
+          "code": 68,
+          "down": true
+        },
+        {
+          "phase": "exit",
+          "at_ms": 80,
+          "code": 68,
+          "down": false
+        },
+        {
+          "phase": "exit",
+          "at_ms": 500,
+          "code": 21,
+          "down": true
+        },
+        {
+          "phase": "exit",
+          "at_ms": 580,
+          "code": 21,
+          "down": false
+        },
+        {
+          "phase": "exit",
+          "at_ms": 1000,
+          "code": 28,
+          "down": true
+        },
+        {
+          "phase": "exit",
+          "at_ms": 1080,
+          "code": 28,
+          "down": false
+        }
+      ],
+      "audio": {
+        "expectation": "both",
+        "base": 544,
+        "irq": 7,
+        "dma8": 1,
+        "dma16": 5
+      },
+      "lan": "none",
+      "memory": {
+        "conventional_kib": 560,
+        "ems_kib": 0,
+        "xms_kib": 8192,
+        "dpmi": "dos4gw"
+      }
+    },
+    {
+      "id": "hocus",
+      "name": "Hocus Pocus shareware",
+      "year": 1994,
+      "publisher": "Moonlite Software / Apogee",
+      "licence": {
+        "class": "test-media",
+        "citation": "third_party/games/hocus-shareware/UPSTREAM.json",
+        "conditions": "Original shareware package only. Exact package terms and licence member hashes await lead download/read-back; no bundling grant asserted."
+      },
+      "install": {
+        "layout": "zip",
+        "pin": "hocus",
+        "source": null,
+        "target": "HOCUS",
+        "files": [],
+        "steps": [
+          "Fetch only the original package at config/dos-titles.json URL into build/downloads/dos-titles.",
+          "Lead pins SHA-256, reads the exact licence, runs original installer and pins the installed tree.",
+          "Sound setup: SB16 220h IRQ 7 DMA 1/5; OPL or General MIDI as documented by this edition.",
+          "Proposed inputs and checkpoints require lead calibration; no compatibility claim yet."
+        ]
+      },
+      "executable": "HOCUS.EXE",
+      "args": [],
+      "checkpoints": [
+        {
+          "name": "boot",
+          "at_ms": 1000,
+          "deadline_ms": 10000,
+          "kind": "sha256",
+          "value": null
+        },
+        {
+          "name": "menu",
+          "at_ms": 5000,
+          "deadline_ms": 30000,
+          "kind": "sha256",
+          "value": null
+        },
+        {
+          "name": "gameplay",
+          "at_ms": 10000,
+          "deadline_ms": 60000,
+          "kind": "sha256",
+          "value": null
+        }
+      ],
+      "input": [
+        {
+          "phase": "launch",
+          "at_ms": 4000,
+          "code": 28,
+          "down": true
+        },
+        {
+          "phase": "launch",
+          "at_ms": 4080,
+          "code": 28,
+          "down": false
+        },
+        {
+          "phase": "launch",
+          "at_ms": 5000,
+          "code": 1,
+          "down": true
+        },
+        {
+          "phase": "launch",
+          "at_ms": 5080,
+          "code": 1,
+          "down": false
+        },
+        {
+          "phase": "launch",
+          "at_ms": 6000,
+          "code": 28,
+          "down": true
+        },
+        {
+          "phase": "launch",
+          "at_ms": 6080,
+          "code": 28,
+          "down": false
+        },
+        {
+          "phase": "launch",
+          "at_ms": 7000,
+          "code": 28,
+          "down": true
+        },
+        {
+          "phase": "launch",
+          "at_ms": 7080,
+          "code": 28,
+          "down": false
+        },
+        {
+          "phase": "launch",
+          "at_ms": 8000,
+          "code": 28,
+          "down": true
+        },
+        {
+          "phase": "launch",
+          "at_ms": 8080,
+          "code": 28,
+          "down": false
+        },
+        {
+          "phase": "play",
+          "at_ms": 1000,
+          "code": 72,
+          "down": true
+        },
+        {
+          "phase": "play",
+          "at_ms": 1080,
+          "code": 72,
+          "down": false
+        },
+        {
+          "phase": "play",
+          "at_ms": 1500,
+          "code": 29,
+          "down": true
+        },
+        {
+          "phase": "play",
+          "at_ms": 1580,
+          "code": 29,
+          "down": false
+        },
+        {
+          "phase": "play",
+          "at_ms": 5000,
+          "code": 72,
+          "down": true
+        },
+        {
+          "phase": "play",
+          "at_ms": 5080,
+          "code": 72,
+          "down": false
+        },
+        {
+          "phase": "play",
+          "at_ms": 5500,
+          "code": 29,
+          "down": true
+        },
+        {
+          "phase": "play",
+          "at_ms": 5580,
+          "code": 29,
+          "down": false
+        },
+        {
+          "phase": "play",
+          "at_ms": 9000,
+          "code": 72,
+          "down": true
+        },
+        {
+          "phase": "play",
+          "at_ms": 9080,
+          "code": 72,
+          "down": false
+        },
+        {
+          "phase": "play",
+          "at_ms": 9500,
+          "code": 29,
+          "down": true
+        },
+        {
+          "phase": "play",
+          "at_ms": 9580,
+          "code": 29,
+          "down": false
+        },
+        {
+          "phase": "play",
+          "at_ms": 13000,
+          "code": 72,
+          "down": true
+        },
+        {
+          "phase": "play",
+          "at_ms": 13080,
+          "code": 72,
+          "down": false
+        },
+        {
+          "phase": "play",
+          "at_ms": 13500,
+          "code": 29,
+          "down": true
+        },
+        {
+          "phase": "play",
+          "at_ms": 13580,
+          "code": 29,
+          "down": false
+        },
+        {
+          "phase": "play",
+          "at_ms": 17000,
+          "code": 72,
+          "down": true
+        },
+        {
+          "phase": "play",
+          "at_ms": 17080,
+          "code": 72,
+          "down": false
+        },
+        {
+          "phase": "play",
+          "at_ms": 17500,
+          "code": 29,
+          "down": true
+        },
+        {
+          "phase": "play",
+          "at_ms": 17580,
+          "code": 29,
+          "down": false
+        },
+        {
+          "phase": "play",
+          "at_ms": 21000,
+          "code": 72,
+          "down": true
+        },
+        {
+          "phase": "play",
+          "at_ms": 21080,
+          "code": 72,
+          "down": false
+        },
+        {
+          "phase": "play",
+          "at_ms": 21500,
+          "code": 29,
+          "down": true
+        },
+        {
+          "phase": "play",
+          "at_ms": 21580,
+          "code": 29,
+          "down": false
+        },
+        {
+          "phase": "exit",
+          "at_ms": 0,
+          "code": 68,
+          "down": true
+        },
+        {
+          "phase": "exit",
+          "at_ms": 80,
+          "code": 68,
+          "down": false
+        },
+        {
+          "phase": "exit",
+          "at_ms": 500,
+          "code": 21,
+          "down": true
+        },
+        {
+          "phase": "exit",
+          "at_ms": 580,
+          "code": 21,
+          "down": false
+        },
+        {
+          "phase": "exit",
+          "at_ms": 1000,
+          "code": 28,
+          "down": true
+        },
+        {
+          "phase": "exit",
+          "at_ms": 1080,
+          "code": 28,
+          "down": false
+        }
+      ],
+      "audio": {
+        "expectation": "both",
+        "base": 544,
+        "irq": 7,
+        "dma8": 1,
+        "dma16": 5
+      },
+      "lan": "none",
+      "memory": {
+        "conventional_kib": 560,
+        "ems_kib": 0,
+        "xms_kib": 8192,
+        "dpmi": "none"
+      }
+    },
+    {
+      "id": "biomenace",
+      "name": "Bio Menace shareware",
+      "year": 1993,
+      "publisher": "Apogee",
+      "licence": {
+        "class": "test-media",
+        "citation": "third_party/games/biomenace-shareware/UPSTREAM.json",
+        "conditions": "Original shareware package only. Exact package terms and licence member hashes await lead download/read-back; no bundling grant asserted."
+      },
+      "install": {
+        "layout": "zip",
+        "pin": "biomenace",
+        "source": null,
+        "target": "BIOMEN",
+        "files": [],
+        "steps": [
+          "Fetch only the original package at config/dos-titles.json URL into build/downloads/dos-titles.",
+          "Lead pins SHA-256, reads the exact licence, runs original installer and pins the installed tree.",
+          "Sound setup: SB16 220h IRQ 7 DMA 1/5; OPL or General MIDI as documented by this edition.",
+          "Proposed inputs and checkpoints require lead calibration; no compatibility claim yet."
+        ]
+      },
+      "executable": "BMENACE1.EXE",
+      "args": [],
+      "checkpoints": [
+        {
+          "name": "boot",
+          "at_ms": 1000,
+          "deadline_ms": 10000,
+          "kind": "sha256",
+          "value": null
+        },
+        {
+          "name": "menu",
+          "at_ms": 5000,
+          "deadline_ms": 30000,
+          "kind": "sha256",
+          "value": null
+        },
+        {
+          "name": "gameplay",
+          "at_ms": 10000,
+          "deadline_ms": 60000,
+          "kind": "sha256",
+          "value": null
+        }
+      ],
+      "input": [
+        {
+          "phase": "launch",
+          "at_ms": 4000,
+          "code": 28,
+          "down": true
+        },
+        {
+          "phase": "launch",
+          "at_ms": 4080,
+          "code": 28,
+          "down": false
+        },
+        {
+          "phase": "launch",
+          "at_ms": 5000,
+          "code": 1,
+          "down": true
+        },
+        {
+          "phase": "launch",
+          "at_ms": 5080,
+          "code": 1,
+          "down": false
+        },
+        {
+          "phase": "launch",
+          "at_ms": 6000,
+          "code": 28,
+          "down": true
+        },
+        {
+          "phase": "launch",
+          "at_ms": 6080,
+          "code": 28,
+          "down": false
+        },
+        {
+          "phase": "launch",
+          "at_ms": 7000,
+          "code": 28,
+          "down": true
+        },
+        {
+          "phase": "launch",
+          "at_ms": 7080,
+          "code": 28,
+          "down": false
+        },
+        {
+          "phase": "launch",
+          "at_ms": 8000,
+          "code": 28,
+          "down": true
+        },
+        {
+          "phase": "launch",
+          "at_ms": 8080,
+          "code": 28,
+          "down": false
+        },
+        {
+          "phase": "play",
+          "at_ms": 1000,
+          "code": 72,
+          "down": true
+        },
+        {
+          "phase": "play",
+          "at_ms": 1080,
+          "code": 72,
+          "down": false
+        },
+        {
+          "phase": "play",
+          "at_ms": 1500,
+          "code": 29,
+          "down": true
+        },
+        {
+          "phase": "play",
+          "at_ms": 1580,
+          "code": 29,
+          "down": false
+        },
+        {
+          "phase": "play",
+          "at_ms": 5000,
+          "code": 72,
+          "down": true
+        },
+        {
+          "phase": "play",
+          "at_ms": 5080,
+          "code": 72,
+          "down": false
+        },
+        {
+          "phase": "play",
+          "at_ms": 5500,
+          "code": 29,
+          "down": true
+        },
+        {
+          "phase": "play",
+          "at_ms": 5580,
+          "code": 29,
+          "down": false
+        },
+        {
+          "phase": "play",
+          "at_ms": 9000,
+          "code": 72,
+          "down": true
+        },
+        {
+          "phase": "play",
+          "at_ms": 9080,
+          "code": 72,
+          "down": false
+        },
+        {
+          "phase": "play",
+          "at_ms": 9500,
+          "code": 29,
+          "down": true
+        },
+        {
+          "phase": "play",
+          "at_ms": 9580,
+          "code": 29,
+          "down": false
+        },
+        {
+          "phase": "play",
+          "at_ms": 13000,
+          "code": 72,
+          "down": true
+        },
+        {
+          "phase": "play",
+          "at_ms": 13080,
+          "code": 72,
+          "down": false
+        },
+        {
+          "phase": "play",
+          "at_ms": 13500,
+          "code": 29,
+          "down": true
+        },
+        {
+          "phase": "play",
+          "at_ms": 13580,
+          "code": 29,
+          "down": false
+        },
+        {
+          "phase": "play",
+          "at_ms": 17000,
+          "code": 72,
+          "down": true
+        },
+        {
+          "phase": "play",
+          "at_ms": 17080,
+          "code": 72,
+          "down": false
+        },
+        {
+          "phase": "play",
+          "at_ms": 17500,
+          "code": 29,
+          "down": true
+        },
+        {
+          "phase": "play",
+          "at_ms": 17580,
+          "code": 29,
+          "down": false
+        },
+        {
+          "phase": "play",
+          "at_ms": 21000,
+          "code": 72,
+          "down": true
+        },
+        {
+          "phase": "play",
+          "at_ms": 21080,
+          "code": 72,
+          "down": false
+        },
+        {
+          "phase": "play",
+          "at_ms": 21500,
+          "code": 29,
+          "down": true
+        },
+        {
+          "phase": "play",
+          "at_ms": 21580,
+          "code": 29,
+          "down": false
+        },
+        {
+          "phase": "exit",
+          "at_ms": 0,
+          "code": 68,
+          "down": true
+        },
+        {
+          "phase": "exit",
+          "at_ms": 80,
+          "code": 68,
+          "down": false
+        },
+        {
+          "phase": "exit",
+          "at_ms": 500,
+          "code": 21,
+          "down": true
+        },
+        {
+          "phase": "exit",
+          "at_ms": 580,
+          "code": 21,
+          "down": false
+        },
+        {
+          "phase": "exit",
+          "at_ms": 1000,
+          "code": 28,
+          "down": true
+        },
+        {
+          "phase": "exit",
+          "at_ms": 1080,
+          "code": 28,
+          "down": false
+        }
+      ],
+      "audio": {
+        "expectation": "opl",
+        "base": 544,
+        "irq": 7,
+        "dma8": 1,
+        "dma16": 5
+      },
+      "lan": "none",
+      "memory": {
+        "conventional_kib": 560,
+        "ems_kib": 0,
+        "xms_kib": 8192,
+        "dpmi": "none"
+      }
+    },
+    {
+      "id": "blakestone",
+      "name": "Blake Stone shareware",
+      "year": 1993,
+      "publisher": "JAM Productions / Apogee",
+      "licence": {
+        "class": "test-media",
+        "citation": "third_party/games/blakestone-shareware/UPSTREAM.json",
+        "conditions": "Original shareware package only. Exact package terms and licence member hashes await lead download/read-back; no bundling grant asserted."
+      },
+      "install": {
+        "layout": "zip",
+        "pin": "blakestone",
+        "source": null,
+        "target": "BLAKE",
+        "files": [],
+        "steps": [
+          "Fetch only the original package at config/dos-titles.json URL into build/downloads/dos-titles.",
+          "Lead pins SHA-256, reads the exact licence, runs original installer and pins the installed tree.",
+          "Sound setup: SB16 220h IRQ 7 DMA 1/5; OPL or General MIDI as documented by this edition.",
+          "Proposed inputs and checkpoints require lead calibration; no compatibility claim yet."
+        ]
+      },
+      "executable": "BLAKE.EXE",
+      "args": [],
+      "checkpoints": [
+        {
+          "name": "boot",
+          "at_ms": 1000,
+          "deadline_ms": 10000,
+          "kind": "sha256",
+          "value": null
+        },
+        {
+          "name": "menu",
+          "at_ms": 5000,
+          "deadline_ms": 30000,
+          "kind": "sha256",
+          "value": null
+        },
+        {
+          "name": "gameplay",
+          "at_ms": 10000,
+          "deadline_ms": 60000,
+          "kind": "sha256",
+          "value": null
+        }
+      ],
+      "input": [
+        {
+          "phase": "launch",
+          "at_ms": 4000,
+          "code": 28,
+          "down": true
+        },
+        {
+          "phase": "launch",
+          "at_ms": 4080,
+          "code": 28,
+          "down": false
+        },
+        {
+          "phase": "launch",
+          "at_ms": 5000,
+          "code": 1,
+          "down": true
+        },
+        {
+          "phase": "launch",
+          "at_ms": 5080,
+          "code": 1,
+          "down": false
+        },
+        {
+          "phase": "launch",
+          "at_ms": 6000,
+          "code": 28,
+          "down": true
+        },
+        {
+          "phase": "launch",
+          "at_ms": 6080,
+          "code": 28,
+          "down": false
+        },
+        {
+          "phase": "launch",
+          "at_ms": 7000,
+          "code": 28,
+          "down": true
+        },
+        {
+          "phase": "launch",
+          "at_ms": 7080,
+          "code": 28,
+          "down": false
+        },
+        {
+          "phase": "launch",
+          "at_ms": 8000,
+          "code": 28,
+          "down": true
+        },
+        {
+          "phase": "launch",
+          "at_ms": 8080,
+          "code": 28,
+          "down": false
+        },
+        {
+          "phase": "play",
+          "at_ms": 1000,
+          "code": 72,
+          "down": true
+        },
+        {
+          "phase": "play",
+          "at_ms": 1080,
+          "code": 72,
+          "down": false
+        },
+        {
+          "phase": "play",
+          "at_ms": 1500,
+          "code": 29,
+          "down": true
+        },
+        {
+          "phase": "play",
+          "at_ms": 1580,
+          "code": 29,
+          "down": false
+        },
+        {
+          "phase": "play",
+          "at_ms": 5000,
+          "code": 72,
+          "down": true
+        },
+        {
+          "phase": "play",
+          "at_ms": 5080,
+          "code": 72,
+          "down": false
+        },
+        {
+          "phase": "play",
+          "at_ms": 5500,
+          "code": 29,
+          "down": true
+        },
+        {
+          "phase": "play",
+          "at_ms": 5580,
+          "code": 29,
+          "down": false
+        },
+        {
+          "phase": "play",
+          "at_ms": 9000,
+          "code": 72,
+          "down": true
+        },
+        {
+          "phase": "play",
+          "at_ms": 9080,
+          "code": 72,
+          "down": false
+        },
+        {
+          "phase": "play",
+          "at_ms": 9500,
+          "code": 29,
+          "down": true
+        },
+        {
+          "phase": "play",
+          "at_ms": 9580,
+          "code": 29,
+          "down": false
+        },
+        {
+          "phase": "play",
+          "at_ms": 13000,
+          "code": 72,
+          "down": true
+        },
+        {
+          "phase": "play",
+          "at_ms": 13080,
+          "code": 72,
+          "down": false
+        },
+        {
+          "phase": "play",
+          "at_ms": 13500,
+          "code": 29,
+          "down": true
+        },
+        {
+          "phase": "play",
+          "at_ms": 13580,
+          "code": 29,
+          "down": false
+        },
+        {
+          "phase": "play",
+          "at_ms": 17000,
+          "code": 72,
+          "down": true
+        },
+        {
+          "phase": "play",
+          "at_ms": 17080,
+          "code": 72,
+          "down": false
+        },
+        {
+          "phase": "play",
+          "at_ms": 17500,
+          "code": 29,
+          "down": true
+        },
+        {
+          "phase": "play",
+          "at_ms": 17580,
+          "code": 29,
+          "down": false
+        },
+        {
+          "phase": "play",
+          "at_ms": 21000,
+          "code": 72,
+          "down": true
+        },
+        {
+          "phase": "play",
+          "at_ms": 21080,
+          "code": 72,
+          "down": false
+        },
+        {
+          "phase": "play",
+          "at_ms": 21500,
+          "code": 29,
+          "down": true
+        },
+        {
+          "phase": "play",
+          "at_ms": 21580,
+          "code": 29,
+          "down": false
+        },
+        {
+          "phase": "exit",
+          "at_ms": 0,
+          "code": 68,
+          "down": true
+        },
+        {
+          "phase": "exit",
+          "at_ms": 80,
+          "code": 68,
+          "down": false
+        },
+        {
+          "phase": "exit",
+          "at_ms": 500,
+          "code": 21,
+          "down": true
+        },
+        {
+          "phase": "exit",
+          "at_ms": 580,
+          "code": 21,
+          "down": false
+        },
+        {
+          "phase": "exit",
+          "at_ms": 1000,
+          "code": 28,
+          "down": true
+        },
+        {
+          "phase": "exit",
+          "at_ms": 1080,
+          "code": 28,
+          "down": false
+        }
+      ],
+      "audio": {
+        "expectation": "both",
+        "base": 544,
+        "irq": 7,
+        "dma8": 1,
+        "dma16": 5
+      },
+      "lan": "none",
+      "memory": {
+        "conventional_kib": 560,
+        "ems_kib": 0,
+        "xms_kib": 8192,
+        "dpmi": "none"
+      }
+    },
+    {
+      "id": "terminal",
+      "name": "Terminal Velocity shareware",
+      "year": 1995,
+      "publisher": "Terminal Reality / 3D Realms",
+      "licence": {
+        "class": "test-media",
+        "citation": "third_party/games/terminal-shareware/UPSTREAM.json",
+        "conditions": "Original shareware package only. Exact package terms and licence member hashes await lead download/read-back; no bundling grant asserted."
+      },
+      "install": {
+        "layout": "zip",
+        "pin": "terminal",
+        "source": null,
+        "target": "TV",
+        "files": [],
+        "steps": [
+          "Fetch only the original package at config/dos-titles.json URL into build/downloads/dos-titles.",
+          "Lead pins SHA-256, reads the exact licence, runs original installer and pins the installed tree.",
+          "Sound setup: SB16 220h IRQ 7 DMA 1/5; OPL or General MIDI as documented by this edition.",
+          "Proposed inputs and checkpoints require lead calibration; no compatibility claim yet."
+        ]
+      },
+      "executable": "TV.EXE",
+      "args": [],
+      "checkpoints": [
+        {
+          "name": "boot",
+          "at_ms": 1000,
+          "deadline_ms": 10000,
+          "kind": "sha256",
+          "value": null
+        },
+        {
+          "name": "menu",
+          "at_ms": 5000,
+          "deadline_ms": 30000,
+          "kind": "sha256",
+          "value": null
+        },
+        {
+          "name": "gameplay",
+          "at_ms": 10000,
+          "deadline_ms": 60000,
+          "kind": "sha256",
+          "value": null
+        }
+      ],
+      "input": [
+        {
+          "phase": "launch",
+          "at_ms": 4000,
+          "code": 28,
+          "down": true
+        },
+        {
+          "phase": "launch",
+          "at_ms": 4080,
+          "code": 28,
+          "down": false
+        },
+        {
+          "phase": "launch",
+          "at_ms": 5000,
+          "code": 1,
+          "down": true
+        },
+        {
+          "phase": "launch",
+          "at_ms": 5080,
+          "code": 1,
+          "down": false
+        },
+        {
+          "phase": "launch",
+          "at_ms": 6000,
+          "code": 28,
+          "down": true
+        },
+        {
+          "phase": "launch",
+          "at_ms": 6080,
+          "code": 28,
+          "down": false
+        },
+        {
+          "phase": "launch",
+          "at_ms": 7000,
+          "code": 28,
+          "down": true
+        },
+        {
+          "phase": "launch",
+          "at_ms": 7080,
+          "code": 28,
+          "down": false
+        },
+        {
+          "phase": "launch",
+          "at_ms": 8000,
+          "code": 28,
+          "down": true
+        },
+        {
+          "phase": "launch",
+          "at_ms": 8080,
+          "code": 28,
+          "down": false
+        },
+        {
+          "phase": "play",
+          "at_ms": 1000,
+          "code": 72,
+          "down": true
+        },
+        {
+          "phase": "play",
+          "at_ms": 1080,
+          "code": 72,
+          "down": false
+        },
+        {
+          "phase": "play",
+          "at_ms": 1500,
+          "code": 29,
+          "down": true
+        },
+        {
+          "phase": "play",
+          "at_ms": 1580,
+          "code": 29,
+          "down": false
+        },
+        {
+          "phase": "play",
+          "at_ms": 5000,
+          "code": 72,
+          "down": true
+        },
+        {
+          "phase": "play",
+          "at_ms": 5080,
+          "code": 72,
+          "down": false
+        },
+        {
+          "phase": "play",
+          "at_ms": 5500,
+          "code": 29,
+          "down": true
+        },
+        {
+          "phase": "play",
+          "at_ms": 5580,
+          "code": 29,
+          "down": false
+        },
+        {
+          "phase": "play",
+          "at_ms": 9000,
+          "code": 72,
+          "down": true
+        },
+        {
+          "phase": "play",
+          "at_ms": 9080,
+          "code": 72,
+          "down": false
+        },
+        {
+          "phase": "play",
+          "at_ms": 9500,
+          "code": 29,
+          "down": true
+        },
+        {
+          "phase": "play",
+          "at_ms": 9580,
+          "code": 29,
+          "down": false
+        },
+        {
+          "phase": "play",
+          "at_ms": 13000,
+          "code": 72,
+          "down": true
+        },
+        {
+          "phase": "play",
+          "at_ms": 13080,
+          "code": 72,
+          "down": false
+        },
+        {
+          "phase": "play",
+          "at_ms": 13500,
+          "code": 29,
+          "down": true
+        },
+        {
+          "phase": "play",
+          "at_ms": 13580,
+          "code": 29,
+          "down": false
+        },
+        {
+          "phase": "play",
+          "at_ms": 17000,
+          "code": 72,
+          "down": true
+        },
+        {
+          "phase": "play",
+          "at_ms": 17080,
+          "code": 72,
+          "down": false
+        },
+        {
+          "phase": "play",
+          "at_ms": 17500,
+          "code": 29,
+          "down": true
+        },
+        {
+          "phase": "play",
+          "at_ms": 17580,
+          "code": 29,
+          "down": false
+        },
+        {
+          "phase": "play",
+          "at_ms": 21000,
+          "code": 72,
+          "down": true
+        },
+        {
+          "phase": "play",
+          "at_ms": 21080,
+          "code": 72,
+          "down": false
+        },
+        {
+          "phase": "play",
+          "at_ms": 21500,
+          "code": 29,
+          "down": true
+        },
+        {
+          "phase": "play",
+          "at_ms": 21580,
+          "code": 29,
+          "down": false
+        },
+        {
+          "phase": "exit",
+          "at_ms": 0,
+          "code": 68,
+          "down": true
+        },
+        {
+          "phase": "exit",
+          "at_ms": 80,
+          "code": 68,
+          "down": false
+        },
+        {
+          "phase": "exit",
+          "at_ms": 500,
+          "code": 21,
+          "down": true
+        },
+        {
+          "phase": "exit",
+          "at_ms": 580,
+          "code": 21,
+          "down": false
+        },
+        {
+          "phase": "exit",
+          "at_ms": 1000,
+          "code": 28,
+          "down": true
+        },
+        {
+          "phase": "exit",
+          "at_ms": 1080,
+          "code": 28,
+          "down": false
+        }
+      ],
+      "audio": {
+        "expectation": "both",
+        "base": 544,
+        "irq": 7,
+        "dma8": 1,
+        "dma16": 5
+      },
+      "lan": "ipx",
+      "memory": {
+        "conventional_kib": 560,
+        "ems_kib": 0,
+        "xms_kib": 8192,
+        "dpmi": "dos4gw"
+      }
+    },
+    {
+      "id": "jazz",
+      "name": "Jazz Jackrabbit shareware",
+      "year": 1994,
+      "publisher": "Epic MegaGames",
+      "licence": {
+        "class": "test-media",
+        "citation": "third_party/games/jazz-shareware/UPSTREAM.json",
+        "conditions": "Original shareware package only. Exact package terms and licence member hashes await lead download/read-back; no bundling grant asserted."
+      },
+      "install": {
+        "layout": "zip",
+        "pin": "jazz",
+        "source": null,
+        "target": "JAZZ",
+        "files": [],
+        "steps": [
+          "Fetch only the original package at config/dos-titles.json URL into build/downloads/dos-titles.",
+          "Lead pins SHA-256, reads the exact licence, runs original installer and pins the installed tree.",
+          "Sound setup: SB16 220h IRQ 7 DMA 1/5; OPL or General MIDI as documented by this edition.",
+          "Proposed inputs and checkpoints require lead calibration; no compatibility claim yet."
+        ]
+      },
+      "executable": "JAZZ.EXE",
+      "args": [],
+      "checkpoints": [
+        {
+          "name": "boot",
+          "at_ms": 1000,
+          "deadline_ms": 10000,
+          "kind": "sha256",
+          "value": null
+        },
+        {
+          "name": "menu",
+          "at_ms": 5000,
+          "deadline_ms": 30000,
+          "kind": "sha256",
+          "value": null
+        },
+        {
+          "name": "gameplay",
+          "at_ms": 10000,
+          "deadline_ms": 60000,
+          "kind": "sha256",
+          "value": null
+        }
+      ],
+      "input": [
+        {
+          "phase": "launch",
+          "at_ms": 4000,
+          "code": 28,
+          "down": true
+        },
+        {
+          "phase": "launch",
+          "at_ms": 4080,
+          "code": 28,
+          "down": false
+        },
+        {
+          "phase": "launch",
+          "at_ms": 5000,
+          "code": 1,
+          "down": true
+        },
+        {
+          "phase": "launch",
+          "at_ms": 5080,
+          "code": 1,
+          "down": false
+        },
+        {
+          "phase": "launch",
+          "at_ms": 6000,
+          "code": 28,
+          "down": true
+        },
+        {
+          "phase": "launch",
+          "at_ms": 6080,
+          "code": 28,
+          "down": false
+        },
+        {
+          "phase": "launch",
+          "at_ms": 7000,
+          "code": 28,
+          "down": true
+        },
+        {
+          "phase": "launch",
+          "at_ms": 7080,
+          "code": 28,
+          "down": false
+        },
+        {
+          "phase": "launch",
+          "at_ms": 8000,
+          "code": 28,
+          "down": true
+        },
+        {
+          "phase": "launch",
+          "at_ms": 8080,
+          "code": 28,
+          "down": false
+        },
+        {
+          "phase": "play",
+          "at_ms": 1000,
+          "code": 72,
+          "down": true
+        },
+        {
+          "phase": "play",
+          "at_ms": 1080,
+          "code": 72,
+          "down": false
+        },
+        {
+          "phase": "play",
+          "at_ms": 1500,
+          "code": 29,
+          "down": true
+        },
+        {
+          "phase": "play",
+          "at_ms": 1580,
+          "code": 29,
+          "down": false
+        },
+        {
+          "phase": "play",
+          "at_ms": 5000,
+          "code": 72,
+          "down": true
+        },
+        {
+          "phase": "play",
+          "at_ms": 5080,
+          "code": 72,
+          "down": false
+        },
+        {
+          "phase": "play",
+          "at_ms": 5500,
+          "code": 29,
+          "down": true
+        },
+        {
+          "phase": "play",
+          "at_ms": 5580,
+          "code": 29,
+          "down": false
+        },
+        {
+          "phase": "play",
+          "at_ms": 9000,
+          "code": 72,
+          "down": true
+        },
+        {
+          "phase": "play",
+          "at_ms": 9080,
+          "code": 72,
+          "down": false
+        },
+        {
+          "phase": "play",
+          "at_ms": 9500,
+          "code": 29,
+          "down": true
+        },
+        {
+          "phase": "play",
+          "at_ms": 9580,
+          "code": 29,
+          "down": false
+        },
+        {
+          "phase": "play",
+          "at_ms": 13000,
+          "code": 72,
+          "down": true
+        },
+        {
+          "phase": "play",
+          "at_ms": 13080,
+          "code": 72,
+          "down": false
+        },
+        {
+          "phase": "play",
+          "at_ms": 13500,
+          "code": 29,
+          "down": true
+        },
+        {
+          "phase": "play",
+          "at_ms": 13580,
+          "code": 29,
+          "down": false
+        },
+        {
+          "phase": "play",
+          "at_ms": 17000,
+          "code": 72,
+          "down": true
+        },
+        {
+          "phase": "play",
+          "at_ms": 17080,
+          "code": 72,
+          "down": false
+        },
+        {
+          "phase": "play",
+          "at_ms": 17500,
+          "code": 29,
+          "down": true
+        },
+        {
+          "phase": "play",
+          "at_ms": 17580,
+          "code": 29,
+          "down": false
+        },
+        {
+          "phase": "play",
+          "at_ms": 21000,
+          "code": 72,
+          "down": true
+        },
+        {
+          "phase": "play",
+          "at_ms": 21080,
+          "code": 72,
+          "down": false
+        },
+        {
+          "phase": "play",
+          "at_ms": 21500,
+          "code": 29,
+          "down": true
+        },
+        {
+          "phase": "play",
+          "at_ms": 21580,
+          "code": 29,
+          "down": false
+        },
+        {
+          "phase": "exit",
+          "at_ms": 0,
+          "code": 68,
+          "down": true
+        },
+        {
+          "phase": "exit",
+          "at_ms": 80,
+          "code": 68,
+          "down": false
+        },
+        {
+          "phase": "exit",
+          "at_ms": 500,
+          "code": 21,
+          "down": true
+        },
+        {
+          "phase": "exit",
+          "at_ms": 580,
+          "code": 21,
+          "down": false
+        },
+        {
+          "phase": "exit",
+          "at_ms": 1000,
+          "code": 28,
+          "down": true
+        },
+        {
+          "phase": "exit",
+          "at_ms": 1080,
+          "code": 28,
+          "down": false
+        }
+      ],
+      "audio": {
+        "expectation": "digital",
+        "base": 544,
+        "irq": 7,
+        "dma8": 1,
+        "dma16": 5
+      },
+      "lan": "none",
+      "memory": {
+        "conventional_kib": 560,
+        "ems_kib": 0,
+        "xms_kib": 8192,
+        "dpmi": "native"
+      }
     }
   ]
 }

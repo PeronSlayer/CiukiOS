@@ -67,6 +67,8 @@ static const struct task *audio_focus;
 static const struct task *irq_focus;
 const struct task *dosvm_task_focus(void) { return audio_focus; }
 const struct task *dosvm_task_irq(void) { return irq_focus; }
+static const struct task *present_task;                 /* fx-doswin3 round 3 */
+const struct task *dosvm_task_present(void) { return present_task; }
 uint32_t dosvm_task_quantum(const struct task *t,uint32_t quantum)
 { return t==audio_focus && quantum>2 ? 2 : quantum; }
 static char records[4096];
@@ -110,7 +112,7 @@ static void reset(void)
     idle.all_next=&normal; normal.all_next=&hog; hog.all_next=&ui; all_tasks=&idle;
     idle.generation=normal.generation=hog.generation=ui.generation=1;
     g_current=idle_task=&idle;g_ticks=0;cycles=1;slice_left=10;flags=0x200;
-    focus_task=audio_focus=irq_focus=0;ui_focus=input_proxy=0;focus_ticks=ordinary_ticks=0;device_used=device_history=0;memset(&scheduler_stats,0,sizeof(scheduler_stats));g_need_resched=false;g_starvation_boosts=0;
+    focus_task=audio_focus=irq_focus=present_task=present_turn=0;ui_focus=input_proxy=0;focus_ticks=ordinary_ticks=0;device_used=device_history=0;memset(&scheduler_stats,0,sizeof(scheduler_stats));g_need_resched=false;g_starvation_boosts=0;
     memset(device_cpu,0,sizeof(device_cpu));device_cpu_total=device_cpu_tick=0;
     device_cpu_slot=0;device_cpu_scale=1;device_cpu_refresh=false;
     memset(device_consumers,0,sizeof(device_consumers));audio_over=0;device_seq++;device_attribution=true;
@@ -445,11 +447,69 @@ static void lock_order_record_test(void)
     puts("fx-5 lock-order counters: published in the window that added reports (also quiet), then in every published window PASS");
 }
 #endif
+/* fx-doswin3 round 3: the focused VM's woken presenter runs ahead of the
+ * VM's preference for at most PRESENT_SLICE ticks; another level-9 task
+ * picked while the VM is ready keeps the 2-tick cap. A virtual IRQ that
+ * becomes pending as the presenter starts reaches the VM within its slice
+ * (below DMX's 7.1 ms IRQ0 period). Negative control: round 2's rule (the
+ * VM gives up the focus while its presenter is pending) lets that turn run
+ * a full 10-tick quantum. */
+static void present_turn_run(int round2, unsigned *presenter_max, unsigned *latency_max, unsigned *other_max)
+{
+    reset(); hog.prio = ui.prio = P_INTERACTIVE;   /* the presenter (ui) and another base-9 task (hog) */
+    audio_focus = &normal;
+    rq_push(&normal); rq_push(&hog); rq_push(&ui); schedule();
+    CHECK(g_current == &normal);                   /* the VM's preference beats base-9 tasks */
+    *presenter_max = *latency_max = *other_max = 0;
+    unsigned turns = 0;
+    for (unsigned frame = 0; frame < 60; frame++) {
+        /* The VM runs until its presenter is woken (present_ready); every
+         * fifth frame long enough to spend its 8-of-10 focus budget. */
+        unsigned spin = frame % 5 == 4 ? 12 : frame % 3;
+        for (unsigned k = 0; k < spin && g_current == &normal; k++) { run_tick(0); if (g_need_resched) schedule(); }
+        if (g_current != &normal) {                /* another task's turn (budget spent): measure it */
+            struct task *other = g_current; unsigned run = 0;
+            while (g_current == other && run < 20) { run_tick(0); run++; if (g_need_resched) schedule(); }
+            if (run > *other_max) *other_max = run;
+            continue;
+        }
+        present_task = &ui;
+        if (round2) audio_focus = 0;               /* round 2: no VM focus while the presenter is pending */
+        g_need_resched = true; kpreempt_point();   /* the VM's next safe point */
+        present_task = 0; audio_focus = &normal;   /* wait_present returned (or another task runs) */
+        if (g_current == &normal) continue;
+        struct task *runner = g_current;
+        if (runner == &ui) turns++;
+        irq_focus = &normal;                       /* the VM's IRQ0 becomes pending as it starts */
+        unsigned run = 0;
+        while (g_current != &normal && run < 30) {
+            run_tick(0); run++;
+            kpreempt_point();
+        }
+        irq_focus = 0;
+        CHECK(g_current == &normal);
+        if (runner == &ui && run > *presenter_max) *presenter_max = run;
+        if (runner != &ui && run > *other_max) *other_max = run;
+        if (run > *latency_max) *latency_max = run;
+    }
+    CHECK(turns >= 10);
+}
+static void present_turn_test(void)
+{
+    unsigned presenter, latency, other, old_presenter, old_latency, old_other;
+    present_turn_run(0, &presenter, &latency, &other);
+    present_turn_run(1, &old_presenter, &old_latency, &old_other);
+    CHECK(presenter >= 3 && presenter <= PRESENT_SLICE && latency <= PRESENT_SLICE && other >= 1 && other <= 2);
+    CHECK(old_latency >= 8);                        /* the round-2 rule this replaces */
+    printf("fx-doswin3 r3 presenter turn: presenter %u ticks, VM IRQ latency <= %u ms, other base-9 task <= %u ticks "
+           "(round-2 rule: presenter %u, latency %u, other %u) PASS\n",
+           presenter, latency, other, old_presenter, old_latency, old_other);
+}
 int main(void)
 {
     attribution_test();
     irqoff_phase_test();
-    wake_test();device_test();fullscreen_refill_test();focused_irq_test();measured_wake_test();accounting_test();vm_creation_test();maximum_tasks_test();
+    wake_test();device_test();fullscreen_refill_test();focused_irq_test();present_turn_test();measured_wake_test();accounting_test();vm_creation_test();maximum_tasks_test();
 #ifndef HOST_SYNC_TIMERS
     lock_order_record_test();
 #endif

@@ -1,6 +1,7 @@
 /* One multiplexed call; copies and pins are complete before effects.
  * SPDX-License-Identifier: GPL-2.0-only */
 #include <ciuki/kernel.h>
+#include <ciuki/security.h>
 #include <ciuki/cpu.h>
 #include <ciuki/w32_objects.h>
 #include <ciuki/display.h>
@@ -22,7 +23,7 @@ static uint32_t create_thread(struct proc_thread *self, struct ciuki_w32_thread 
     int err = proc_thread_prepare(p, a->entry, a->argument, a->trampoline,
         a->stack_bytes, CIUKI_THREAD_DETACHED | (a->flags & W32_THREAD_RESERVATION), self->mask, false, &t);
     if (err) return w32_status(err);
-    if (p->state != PROC_LIVE) { proc_thread_discard(t); return W32_STATUS_ACCESS_DENIED; }
+    if (p->state != PROC_LIVE || !security_process_live(p)) { proc_thread_discard(t); return W32_STATUS_ACCESS_DENIED; }
     if(a->flags&W32_CREATE_SUSPENDED)t->w32->suspend=1;
     a->tid = t->tid; task_start(t->task);
     return 0;

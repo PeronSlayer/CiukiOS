@@ -160,13 +160,15 @@ class AppGateTests(unittest.TestCase):
         resources = {k: v for r in parser.records if r.get("group") == "resources" for k, v in r.items()}
         self.assertEqual(resources["cache_nodes_before"], "59")
         self.assertEqual(resources["cache_nodes_after"], "60")
-        self.assertEqual(resources["identity_bytes_delta"], "1024")
-        self.assertEqual(resources["kernel_bytes_delta"], "1024")
+        # sec-k02's policy_label moves the host px_node plus heap header
+        # into the 2048-byte class; keep exact byte attribution assertions.
+        self.assertEqual(resources["identity_bytes_delta"], "2048")
+        self.assertEqual(resources["kernel_bytes_delta"], "2048")
         self.assertEqual(resources["kernel_bytes_remainder"], "0")
         self.assertEqual(resources["pages_remainder"], "0")
         self.assertEqual(resources["cache_accounted"], "1")
         metadata = runner.f2_metadata(parser.records)["resource_ledgers"]
-        self.assertEqual(metadata["final"]["identities"], [60, 61440])
+        self.assertEqual(metadata["final"]["identities"], [60, 122880])
         self.assertEqual(metadata["final"]["storage"], [13440, 128])
 
     def test_observed_physical_growth_is_attributed_to_measured_heap_pool(self):
@@ -187,7 +189,7 @@ class AppGateTests(unittest.TestCase):
             self.assertTrue(parser.check(case["expected"]))
         metadata = runner.f2_metadata(parser.records)["resource_ledgers"]
         self.assertEqual(metadata["baseline"]["heap"], [64, 1024, 4096])
-        self.assertEqual(metadata["final"]["heap"], [96, 2048, 131072])
+        self.assertEqual(metadata["final"]["heap"], [96, 3072, 131072])
 
     def test_unattributed_pages_still_fail_with_or_without_heap_growth(self):
         for mode, remainder in ((35, 1), (36, 1), (37, -1)):
@@ -263,7 +265,7 @@ int proc_strings_add(struct proc_strings *s, const char *text, uint32_t bytes, b
     if (s != &strings || bytes != strlen(text)+1) abort();
     printf("%s %s\\n", env ? "env" : "argv", text); return 0;
 }
-''' + spawn + '    (void)cwd; (void)desktop; (void)setup; (void)out; return err;\n}\n' + gate + '''
+''' + spawn + '    (void)cwd; (void)desktop; (void)setup; (void)role; (void)out; return err;\n}\n' + gate + '''
 int main(void) {
     struct process *p = 0;
     if (supervisor_spawn_gate(false, &p)) return 1;

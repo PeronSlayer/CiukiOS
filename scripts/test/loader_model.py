@@ -12,7 +12,7 @@ F3_PROBES = ('vm-boot', 'vm-memory', 'vm-devices', 'vm-video', 'vm-window', 'vm-
              'dos4gw', 'doom', 'doom-sound', 'wolf3d', 'vm-starve', 'quake', 'vm-fullscreen', 'dos-conformance',
              'vm-game')
 F4_PROBES = ('optical', 'audio-native', 'ntfs-ro', 'vm-audio', 'media-remove', 'vm-audio-jitter')  # F4 probes run by selector only; not in the sweep yet
-F5_PROBES = ('f5-core', 'w32-exceptions', 'w32-memory', 'w32-objects', 'w32-dialogs', 'w32-upper-dlls', 'w32-media', 'w32-fixtures', 'w32-kernel32', 'w32-fullscreen', 'w32-registry', 'w32-audio', 'w32-gdi32', 'w32-crash', 'w32-user32', 'w32-codecs', 'w32-ddraw', 'w32-input', 'w32-restart', 'w32-installer-nsis', 'w32-gl',
+F5_PROBES = ('f5-core', 'w32-exceptions', 'w32-memory', 'w32-objects', 'w32-dialogs', 'w32-upper-dlls', 'w32-media', 'w32-fixtures', 'w32-kernel32', 'w32-fullscreen', 'w32-registry', 'w32-audio', 'w32-gdi32', 'w32-crash', 'w32-user32', 'w32-codecs', 'w32-ddraw', 'w32-input', 'w32-restart', 'w32-installer-nsis', 'w32-gl', 'q3-lease-eio',
              # f5-15C installers tier: title aliases (tests/win32/workloads.json)
              'win32-diablo-shareware', 'win32-sc', 'win32-aoe-trial', 'win32-half-life-uplink', 'win32-ut-demo-348', 'win32-wa', 'win32-heroes3-demo', 'win32-rct-demo', 'win32-jazz2-shareware', 'win32-ta-demo')
 F6_PROBES = ('net-arp', 'browser')  # explicit selectors; no F6 hardware sweep yet
@@ -149,7 +149,7 @@ class BootMenu:
     loader does. Configured requests are already validated by the cfg parser;
     validated fw_cfg bypasses the menu. No firmware or disk access occurs here.
     `output` is the serial copy; `screen_quiet` models the quiet normal boot
-    (docs/boot.md): only MENU_HINT on screen until S, L, H or P is pressed.
+    (docs/boot.md): only MENU_HINT on screen until S, L, H, T or P is pressed.
     """
     DAY_TICKS = 0x1800b0
     MENU_TICKS = 55
@@ -169,6 +169,7 @@ class BootMenu:
         self.state = 'menu'
         self.verbose = False
         self.hardware_check = False
+        self.self_test = False
         self.screen_quiet = False
         if request is not None and source == 'fw_cfg':
             selected = selector(request, source, validated_fw_cfg=True)
@@ -224,6 +225,13 @@ class BootMenu:
                     self.screen_quiet = False
                     self._finish()
                     return
+                if key == 't':  # fx-selftest: one unattended self-test boot
+                    self._cancel_cfg()
+                    self.self_test = True
+                    self.screen_quiet = False
+                    self.output.append('L:SELFTEST=1')
+                    self._finish()
+                    return
                 if key == 'l':
                     self.serial = not self.serial
                     self.verbose = True
@@ -265,7 +273,7 @@ def boot_options(options, safe=False, serial=True):
             serial=serial and token=='serial=1'
         elif token in ('usbscan=0','ecpoll=0','ecpoll=1'):
             pass  # Kernel diagnostic policy; raw BOOT.CFG options are retained.
-        elif token in ('accel=0','setup=1'):
+        elif token in ('accel=0','setup=1','3d=probe'):
             pass  # Preserved boot-info options; consumed by the kernel.
         elif token in ('menu=1','autoscan=0','autoscan=2'):
             pass  # G14: Startup menu and AutoScan; also left for the kernel.
@@ -468,6 +476,7 @@ CBI_F_SCANDISK = 1 << 19
 CBI_F_SCANDISK_SKIP = 1 << 20
 CBI_F_SCANDISK_THOROUGH = 1 << 21
 CBI_F_MENU_SHOWN = 1 << 22
+CBI_F_SELF_TEST = 1 << 23
 CBI_F_SKIP_SHIFT = 24
 STARTUP_CHOICES = {
     1: ('Normal', 0),
@@ -478,6 +487,7 @@ STARTUP_CHOICES = {
     6: ('Safe mode command prompt only', CBI_F_SAFE_MODE | CBI_F_SAFE_STORAGE | CBI_F_CMD_ONLY),
     7: ('Safe mode without disks', CBI_F_SAFE_MODE),
     8: ('Hardware check', CBI_F_HW_CHECK | CBI_F_VERBOSE),
+    9: ('Self-test (unattended, about 5 minutes)', CBI_F_SELF_TEST),
 }
 # (action, question): a class bit (No skips it), 'log' (Yes logs) or 'desktop'.
 STEP_PROMPTS = (
@@ -524,7 +534,7 @@ class StartupMenu:
             self.done = True
             return
         if ascii:
-            if ord('1') <= ascii <= ord('8'):
+            if ord('1') <= ascii <= ord('9'):
                 self.choice = ascii - ord('0')
         else:
             now = {SCAN_F5: 3, SCAN_SHIFT_F5: 6, SCAN_SHIFT_F8: 4, SCAN_F8: 4}.get(scan)
@@ -532,7 +542,7 @@ class StartupMenu:
                 self.choice, self.done = now, True
                 return
             moved = self.choice + (-1 if scan == SCAN_UP else 1 if scan == SCAN_DOWN else 0)
-            if 1 <= moved <= 8:
+            if 1 <= moved <= 9:
                 self.choice = moved
         self.seconds = STARTUP_SECONDS
 

@@ -83,6 +83,7 @@ struct desk_frame_stats {
      * fell back to software, and rows served from the offscreen caches. */
     uint64_t accel_fills, accel_copies, accel_writes, accel_fallback, cache_rows;
     uint64_t copy_bytes, compare_px; /* clipped RAM copies and pixel equality proofs */
+    uint64_t direct_px; /* fx-doswin3 round 3: presented straight from a DOS window's surface */
 };
 /* f2-92: an unchanged surface kept in engine-only video memory below the
  * scanout (CIUKI_ACCEL_OFFSCREEN rows): the wallpaper/icon background, or a
@@ -130,6 +131,10 @@ struct desk_client {
     uint32_t v3_lease_w, v3_lease_h, v3_lease_bpp, v3_lease_wanted, v3_lease_mode;
     uint32_t v3_cursor_pixels[4][1024];
     uint8_t v3_hot_x[4], v3_hot_y[4];
+    /* fx-exeicons DESK_V3_WINDOW_ICON: the window's own icon (straight
+     * ARGB); mask bit 0 16 px, bit 1 32 px, bit 2 the 16 px one is derived. */
+    uint32_t v3_icon16[256], v3_icon32[1024];
+    unsigned v3_icon_mask;
     uint32_t owner_id;           /* shell modal owner, stable across slot reuse */
     uint32_t v3_limits[4];       /* G4: WM_GETMINMAXINFO track sizes (min w/h, max w/h), 0 default */
     int minimized, internal, closing, program;   /* internal: DESK_INTERNAL_* kind; program: 1 Files, 2 CiukNote, 3 Control Panel */
@@ -142,6 +147,7 @@ struct desk_client {
     int mixer;                    /* launched Volume Control or Music Player; may send MIXER_SET */
     int awaiting_frame;           /* launched graphical program that has not sent its first DAMAGE yet */
     int launch_frame_pending;    /* first DAMAGE accepted, awaiting successful desktop present */
+    int launch_feedback_remote; /* Win32 feedback is owned by the kernel */
     uint64_t launch_input_ns;     /* original click, retained through first-frame presentation */
     uint64_t launched_ns;         /* its launch time (desktop.c: the gate scenarios' input hold) */
     uint64_t window_ns, damage_ns; /* fx-15: its first CREATE_WINDOW and first frame (first-frame record) */
@@ -163,6 +169,7 @@ struct desk_client {
      * responding" whether or not it answers PINGs. close_later: the program
      * answered CLOSE_ACK LATER and is showing its own prompt. */
     uint64_t end_task_ns;
+    uint64_t hang_retry_ns;       /* Wait/Cancel starts a fresh HungAppTimeout */
     int close_later;
     int slot_tier;   /* DESK_SLOT_*: the tier this slot was taken at (quota accounting) */
     uint32_t pid, serial, version, window_id;
@@ -418,6 +425,7 @@ struct desktop {
     int v3_pointer_window; /* slot + 1, zero means no capture/clip */
     unsigned v3_cursor_id, v3_cursor_slot, v3_cursor_hidden;
     uint32_t v3_lease_window, v3_lease_generation, v3_lease_state, v3_lease_pid;
+    uint32_t v3_lease_carrier; /* window id, cleared after the single drawable handoff */
     uint32_t v3_lease_w, v3_lease_h, v3_lease_bpp;
     struct desk_lease_tuple v3_lease_tuple;
     uint32_t v3_lease_preferred_mode;
@@ -477,6 +485,12 @@ struct desktop {
     int frame_valid, scanout_valid;
     int restore_cpu_frame; /* a changed display lease needs one full CPU present */
     struct desk_damage move_damage;
+    /* fx-doswin3 round 3: screen boxes presented straight from an unobscured
+     * DOS window's surface (compositor.c direct_present), whose RAM frame
+     * pixels are older than the scanout until recomposed (desk_redraw,
+     * desk_direct_settle); direct_settling: that recomposition's frame. */
+    struct desk_damage direct_stale;
+    int direct_settling;
     /* fx-2: the stacking the composed frame shows (window id per slot, 0
      * when hidden, and its order). desk_stack_damage reconciles it: a
      * changed relative order invalidates the pair's overlap. */
@@ -527,6 +541,9 @@ struct desktop {
     const char *launch_arg;      /* single argument for the next launch (LAUNCH from Files) */
     int (*launch)(struct desktop *, const struct desk_program *);
     uint64_t launch_click_ns;
+    uint64_t launch_link_until, launch_run_until, launch_remote_until;
+    unsigned launch_remote_count;
+    void (*launch_presented)(struct desktop *, uint32_t pid);
     /* fx-8: launch_async: spawns run on the launcher worker (never in gate
      * scenarios); launch_request: the next launch's origin, reset after it;
      * launch_deferred: the last launch returned 0 and completes later. */
@@ -610,6 +627,26 @@ struct desktop {
     int (*power_state)(void); /* query capabilities and irreversible progress */
     void (*power_prepare)(struct desktop *);
     void (*logoff)(struct desktop *); /* G32: called after G3 has closed the session */
+    /* --- sec-user-03 (begin): desktop of a session the trusted LOGON service
+     * launched (SESSION_LAUNCH labels present). No desktop-owned logon gate:
+     * Lock goes to LOGON (SESSION_LOCK), Log Off/Shut Down end the session
+     * after G3's query/veto and LOGON collects it; a secure-menu choice made
+     * on the Ctrl+Alt+Del screen is fetched (SESSION_EVENT) after the
+     * activation's RESYNC. session_lock: 0 locking, LGN_STATUS_NO_PASSWORD
+     * (set-password guidance), other -errno. */
+    int logon_session, logon_query;
+    int (*session_lock)(struct desktop *);
+    /* --- sec-user-03 (end) --- */
+    /* --- sec-user-04: SESSION_EVENT notices to LOGON (logon_proto.h
+     * LGN_NOTICE_*): PASSWORD (own password set), SAVER (protected saver
+     * dismissal) and STANDBY (password-on-resume armed before Stand by or at
+     * an unarmed resume); *flags gets LGN_EVENT_* (BLANK: no lock possible,
+     * LOCKED: the trusted gate is up). 0 or -errno. resume_arming/until:
+     * the Stand by sequence waits (bounded) for the gate before sleeping. */
+    int (*session_secure)(struct desktop *, unsigned notice, unsigned *flags);
+    int resume_arming;
+    uint64_t resume_arm_until;
+    /* --- end sec-user-04 --- */
     int (*power_alive)(struct desktop *, uint32_t pid);
     /* T23 c42f556e: the live Win32 processes (w32srv's authenticated
      * clients), including those whose desktop connection ended or that have
@@ -634,6 +671,7 @@ struct desktop {
     int title_hot, title_down;
     uint32_t display_counter;
     uint16_t display_mode, display_pending;
+    uint16_t display_start_mode; /* saved startup request awaiting a complete frame */
     int (*display_set)(struct desktop *, uint16_t);
     int display_reply_client; uint32_t display_reply_pid, display_reply_serial;
     uint16_t display_reply_mode; int display_reply_preview;
@@ -673,7 +711,7 @@ struct desktop {
     struct ciuki_rect copy_rect;
     /* f2-92: offscreen rows [vram_first, vram_end), their surface caches,
      * the next window stability check and an engine lost while in use. */
-    uint32_t vram_first, vram_end, vram_queries, vram_failures;
+    uint32_t vram_first, vram_end, vram_queries, vram_failures, vram_epoch;
     struct desk_vram_entry vram[DESK_VRAM_ENTRIES];
     uint64_t vram_check_ns, vram_query_ns;
     int accel_lost;
@@ -845,6 +883,11 @@ void desk_flush(struct desktop *, int index);
 void desk_heartbeat(struct desktop *, uint64_t now_ns);
 void desk_focus(struct desktop *, int index);
 int desk_modal_target(const struct desktop *, int index);
+/* fx-acc1: "[desktop] window pid= window= owner= modal= state= title=" once
+ * per title or visibility change of a program window (v3), also in quiet
+ * boots (input.c). state: shown, minimized, hidden or closed. */
+void desk_window_record(const struct desktop *, int index, const char *state);
+const char *desk_window_state(const struct desktop *, int index);
 int desk_next_window(const struct desktop *, int excluded, uint32_t pid, const char *application);
 void desk_preferences_changed(struct desktop *);
 void desk_preferences_persistent(const struct desktop *, struct ciuki_settings *);
@@ -855,7 +898,8 @@ void desk_animate(struct desktop *, struct desk_box from, struct desk_box to);
 void desk_animation_tick(struct desktop *);
 void desk_move(struct desktop *, int index, int32_t x, int32_t y);
 void desk_resize(struct desktop *, int index, struct desk_box frame);
-enum { DESK_DISPLAY_NO_FRAME, DESK_DISPLAY_PERSIST_FRAME, DESK_DISPLAY_PREVIEW_FRAME };
+enum { DESK_DISPLAY_NO_FRAME, DESK_DISPLAY_COMPLETE_FRAME, DESK_DISPLAY_PREVIEW_FRAME };
+void desk_display_start_recover(struct desktop *);
 int desk_display_frame_commit(struct desktop *, int redraw_result);
 void desk_display_relayout(struct desktop *, uint32_t width, uint32_t height);
 void desk_zoom(struct desktop *, int index);
@@ -881,6 +925,7 @@ int desk_frame_due(const struct desktop *, uint64_t now);
 int desk_small_damage(const struct desktop *, uint64_t now);
 uint64_t desk_frame_time(const struct desktop *, uint64_t now);
 void desk_gfx_complete(struct desktop *, int index, int result, uint64_t completed, uint64_t next);
+void desk_direct_settle(struct desktop *) __attribute__((weak));
 void desk_stats_sample(struct desktop *);
 void desk_display_reply(struct desktop *, int result);
 uint64_t desk_launch_wait(const struct desktop *, uint64_t now); /* ns; short startup polling only */

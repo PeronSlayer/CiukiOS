@@ -1,6 +1,7 @@
 /* T0: production F1 services with fake scheduler and PIC boundaries.
  * Build: scripts/test/host_kernel_tests.sh (ASan/UBSan).
  * SPDX-License-Identifier: GPL-2.0-only */
+#include <ciuki/kheap_limits.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -51,7 +52,7 @@ static void outb(uint16_t port, uint8_t v) { (void)port; (void)v; writes++; }
 static void outl(uint16_t port, uint32_t v) { (void)port; (void)v; writes++; }
 static uint32_t inl(uint16_t port) { (void)port; return UINT32_MAX; }
 static uint16_t cpu_inw(uint16_t port) { (void)port; return UINT16_MAX; }
-void *kzalloc(size_t n) { return calloc(1, n); }
+void *(kzalloc)(size_t n) { if (n > KHEAP_MAX_REQUEST) return 0; return calloc(1, n); }
 void kfree(void *p) { free(p); }
 
 void klog(const char *fmt, ...)

@@ -15,6 +15,9 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#if defined(__CIUKIOS__) && !defined(__linux__)
+#include <ciuki/security.h>
+#endif
 static int utf8_valid(const uint8_t *s, unsigned n) { return desk_utf8_valid(s, n); }
 unsigned ws_link_encode(const struct ws_link *r, uint8_t *out, unsigned cap)
 {
@@ -180,11 +183,50 @@ static int remove_tree(struct ws_shell *s, const char *path, unsigned depth)
     free(names);
     return e ? e : s->fs.rmdir(s->fs.opaque, path);
 }
-static int group_path(struct ws_shell *s, const char *name, char *out, size_t cap)
+/* ---- sec-user-05: common and personal program groups ----------------------
+ * Windows NT/2000/XP Program Manager DDE: CreateGroup(GroupName[,
+ * CommonGroupFlag]), ShowGroup(GroupName,ShowCommand[,CommonGroupFlag]),
+ * DeleteGroup(GroupName[,CommonGroupFlag]); 1 names a common group, 0 a
+ * personal one, and only an administrator creates common groups (a
+ * non-administrator gets a personal group). Without the flag, Windows
+ * before Vista used the common Programs folder for an administrator and the
+ * personal one otherwise (Wine dlls/shell32/tests/progman_dde.c,
+ * use_common). Groups lists both folders. The kernel still checks every
+ * write: C:\WINDOWS is administrator-writable. */
+static const char *group_root(const struct ws_shell *s, int common) { return common ? s->common : s->programs; }
+/* -1 malformed, 0 absent (or empty), 1 present with *common set. */
+static int common_flag(const struct ws_command *c, unsigned at, int *common)
 {
-    char clean[64];
-    return sanitize(name, clean, sizeof(clean)) && path_join(out, cap, s->programs, clean, NULL);
+    if (c->argc <= at || !c->args[at][0]) return 0;
+    if (strcmp(c->args[at], "0") && strcmp(c->args[at], "1")) return -1;
+    *common = c->args[at][0] == '1'; return 1;
 }
+/* An existing group: the flag's folder, else the administrator's common
+ * folder first and the personal one first for everyone else. */
+static int group_find(struct ws_shell *s, const struct ws_command *c, unsigned flag_at, char *out, size_t cap, int *common)
+{
+    int wanted = 0, flag = common_flag(c, flag_at, &wanted);
+    if (flag < 0 || c->argc < 1) return 0;
+    for (unsigned pass = 0; pass < 2; pass++) {
+        int k = flag ? wanted : pass ? !s->administrator : s->administrator, dir = 0;
+        if (flag && pass) break;
+        char clean[64];
+        if (!sanitize(c->args[0], clean, sizeof(clean)) || !path_join(out, cap, group_root(s, k), clean, NULL)) return 0;
+        if (exists(s, out, &dir) && dir) { *common = k; return 1; }
+    }
+    return 0;
+}
+static int self_administrator(void)
+{
+#if defined(__CIUKIOS__) && !defined(__linux__)
+    struct ciuki_credential c;
+    if (ciuki_security_self(&c)) return 0;
+    if (c.primary_gid == CIUKI_GID_ADMINISTRATORS) return 1;
+    for (unsigned i = 0; i < c.group_count && i < 8; i++) if (c.groups[i] == CIUKI_GID_ADMINISTRATORS) return 1;
+#endif
+    return 0;
+}
+/* ---- end sec-user-05 ---- */
 /* ---- AddItem target resolution ------------------------------------------ */
 static int has_extension(const char *name)
 {
@@ -299,7 +341,7 @@ static uint32_t add_item(struct ws_shell *s, const struct ws_command *c, const c
         .directory = c->argc > 6 ? c->args[6] : "", .icon = c->argc > 2 ? c->args[2] : "", .show = minimize ? 7 : 1, .icon_index = (int32_t)index};
     if (strlen(link.label) >= 64 || strlen(link.directory) >= 260 || strlen(link.icon) >= 260 || strlen(arguments) >= 1024) return WS_DDE_FNOTPROCESSED;
     char dir[WS_PATH], path[WS_PATH];
-    if (!path_join(dir, sizeof(dir), s->programs, group, NULL) || !path_join(path, sizeof(path), dir, item, ".lnk")) return WS_DDE_FNOTPROCESSED;
+    if (!path_join(dir, sizeof(dir), group_root(s, s->active_common), group, NULL) || !path_join(path, sizeof(path), dir, item, ".lnk")) return WS_DDE_FNOTPROCESSED;
     int e = 0;
     if (!exists(s, path, NULL)) { int n = count_names(s, dir, 0, WS_ITEMS); if (n < 0) e = ENOMEM; else if ((unsigned)n >= WS_ITEMS) e = EFBIG; }
     if (!e) e = ws_link_store(s, path, &link);
@@ -312,42 +354,43 @@ static uint32_t execute(struct ws_shell *s, char *group, const struct ws_command
     if (!group) { ws_log(s, "[win32] progman op=%s result=sessions-exhausted", c->opcode); return WS_DDE_FNOTPROCESSED; }
     char path[WS_PATH];
     if (ascii_equal(c->opcode, "CreateGroup")) {
-        if (c->argc < 1 || !group_path(s, c->args[0], path, sizeof(path))) return WS_DDE_FNOTPROCESSED;
-        int dir = 0;
+        int common = s->administrator, flag = common_flag(c, 1, &common), dir = 0;
+        if (flag < 0) return WS_DDE_FNOTPROCESSED;
+        common = common && s->administrator; /* sec-user-05: common groups are an administrator's */
+        char clean[64];
+        if (c->argc < 1 || !sanitize(c->args[0], clean, sizeof(clean)) || !path_join(path, sizeof(path), group_root(s, common), clean, NULL)) return WS_DDE_FNOTPROCESSED;
         if (exists(s, path, &dir)) { if (!dir) return WS_DDE_FNOTPROCESSED; }
         else {
-            int count = count_names(s, s->programs, 1, WS_GROUPS);
+            int count = count_names(s, group_root(s, common), 1, WS_GROUPS);
             if (count < 0 || (unsigned)count >= WS_GROUPS) { ws_log(s, "[win32] progman op=CreateGroup result=bounds groups=%d", count); return WS_DDE_FNOTPROCESSED; }
             int e = s->fs.mkdir(s->fs.opaque, path);
             if (e && e != EEXIST) { ws_log(s, "[win32] progman op=CreateGroup result=error errno=%d", e); return WS_DDE_FNOTPROCESSED; }
         }
-        sanitize(c->args[0], group, 64);
-        ws_log(s, "[win32] progman op=CreateGroup group=%s", group);
+        sanitize(c->args[0], group, 64); s->active_common = common;
+        ws_log(s, "[win32] progman op=CreateGroup group=%s%s", group, common ? " common=1" : "");
         return WS_DDE_FACK;
     }
     if (ascii_equal(c->opcode, "DeleteGroup")) {
-        if (c->argc < 1 || !group_path(s, c->args[0], path, sizeof(path))) return WS_DDE_FNOTPROCESSED;
-        int dir = 0;
-        if (!exists(s, path, &dir) || !dir) return WS_DDE_FNOTPROCESSED;
+        int common = 0;
+        if (!group_find(s, c, 1, path, sizeof(path), &common)) return WS_DDE_FNOTPROCESSED;
         int e = remove_tree(s, path, 2);
         if (e) { ws_log(s, "[win32] progman op=DeleteGroup result=error errno=%d", e); return WS_DDE_FNOTPROCESSED; }
         char clean[64]; sanitize(c->args[0], clean, sizeof(clean));
-        if(ascii_equal(s->active_group,clean))s->active_group[0]=0;
+        if(ascii_equal(s->active_group,clean) && s->active_common==common)s->active_group[0]=0;
         ws_log(s, "[win32] progman op=DeleteGroup group=%s", clean);
         return WS_DDE_FACK;
     }
     if (ascii_equal(c->opcode, "ShowGroup")) {
         /* Two parameters are required; Windows ignores the second's value. */
-        if (c->argc < 2 || !group_path(s, c->args[0], path, sizeof(path))) return WS_DDE_FNOTPROCESSED;
-        int dir = 0;
-        if (!exists(s, path, &dir) || !dir) return WS_DDE_FNOTPROCESSED;
-        sanitize(c->args[0], group, 64);
+        int common = 0;
+        if (c->argc < 2 || !group_find(s, c, 2, path, sizeof(path), &common)) return WS_DDE_FNOTPROCESSED;
+        sanitize(c->args[0], group, 64); s->active_common = common;
         ws_log(s, "[win32] progman op=ShowGroup group=%s", group);
         return WS_DDE_FACK;
     }
     if (ascii_equal(c->opcode, "Reload")) {
         if (c->argc > 1) return WS_DDE_FNOTPROCESSED;
-        if (c->argc == 1) { int dir = 0; if (!group_path(s, c->args[0], path, sizeof(path)) || !exists(s, path, &dir) || !dir) return WS_DDE_FNOTPROCESSED; }
+        if (c->argc == 1) { int common = 0; if (!group_find(s, c, 1, path, sizeof(path), &common)) return WS_DDE_FNOTPROCESSED; }
         return WS_DDE_FACK;
     }
     if (ascii_equal(c->opcode, "ExitProgman")) return WS_DDE_FACK; /* no Program Manager to exit */
@@ -355,7 +398,7 @@ static uint32_t execute(struct ws_shell *s, char *group, const struct ws_command
         char item[64];
         if (c->argc < 1 || !*group || !sanitize(c->args[0], item, sizeof(item))) return WS_DDE_FNOTPROCESSED;
         char dir[WS_PATH];
-        if (!path_join(dir, sizeof(dir), s->programs, group, NULL) || !path_join(path, sizeof(path), dir, item, ".lnk")) return WS_DDE_FNOTPROCESSED;
+        if (!path_join(dir, sizeof(dir), group_root(s, s->active_common), group, NULL) || !path_join(path, sizeof(path), dir, item, ".lnk")) return WS_DDE_FNOTPROCESSED;
         int e = s->fs.unlink(s->fs.opaque, path);
         if (e) { ws_log(s, "[win32] progman op=%s group=%s item=%s result=error errno=%d", c->opcode, group, item, e); return WS_DDE_FNOTPROCESSED; }
         ws_log(s, "[win32] progman op=%s group=%s item=%s", c->opcode, group, item);
@@ -397,11 +440,26 @@ uint32_t ws_progman_request(struct ws_shell *s, const char *item, char *out, siz
     if (ascii_equal(item, "Groups") || ascii_equal(item, "PROGMAN")) {
         struct listing l = {names, 0, WS_GROUPS, 1, 0};
         if (s->fs.list(s->fs.opaque, s->programs, collect, &l)) l.count = 0;
+        if (strcmp(s->common, s->programs)) {   /* sec-user-05: the personal and the common groups, once each */
+            char (*more)[WS_FILE_NAME] = calloc(WS_GROUPS, WS_FILE_NAME);
+            struct listing c = {more, 0, WS_GROUPS, 1, 0};
+            if (more && !s->fs.list(s->fs.opaque, s->common, collect, &c))
+                for (unsigned i = 0; i < c.count && l.count < l.cap; i++) {
+                    int seen = 0; for (unsigned j = 0; j < l.count && !seen; j++) seen = ascii_equal(l.names[j], more[i]);
+                    if (!seen) memcpy(l.names[l.count++], more[i], WS_FILE_NAME);
+                }
+            free(more);
+        }
         sort_names(&l);
         for (unsigned i = 0; i < l.count && !error; i++) if (!append(out, cap, n, l.names[i]) || !append(out, cap, n, "\r\n")) error = 234;
     } else {
-        char dir[WS_PATH], clean[64]; int is_dir = 0;
-        if (!sanitize(item, clean, sizeof(clean)) || !path_join(dir, sizeof(dir), s->programs, clean, NULL) || !exists(s, dir, &is_dir) || !is_dir) { free(names); return 2; }
+        char dir[WS_PATH], clean[64]; int is_dir = 0, found = 0, common = 0;
+        if (sanitize(item, clean, sizeof(clean)))   /* sec-user-05: as group_find without a flag */
+            for (unsigned pass = 0; pass < 2 && !found; pass++) {
+                common = pass ? !s->administrator : s->administrator;
+                found = path_join(dir, sizeof(dir), group_root(s, common), clean, NULL) && exists(s, dir, &is_dir) && is_dir;
+            }
+        if (!found) { free(names); return 2; }
         struct listing l = {names, 0, WS_ITEMS, 0, 0};
         if (s->fs.list(s->fs.opaque, dir, collect, &l)) l.count = 0;
         sort_names(&l);
@@ -424,7 +482,13 @@ uint32_t ws_progman_request(struct ws_shell *s, const char *item, char *out, siz
             items++;
         }
         if (!error) {
-            snprintf(head, WS_PATH + 1536, "\"%s\",C:\\WINDOWS\\Start Menu\\Programs\\%s,%u,3\r\n", clean, clean, (unsigned)items);
+            if (common || !strcmp(s->common, s->programs))
+                snprintf(head, WS_PATH + 1536, "\"%s\",C:\\WINDOWS\\Start Menu\\Programs\\%s,%u,3\r\n", clean, clean, (unsigned)items);
+            else {   /* sec-user-05: a personal group's folder, DOS-spelled */
+                char spelled[WS_PATH]; snprintf(spelled, sizeof(spelled), "C:%s", dir);
+                for (char *p = spelled; *p; p++) if (*p == '/') *p = '\\';
+                snprintf(head, WS_PATH + 1536, "\"%s\",%s,%u,3\r\n", clean, spelled, (unsigned)items);
+            }
             if (!append(out, cap, n, head) || !append(out, cap, n, body)) error = 234;
         }
         free(record); free(head); free(body);
@@ -440,11 +504,14 @@ struct ws_shell *ws_create(const struct ws_fs *fs, const struct ws_config *confi
     struct ws_shell *s = calloc(1, sizeof(*s)); if (!s) return NULL;
     s->fs = *fs; s->registry = registry;
     memcpy(s->programs, config->programs, strlen(config->programs) + 1);
+    memcpy(s->common, config->programs, strlen(config->programs) + 1);   /* sec-user-05 */
+    s->administrator = self_administrator();
     memcpy(s->windows, config->windows, strlen(config->windows) + 1);
     ws_restart_recover(s);
     return s;
 }
 void ws_destroy(struct ws_shell *s) { if (s) free(s->wininit); free(s); }
+void ws_set_administrator(struct ws_shell *s, int administrator) { s->administrator = !!administrator; }   /* sec-user-05 */
 uint32_t ws_call(void *svc, uint32_t pid, const struct w32r_request *a, const char *path, const char *name,
                  struct w32r_reply *r, uint8_t *bytes, size_t cap)
 {
@@ -507,5 +574,5 @@ void ws_profile(void *opaque,const char *root)
 {
     struct ws_shell *s=opaque;
     snprintf(s->programs,sizeof(s->programs),"%s/Start Menu/Programs",*root ? root : s->windows);
-    s->active_group[0]=0;
+    s->active_group[0]=0; s->active_common=0;
 }

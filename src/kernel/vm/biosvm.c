@@ -12,10 +12,13 @@
 #include <ciuki/registry.h>
 #include <ciuki/vga_ports.h>
 #include <ciuki/biosvm.h>
+#include <ciuki/selftest.h>
 #include <ciuki/abi.h>
 #include <ciuki/display.h>
 #include <ciuki/init.h>
 #include <ciuki/apm_ports.h>
+#include <ciuki/dos_video_modes.h>
+#include "../fs/fs_port.h"
 
 extern void v86_enter(const struct v86_frame *f, uint32_t *continuation);
 extern void v86_leave(uint32_t continuation) __attribute__((noreturn));
@@ -30,7 +33,25 @@ static struct kmutex request_mutex;
 static struct kwait wake, completion;
 static volatile uint16_t pending_irqs;
 static bool initialized, quarantined, synthetic, input_enabled, video_active, video_claimed;
+/* Execution faults are terminal for their service, not the shared broker.
+ * quarantined above is reserved for invalid shared initialization/ownership. */
+enum bios_family { BIOS_INPUT, BIOS_APM, BIOS_VIDEO, BIOS_FAMILIES };
+static bool family_quarantined[BIOS_FAMILIES];
 static bool fullscreen_video;
+static bool family_disabled(enum bios_family family)
+{
+    return quarantined || family_quarantined[family] ||
+        (synthetic && firmware.state == V86_DISABLED);
+}
+/* Firmware only: do not widen the generic monitor or DOS I/O policy. */
+static int delay_io(void *arg, uint16_t port, unsigned width, bool write, uint32_t *value)
+{
+    (void)arg;
+    if ((port != 0x80 && port != 0xED) || width != 1) return -ENOSYS;
+    /* See docs/validation/fx-biosvm.md: never forward POST/delay cycles. */
+    if (!write) *value = 0xFF;
+    return 0;
+}
 static struct { int handle; gen_t generation; } video_leases[4];
 static unsigned video_lease_count;
 static bool video_dispi;
@@ -64,6 +85,7 @@ static void notify_input(void)
 
 static int reflect_input_irq(struct v86_frame *f)
 {
+    if (family_disabled(BIOS_INPUT) && !synthetic) return 0;
     int irq = v86_irq_pending(&firmware);
     int rc = v86_irq_deliver(&firmware, f);
     if (rc > 0 && !synthetic && (irq == 1 || irq == 12)) {
@@ -148,6 +170,22 @@ static void quarantine(void)
     }
 }
 
+static void quarantine_family(enum bios_family family, const char *reason)
+{
+    if (family_quarantined[family]) return;
+    family_quarantined[family] = true;
+    klog("[biosvm] step=family_quarantine family=%s reason=%s",
+         family == BIOS_INPUT ? "input" : family == BIOS_APM ? "apm" : "video", reason);
+    /* APM has no broker-owned hardware lease. Never reclaim an affected
+     * input/video lease without reset, even though other services may run. */
+    if (family == BIOS_INPUT)
+        for (unsigned i = 0; i < lease_count; i++)
+            registry_quarantine(leases[i].handle, leases[i].generation);
+    if (family == BIOS_VIDEO)
+        for (unsigned i = 0; i < video_lease_count; i++)
+            registry_quarantine(video_leases[i].handle, video_leases[i].generation);
+}
+
 static void capture_pending(void)
 {
     uint32_t f = irq_save();
@@ -167,7 +205,7 @@ static bool vm_woken(void *arg)
 
 static void irq_input(struct trap_frame *tf)
 {
-    if (!initialized || !input_enabled || quarantined || synthetic)
+    if (!initialized || !input_enabled || family_disabled(BIOS_INPUT) || synthetic)
         return;
     unsigned irq = tf->vector - 0x20;
     delivery.queued[irq == 12]++;
@@ -255,8 +293,8 @@ static int map_firmware(void)
 {
     /* boot-memory.md dedicates 10000-1FFFF physically to BIOS calls. The
      * PMM already excludes ALL low pages; no general LOW allocation exists.
-     * Reuse two pages of that explicit reservation, never allocator RAM. */
-    if (!reserved_ram(BIOSVM_SCRATCH, BIOSVM_STACK + PAGE_SIZE))
+     * Scratch, stack and VBE state use six pages, never allocator RAM. */
+    if (!reserved_ram(BIOSVM_SCRATCH, BIOSVM_VIDEO_STATE + BIOSVM_VIDEO_STATE_SIZE))
         return init_error("scratch_reservation", -EFAULT);
     uint16_t ebda_seg, conventional_kib;
     memcpy(&ebda_seg, P2V(0x40E), 2);
@@ -300,11 +338,14 @@ static int map_firmware(void)
      * Only this private PDE exposes their physical identity as user RW. */
     mappings[4] = (struct biosvm_mapping){0xC0000, 0xF0000, rom | PTE_W};
     mappings[5] = (struct biosvm_mapping){0xF0000, 0x100000, rom};
+    mappings[6] = (struct biosvm_mapping){BIOSVM_VIDEO_STATE,
+        BIOSVM_VIDEO_STATE + BIOSVM_VIDEO_STATE_SIZE, rw};
     for (unsigned i = 0; i < BIOSVM_MAP_COUNT; i++)
         for (uint32_t p = mappings[i].start; p < mappings[i].end; p += PAGE_SIZE)
             pt[p >> 12] = p | mappings[i].flags;
     memset(P2V(BIOSVM_SCRATCH), 0, PAGE_SIZE);
     memset(P2V(BIOSVM_STACK), 0, PAGE_SIZE);
+    memset(P2V(BIOSVM_VIDEO_STATE), 0, BIOSVM_VIDEO_STATE_SIZE);
     size_t stub_bytes = (size_t)(biosvm_mouse_stub_end - biosvm_mouse_stub);
     if (stub_bytes > BIOSVM_MOUSE_RING - BIOSVM_MOUSE_OFFSET)
         return init_error("mouse_stub_size", -EFAULT);
@@ -456,7 +497,7 @@ static int run_vm_body(struct biosvm_regs *regs, uint32_t ms, unsigned test)
          * deadline cannot be tested later in the same instruction stream. */
         static const uint8_t policy[] = {0xFA, 0xFB, 0x90, 0xB0, 0xFF, 0xE6, 0x21,
                                          0xB0, 0x36, 0xE6, 0x43, 0xCD, 0x1C, 0xCF};
-        static const uint8_t denied[] = {0xB0, 0, 0xE6, 0x80, 0xCF};
+        static const uint8_t denied[] = {0xB0, 0, 0xE6, 0x81, 0xCF};
         static const uint8_t timeout[] = {0xFA, 0xF4, 0xEB, 0xFD};
         const uint8_t *code = test == 1 ? policy : test == 2 ? denied : timeout;
         unsigned size = test == 1 ? sizeof(policy) : test == 2 ? sizeof(denied) : sizeof(timeout);
@@ -505,8 +546,6 @@ static int run_vm_body(struct biosvm_regs *regs, uint32_t ms, unsigned test)
              firmware.fault.count, firmware.state);
         record_failure(&input, rc, (uint32_t)elapsed, ms);
     } else last_failure = (struct biosvm_failure){0};
-    if (firmware.state == V86_DISABLED && !synthetic)
-        quarantine();
     return rc;
 }
 
@@ -544,10 +583,24 @@ static int apm_io(void *arg, uint16_t port, unsigned width, bool write, uint32_t
     (void)arg;
     /* APM has no physical resource claim of its own.
      * Native i8042 ownership must not be bypassed by the firmware monitor's
-     * input port rules. PIC/PIT/RTC remain virtual. fx-18: the chipset
+     * input port rules. PIC/PIT remain virtual. CMOS data is serialized
+     * through the native RTC owner; the firmware index remains private.
+     * fx-18: the chipset
      * power-management window the APM BIOS needs is admitted, bounded and
      * logged; every other port stays denied. */
-    if (!input_enabled && (port == 0x60 || port == 0x64)) return -V86_EPERM;
+    if ((!input_enabled || family_disabled(BIOS_INPUT)) && (port == 0x60 || port == 0x64)) return -V86_EPERM;
+    if (width == 1 && (port == 0x70 || port == 0x71)) {
+        firmware.stats.io[V86_RTC]++;
+        if (port == 0x70) {
+            if (write) firmware.rtc_index = (uint8_t)*value;
+            else *value = firmware.rtc_index;
+        } else *value = fs_cmos_bios_data(firmware.rtc_index, write, (uint8_t)*value);
+        return 0;
+    }
+    if (!delay_io(arg, port, width, write, value)) {
+        apm_io_stats.absorbed++;
+        return 0;
+    }
     if (!apm_window_set) return -ENOSYS;
     uint8_t kind = APM_PORT_NONE; const char *reason = "outside_window";
     enum apm_port_verdict v = apm_port_check(&apm_window, port, width, write, *value, apm_function, &kind, &reason);
@@ -583,6 +636,8 @@ static int run_vm(struct biosvm_regs *regs, uint32_t ms, unsigned test)
 {
     bool apm = regs->interrupt == 0x15 &&
                ((regs->eax >= 0x5300 && regs->eax <= 0x5310) || regs->eax == 0x5380);
+    enum bios_family family = apm ? BIOS_APM : video_active ? BIOS_VIDEO : BIOS_INPUT;
+    if (family_disabled(family)) return -V86_EIO;
     if (apm && firmware.io) return -EBUSY;
     if (apm && apm_deadline_active) {
         uint64_t now = deadline_after_ms(0);
@@ -598,7 +653,25 @@ static int run_vm(struct biosvm_regs *regs, uint32_t ms, unsigned test)
          * ms above already excludes time spent in the request queue. */
         firmware.max_call_ms = 2000;
     }
+    /* v86_abort stops one execution. A healthy family may start only here,
+     * after the previous worker entry returned. No hardware lease is reset. */
+    if (firmware.state == V86_DISABLED) firmware.state = V86_IDLE;
+    struct v86_pic saved_pic[2];
+    memcpy(saved_pic, firmware.pic, sizeof(saved_pic));
+    if (!firmware.io) firmware.io = delay_io;
     int e = run_vm_body(regs, ms, test);
+    if (firmware.io == delay_io) firmware.io = 0;
+    if (firmware.state == V86_DISABLED && !synthetic) {
+        quarantine_family(family, failure_reason(e));
+        if (family != BIOS_INPUT) {
+            /* Discard a failed service's virtual masks/in-service state;
+             * preserve queued IRQ edges for the healthy input family. */
+            for (unsigned i = 0; i < 2; i++) {
+                saved_pic[i].irr |= firmware.pic[i].irr;
+                firmware.pic[i] = saved_pic[i];
+            }
+        }
+    }
     if (apm) { firmware.io = 0; firmware.max_call_ms = saved_limit; }
     return e;
 }
@@ -616,7 +689,7 @@ static bool input_irq_pending(void)
 static bool worker_ready(void *arg)
 {
     (void)arg;
-    return request_pending || (input_enabled && !quarantined && !synthetic && input_irq_pending());
+    return request_pending || (input_enabled && !family_disabled(BIOS_INPUT) && !synthetic && input_irq_pending());
 }
 
 static void worker_main(void *arg)
@@ -632,13 +705,13 @@ static void worker_main(void *arg)
             request_done = true;
             kwait_wake_all(&completion);
         }
-        if (input_enabled && !quarantined && !synthetic && input_irq_pending()) {
+        if (input_enabled && !family_disabled(BIOS_INPUT) && !synthetic && input_irq_pending()) {
             struct biosvm_regs r = {0};
             run_vm(&r, 100, 0);
             input_irq = true;
         }
         input_irq |= firmware.stats.reflected_irqs != reflected;
-        if (input_enabled && !quarantined && !synthetic && input_service && (input_irq || deadline_passed(poll))) {
+        if (input_enabled && !family_disabled(BIOS_INPUT) && !synthetic && input_service && (input_irq || deadline_passed(poll))) {
             input_service();
             notify_input();
             poll = deadline_after_ms(10);
@@ -648,11 +721,16 @@ static void worker_main(void *arg)
         /* Bound each batch to one standalone reflection. Even a stream of
          * individually short ISRs must let lower priorities run. Firmware
          * calls retain their own deadline; backlog blocks for one tick. */
-        if (input_enabled && !quarantined && !synthetic && input_irq_pending()) {
+        if (input_enabled && !family_disabled(BIOS_INPUT) && !synthetic && input_irq_pending()) {
             delivery.budget_yields++;
             task_sleep_ms(1);
         }
-        kwait_wait_until(&wake, worker_ready, 0, quarantined ? deadline_after_ms(1000) : poll);
+        /* fx-doomwin: the 10 ms poll serves the firmware input service
+         * only. A worker without it (native PS/2/USB input; trial 6c3b7800:
+         * "[input] ... firmware=0") waits for a request, whose submit wakes
+         * it, instead of 100 empty P_DEVICE turns a second. */
+        bool polling = !family_disabled(BIOS_INPUT) && (input_enabled || synthetic);
+        kwait_wait_until(&wake, worker_ready, 0, polling ? poll : deadline_after_ms(1000));
     }
 }
 
@@ -713,7 +791,11 @@ failed:
     return rc;
 }
 
-int biosvm_init(void) { return biosvm_init_for(true); }
+int biosvm_init(void)
+{
+    if (family_disabled(BIOS_INPUT)) return init_error("input_quarantined", -V86_EIO);
+    return biosvm_init_for(true);
+}
 
 int biosvm_apm_call(struct biosvm_regs *regs, uint32_t ms)
 {
@@ -729,8 +811,10 @@ int biosvm_apm_call(struct biosvm_regs *regs, uint32_t ms)
     if (e) return e;
     if (g_current == vm_thread) return -EBUSY;
     if (!kmutex_lock_until(&request_mutex, end)) return -V86_ETIMEDOUT;
-    if (quarantined || firmware.state == V86_DISABLED) e = -V86_EIO;
-    else if (video_claimed || fullscreen_video || firmware.io) e = -EBUSY;
+    if (family_disabled(BIOS_APM)) e = -V86_EIO;
+    /* Quarantined video leases stay pinned, but their returned worker is
+     * no longer an active video transaction and must not block APM. */
+    else if (((video_claimed || fullscreen_video) && !family_disabled(BIOS_VIDEO)) || firmware.io) e = -EBUSY;
     else if (deadline_passed(end)) e = -V86_ETIMEDOUT;
     else {
         /* The worker subtracts queue time before entering V86. Expired
@@ -780,13 +864,13 @@ int biosvm_input_fallback(void)
         firmware.pic[1].irr = firmware.pic[1].isr = 0;
     }
     irq_restore(f);
-    int rc = quarantined ? -V86_EIO : busy ? -EBUSY : 0;
+    int rc = family_disabled(BIOS_INPUT) ? -V86_EIO : busy ? -EBUSY : 0;
     for (unsigned i = 0; !rc && i < lease_count; i++)
         rc = registry_quiesce(leases[i].handle, leases[i].generation, input_fallback_idle);
     for (unsigned i = 0; !rc && i < lease_count; i++)
         rc = registry_release(leases[i].handle, leases[i].generation);
     if (!rc) lease_count = 0;
-    else quarantine();
+    else quarantine_family(BIOS_INPUT, "input_lease_transfer");
     kmutex_unlock(&request_mutex);
     klog("[biosvm] step=input_fallback error=%d leases=%u", rc, lease_count);
     return rc;
@@ -824,7 +908,7 @@ static int reject_call(const char *step, const struct biosvm_regs *regs, int rc)
 
 int biosvm_call(struct biosvm_regs *regs, uint32_t deadline_ms)
 {
-    if (!initialized || quarantined || firmware.state == V86_DISABLED)
+    if (!initialized || family_disabled(BIOS_INPUT))
         return reject_call("call_disabled", regs, -V86_EIO);
     if (!regs || !g_current || !(read_eflags() & V86_IF) || !deadline_ms)
         return reject_call("call_context", regs, -EINVAL);
@@ -836,7 +920,7 @@ int biosvm_call(struct biosvm_regs *regs, uint32_t deadline_ms)
     if (g_current != vm_thread)
         kmutex_lock(&request_mutex);
     int rc;
-    if (quarantined || firmware.state == V86_DISABLED) {
+    if (family_disabled(BIOS_INPUT)) {
         rc = reject_call("call_quarantined", regs, -V86_EIO);
         goto done;
     }
@@ -862,7 +946,7 @@ done:
 
 enum biosvm_backend biosvm_backend_state(void)
 {
-    return quarantined || firmware.state == V86_DISABLED ? BIOSVM_DISABLED_BACKEND :
+    return family_disabled(BIOS_INPUT) ? BIOSVM_DISABLED_BACKEND :
            initialized ? BIOSVM_READY : BIOSVM_OFF;
 }
 
@@ -912,7 +996,7 @@ void biosvm_input_snapshot(struct biosvm_input_diag *out)
     out->pending = pending_irqs;
     out->state = firmware.state;
     out->active = continuation != 0;
-    out->disabled = quarantined || firmware.state == V86_DISABLED;
+    out->disabled = family_disabled(BIOS_INPUT);
     for (unsigned i = 0; i < 2; i++) {
         out->imr[i] = firmware.pic[i].imr;
         out->irr[i] = firmware.pic[i].irr;
@@ -932,7 +1016,7 @@ void biosvm_input_snapshot(struct biosvm_input_diag *out)
 
 bool biosvm_keyboard_pending(void)
 {
-    if (!initialized || quarantined || firmware.state == V86_DISABLED) return false;
+    if (!initialized || family_disabled(BIOS_INPUT)) return false;
     /* Same borrowed physical BDA page as run_vm, with volatile loads because
      * the firmware producer writes it outside the C abstract machine. */
     volatile uint16_t *head = P2V(0x41A), *tail = P2V(0x41C);
@@ -941,7 +1025,7 @@ bool biosvm_keyboard_pending(void)
 
 bool biosvm_mouse_pending(void)
 {
-    if (!initialized || quarantined || firmware.state == V86_DISABLED) return false;
+    if (!initialized || family_disabled(BIOS_INPUT)) return false;
     volatile struct biosvm_mouse_ring *r = P2V(BIOSVM_SCRATCH + BIOSVM_MOUSE_RING);
     return r->head != r->tail || r->lost != mouse_lost ||
            r->head >= BIOSVM_MOUSE_CAP || r->tail >= BIOSVM_MOUSE_CAP;
@@ -1087,11 +1171,11 @@ static int claim_video(void)
     const uint32_t end[] = {CIUKI_VGA_MONO_END, CIUKI_VGA_COLOR_END, 0xC0000, 0x1D2};
     for (unsigned i = 0; i < (video_dispi ? 4u : 3u); i++) {
         int h = registry_claim(types[i], start[i], end[i], "firmware-video", false);
-        if (h < 0) { quarantine(); return h; }
+        if (h < 0) { quarantine_family(BIOS_VIDEO, "video_lease_claim"); return h; }
         gen_t gen = registry_get((unsigned)h)->generation;
         video_leases[video_lease_count].handle = h;
         video_leases[video_lease_count++].generation = gen;
-        if (registry_activate(h, gen)) { quarantine(); return -V86_EIO; }
+        if (registry_activate(h, gen)) { quarantine_family(BIOS_VIDEO, "video_lease_claim"); return -V86_EIO; }
     }
     video_claimed = true;
     return 0;
@@ -1105,7 +1189,7 @@ int biosvm_video_prepare(void)
     kmutex_lock(&request_mutex);
     /* Display preparation precedes fbdev_change_begin: Savage may still own
      * the VGA ports. Only prepare the VM here; switch claims after stop. */
-    e = quarantined || firmware.state == V86_DISABLED ? -V86_EIO : 0;
+    e = family_disabled(BIOS_VIDEO) ? -V86_EIO : 0;
     kmutex_unlock(&request_mutex);
     return e;
 }
@@ -1117,12 +1201,12 @@ static bool video_idle(int handle, gen_t generation)
 }
 static int release_video(void)
 {
-    if (quarantined) return -V86_EIO;
+    if (family_disabled(BIOS_VIDEO)) return -V86_EIO;
     for (unsigned i = 0; i < video_lease_count; i++) {
         int h = video_leases[i].handle;
         gen_t gen = video_leases[i].generation;
         if (registry_quiesce(h, gen, video_idle) || registry_release(h, gen)) {
-            quarantine();
+            quarantine_family(BIOS_VIDEO, "video_lease_release");
             return -V86_EIO;
         }
     }
@@ -1135,6 +1219,7 @@ static int video_io(void *arg, uint16_t port, unsigned width, bool write, uint32
 {
     (void)arg;
     if (!video_active) return -ENOSYS;
+    if (!delay_io(arg, port, width, write, value)) return 0;
     if (port == 0x500 && width == 1 && write) return 0; /* VGA ROM diagnostic sink */
     bool vga = width <= 2 && ciuki_vga_port_span(port, width);
     bool dispi = video_dispi && (port == 0x1CE || port == 0x1CF || port == 0x1D0) && width == 2;
@@ -1146,7 +1231,7 @@ static int video_io(void *arg, uint16_t port, unsigned width, bool write, uint32
     }
     /* Native input remains its sole consumer, even during INT10. */
     bool allowed=width==1;
-    if (!input_enabled && (port==0x60 || port==0x64)) allowed=false;
+    if ((!input_enabled || family_disabled(BIOS_INPUT)) && (port==0x60 || port==0x64)) allowed=false;
     else {
         bool rule=false;
         for (unsigned i=0;i<firmware.nports;i++)
@@ -1158,7 +1243,7 @@ static int video_io(void *arg, uint16_t port, unsigned width, bool write, uint32
         klog("[biosvm] fullscreen_port_fault port=%04x width=%u write=%u value=%08x",
             port,width,(unsigned)write,*value);
         display_fullscreen_checkpoint("bios-port-fault",-V86_EPERM);
-        if (!input_enabled && (port==0x60 || port==0x64)) return -V86_EPERM;
+        if ((!input_enabled || family_disabled(BIOS_INPUT)) && (port==0x60 || port==0x64)) return -V86_EPERM;
     }
     return -ENOSYS; /* PIC/PIT remain virtual; unknown dependencies fault */
 }
@@ -1171,7 +1256,7 @@ int biosvm_video_switch(uint16_t mode, uint8_t info[256])
     if (e) return e;
     kmutex_lock(&request_mutex);
     if (fullscreen_video) { e=-EBUSY; goto done; }
-    if (quarantined || firmware.state == V86_DISABLED) { e = -V86_EIO; goto done; }
+    if (family_disabled(BIOS_VIDEO)) { e = -V86_EIO; goto done; }
     if ((e = claim_video())) goto done;
     uint32_t *pt = P2V(low_pt);
     for (uint32_t p = 0xA0000; p < 0xC0000; p += PAGE_SIZE)
@@ -1199,7 +1284,7 @@ revoke:
     firmware.io = 0;
     firmware.max_call_ms = 0;
     for (uint32_t p = 0xA0000; p < 0xC0000; p += PAGE_SIZE) pt[p >> 12] = 0;
-    if (!quarantined && release_video()) e = -V86_EIO;
+    if (!family_disabled(BIOS_VIDEO) && release_video()) e = -V86_EIO;
 done:
     kmutex_unlock(&request_mutex);
     return e;
@@ -1230,15 +1315,29 @@ int biosvm_video_dpms(unsigned state)
     }
     video_active=false; firmware.io=0; firmware.max_call_ms=0;
     for (uint32_t p=0xA0000;p<0xC0000;p+=PAGE_SIZE) pt[p>>12]=0;
-    if (!quarantined && release_video()) e=-EIO;
+    if (!family_disabled(BIOS_VIDEO) && release_video()) e=-EIO;
 done:
     kmutex_unlock(&request_mutex); return e;
 }
 
-/* f3-20: persistent display ownership, not generic guest firmware forwarding.
- * The existing 2 KiB private scratch tail bounds the firmware state buffer. */
-static uint8_t fullscreen_saved[2048];
+/* f3-20/fx-biosvm2: persistent display ownership, no guest forwarding.
+ * VBE's BIOS-defined block count is bounded by dedicated real-mode pages;
+ * keep a kernel copy because intervening firmware calls can alter low RAM. */
+static uint8_t fullscreen_saved[BIOSVM_VIDEO_STATE_SIZE];
+_Static_assert(BIOSVM_VIDEO_STATE >= BIOSVM_STACK + PAGE_SIZE &&
+    BIOSVM_VIDEO_STATE + BIOSVM_VIDEO_STATE_SIZE <= 0x20000u &&
+    BIOSVM_VIDEO_STATE_SIZE <= 0x10000u, "VBE state must fit the BIOS reservation and ES segment");
 static unsigned fullscreen_bytes;
+/* fx-selftest: what the last 4F04 query/save/restore reported. bytes keeps
+ * the BIOS's requested size even when it exceeds the state area. */
+static struct biosvm_video_state video_state;
+void biosvm_video_state_snapshot(struct biosvm_video_state *out)
+{
+    /* Small diagnostic copy; the mutex may never have been initialized. */
+    uint32_t flags=irq_save();
+    *out=video_state;
+    irq_restore(flags);
+}
 static void fullscreen_aperture(bool active)
 {
     uint32_t *pt = P2V(low_pt);
@@ -1265,43 +1364,58 @@ static int fullscreen_call(struct biosvm_regs *r, uint32_t *budget, bool vbe, bo
     if (!e && !recovery) e=logged;
     return e;
 }
-int biosvm_video_fullscreen_begin(uint8_t mode)
+int biosvm_video_fullscreen_begin(uint16_t mode, uint8_t info[256])
 {
     bool standard=mode<=3 || mode==0x0D || mode==0x0E || mode==0x10 || mode==0x11 || mode==0x12 || mode==0x13;
-    if (!standard || !g_current || g_current==vm_thread || !(read_eflags()&V86_IF)) return -EINVAL;
+    bool packed=dos_video_mode(mode)!=0;
+    if ((!standard && !packed) || (packed && !info) || !g_current || g_current==vm_thread || !(read_eflags()&V86_IF)) return -EINVAL;
     int e=biosvm_video_prepare();
     if (e) return e;
     kmutex_lock(&request_mutex);
-    if (fullscreen_video || video_claimed || quarantined) { e=-EBUSY; goto done_fs; }
+    if (fullscreen_video || video_claimed || family_disabled(BIOS_VIDEO)) { e=-EBUSY; goto done_fs; }
     if ((e=display_fullscreen_checkpoint("video-claim",0))) goto done_fs;
     if ((e=claim_video())) goto done_fs;
     fullscreen_aperture(true);
     uint32_t budget=2000;
     struct biosvm_regs r={.interrupt=0x10,.eax=0x4F04,.ecx=15};
     fullscreen_bytes=0;
-    if ((e=fullscreen_call(&r,&budget,true,false))) goto revoke_fs;
+    video_state.queries++;
+    if ((e=fullscreen_call(&r,&budget,true,false))) { video_state.query_result=e; goto revoke_fs; }
     unsigned bytes=(uint16_t)r.ebx*64u;
-    if (!bytes || bytes>sizeof(fullscreen_saved)) { e=-EOPNOTSUPP; goto revoke_fs; }
-    memset(P2V(BIOSVM_SCRATCH+0x800),0,bytes);
+    video_state.bytes=bytes;
+    if (!bytes || bytes>sizeof(fullscreen_saved)) { e=video_state.query_result=-EOPNOTSUPP; goto revoke_fs; }
+    video_state.query_result=0;
+    memset(P2V(BIOSVM_VIDEO_STATE),0,bytes);
     r=(struct biosvm_regs){.interrupt=0x10,.eax=0x4F04,.ecx=15,.edx=1,
-        .es=BIOSVM_SCRATCH>>4,.ebx=0x800};
-    if ((e=fullscreen_call(&r,&budget,true,false))) goto revoke_fs;
-    memcpy(fullscreen_saved,P2V(BIOSVM_SCRATCH+0x800),bytes);
+        .es=BIOSVM_VIDEO_STATE>>4,.ebx=0};
+    video_state.saves++;
+    e=fullscreen_call(&r,&budget,true,false);
+    video_state.save_result=e;
+    if (e) goto revoke_fs;
+    memcpy(fullscreen_saved,P2V(BIOSVM_VIDEO_STATE),bytes);
     fullscreen_bytes=bytes;
-    /* No VBE/extension mode from a DOS VM is accepted. */
-    r=(struct biosvm_regs){.interrupt=0x10,.eax=mode};
-    e=fullscreen_call(&r,&budget,false,false);
+    /* The fixed synthetic inventory is selected by the display service;
+     * guest registers/firmware pointers are never forwarded. */
+    r=(struct biosvm_regs){.interrupt=0x10,.eax=packed ? 0x4F02 : mode,.ebx=packed ? mode|0x4000 : 0};
+    e=fullscreen_call(&r,&budget,packed,false);
     if (!e) {
-        r=(struct biosvm_regs){.interrupt=0x10,.eax=0x0F00};
-        e=fullscreen_call(&r,&budget,false,false);
-        if (!e && (r.eax&0x7F)!=mode) e=-V86_EIO;
+        r=(struct biosvm_regs){.interrupt=0x10,.eax=packed ? 0x4F03 : 0x0F00};
+        e=fullscreen_call(&r,&budget,packed,false);
+        if (!e && (packed ? (r.ebx&0x7FFF)!=(mode|0x4000) : (r.eax&0x7F)!=mode)) e=-V86_EIO;
+    }
+    if (!e && packed) {
+        memset(P2V(BIOSVM_SCRATCH+0x800),0,256);
+        r=(struct biosvm_regs){.interrupt=0x10,.eax=0x4F01,.ecx=mode,
+            .es=BIOSVM_SCRATCH>>4,.edi=0x800};
+        if (!(e=fullscreen_call(&r,&budget,true,false))) memcpy(info,P2V(BIOSVM_SCRATCH+0x800),256);
     }
     /* Even a failed mode set may have touched hardware: retain the saved
-     * state and leases so the caller can execute the rollback transaction. */
-    fullscreen_video=true;
+     * state and leases for rollback if execution is still safe. A fatal
+     * fault pins the leases without keeping an active transaction. */
+    fullscreen_video=!family_disabled(BIOS_VIDEO);
 revoke_fs:
     fullscreen_aperture(false);
-    if (!fullscreen_video && !quarantined && release_video()) e=-V86_EIO;
+    if (!fullscreen_video && !family_disabled(BIOS_VIDEO) && release_video()) e=-V86_EIO;
 done_fs:
     kmutex_unlock(&request_mutex);
     return e;
@@ -1311,13 +1425,22 @@ int biosvm_video_fullscreen_end(uint16_t mode, uint8_t info[256])
     if (!info || !g_current || g_current==vm_thread || !(read_eflags()&V86_IF)) return -EINVAL;
     kmutex_lock(&request_mutex);
     int e=-V86_EIO;
-    if (!fullscreen_video || !fullscreen_bytes || quarantined) goto done_restore;
+    if (family_disabled(BIOS_VIDEO)) {
+        /* Execution returned and revoked its aperture. Drop transaction
+         * metadata only; quarantined leases must never be reclaimed. */
+        fullscreen_video=false; fullscreen_bytes=0;
+        goto done_restore;
+    }
+    if (!fullscreen_video || !fullscreen_bytes) goto done_restore;
     fullscreen_aperture(true);
     uint32_t budget=2000;
-    memcpy(P2V(BIOSVM_SCRATCH+0x800),fullscreen_saved,fullscreen_bytes);
+    memcpy(P2V(BIOSVM_VIDEO_STATE),fullscreen_saved,fullscreen_bytes);
     struct biosvm_regs r={.interrupt=0x10,.eax=0x4F04,.ecx=15,.edx=2,
-        .es=BIOSVM_SCRATCH>>4,.ebx=0x800};
-    if ((e=fullscreen_call(&r,&budget,true,true))) goto revoke_restore;
+        .es=BIOSVM_VIDEO_STATE>>4,.ebx=0};
+    video_state.restores++;
+    e=fullscreen_call(&r,&budget,true,true);
+    video_state.restore_result=e;
+    if (e) goto revoke_restore;
     r=(struct biosvm_regs){.interrupt=0x10,.eax=0x4F03};
     if ((e=fullscreen_call(&r,&budget,true,true))) goto revoke_restore;
     if ((r.ebx&0x7FFF)!=(mode|0x4000)) { e=-V86_EIO; goto revoke_restore; }
@@ -1328,7 +1451,7 @@ int biosvm_video_fullscreen_end(uint16_t mode, uint8_t info[256])
 revoke_restore:
     fullscreen_aperture(false);
     fullscreen_video=false; fullscreen_bytes=0;
-    if (!quarantined && release_video()) e=-V86_EIO;
+    if (!family_disabled(BIOS_VIDEO) && release_video()) e=-V86_EIO;
 done_restore:
     kmutex_unlock(&request_mutex);
     return e;

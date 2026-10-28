@@ -4,6 +4,7 @@
  * SPDX-License-Identifier: GPL-2.0-only */
 #include <ciuki/kernel.h>
 #include "selector.h"
+#include <ciuki/selftest.h>
 #include <ciuki/cpu.h>
 #include <ciuki/arch.h>
 #include <ciuki/mm.h>
@@ -1089,10 +1090,14 @@ void probes_main(void *arg)
             for (;;)
                 task_sleep_ms(60000);
         drivers_init();
+        /* fx-selftest (menu T): phase 1 before the desktop, phase 2 after;
+         * an ordinary boot never enters either (docs/design/self-test.md). */
+        if (g_boot.flags & CBI_F_SELF_TEST) selftest_before_desktop();
         supervisor_bootstrap();
         ledger_reconcile(); ledger_record("boot-end");
         power_discover();                /* logs the ACPI soft-off facts once */
         klog("Ciuki VMM F0 scaffold ready (no test request). Build %s.", CIUKI_BUILD_ID);
+        if (g_boot.flags & CBI_F_SELF_TEST) selftest_after_desktop();
         for (;;)
             task_sleep_ms(60000);
     }

@@ -4,6 +4,7 @@
 #include <ciuki/display.h>
 #include <ciuki/media.h>
 #include <ciuki/power.h>
+#include <ciuki/recovery.h>
 #include <errno.h>
 #include <fcntl.h>
 #include <stdio.h>
@@ -54,16 +55,47 @@ static int read_span(int fd,char *out,size_t size,off_t offset,size_t *length)
     }
     *length+=done; return 0;
 }
+/* sec-sysvc: the boot logs are system logs; administrators read them through
+ * the SYSTEM log service (ciuki/recovery.h, Event Viewer model). ENOSYS (an
+ * older kernel) or ENODEV (no managed system volume: the Setup rescue
+ * console) reads the files themselves. */
+struct log_source { int fd; const char *name; uint32_t size; };
+static int source_open(struct log_source *s,const char *name,const char *path)
+{
+    s->fd=-1; s->name=name; s->size=0;
+    size_t got=0; uint32_t total=0; char probe;
+    if (!ciuki_system_log_read(CIUKI_SYSTEM_LOG_MACHINE,name,0,&probe,0,&got,&total)) { s->size=total; return 0; }
+    if (errno!=ENOSYS && errno!=ENODEV) return -errno;
+    s->name=NULL; s->fd=open(path,O_RDONLY|O_CLOEXEC); if (s->fd<0) return -errno;
+    struct stat st; int e=0;
+    if (fstat(s->fd,&st)) e=-errno;
+    else if (st.st_size<0 || (uint64_t)st.st_size>UINT32_MAX) e=-EIO;
+    else s->size=(uint32_t)st.st_size;
+    if (e) { close(s->fd); s->fd=-1; }
+    return e;
+}
+static int source_span(struct log_source *s,char *out,size_t size,off_t offset,size_t *length)
+{
+    if (s->fd>=0) return read_span(s->fd,out,size,offset,length);
+    size_t done=0;
+    while (done<size) {
+        size_t want=size-done,got=0; uint32_t total=0;
+        if (want>CIUKI_SYSTEM_LOG_DATA_MAX) want=CIUKI_SYSTEM_LOG_DATA_MAX;
+        if (ciuki_system_log_read(CIUKI_SYSTEM_LOG_MACHINE,s->name,(uint32_t)offset+(uint32_t)done,out+done,want,&got,&total)) return -errno;
+        if (!got) return -EIO;
+        done+=got;
+    }
+    *length+=done; return 0;
+}
+static int source_close(struct log_source *s)
+{ int e=s->fd>=0 && close(s->fd) ? -errno : 0; s->fd=-1; return e; }
 static int read_log(char *out,size_t *length,int tail,const struct ciuki_hardware_info *h)
 {
     *length=0;
     if (tail && (!h || !h->log_active)) return -EAGAIN;
-    int fd=open("/system/logs/BOOT.LOG",O_RDONLY|O_CLOEXEC); if (fd<0) return -errno;
-    struct stat st; int e=0;
-    if (fstat(fd,&st)) e=-errno;
-    else if (st.st_size<0) e=-EIO;
-    else {
-        off_t upper=st.st_size, lower=0;
+    struct log_source src; int e=source_open(&src,"BOOT.LOG","/system/logs/BOOT.LOG"); if (e) return e;
+    {
+        off_t upper=src.size, lower=0;
         if (tail) {
             if (h->log_position>h->log_limit || h->log_ring_start>=h->log_limit) e=-EIO;
             if (upper>(off_t)h->log_position) upper=(off_t)h->log_position;
@@ -72,23 +104,23 @@ static int read_log(char *out,size_t *length,int tail,const struct ciuki_hardwar
         size_t take=(uint64_t)(upper-lower)>HR_LOG_MAX ? HR_LOG_MAX : (size_t)(upper-lower);
         off_t offset=tail ? upper-(off_t)take : 0;
         off_t first_offset=offset;
-        if (!tail) take=(uint64_t)st.st_size>HR_LOG_MAX ? HR_LOG_MAX : (size_t)st.st_size;
-        if (!e && tail && take<HR_LOG_MAX && lower && (uint64_t)st.st_size>=h->log_limit) {
+        if (!tail) take=(uint64_t)src.size>HR_LOG_MAX ? HR_LOG_MAX : (size_t)src.size;
+        if (!e && tail && take<HR_LOG_MAX && lower && (uint64_t)src.size>=h->log_limit) {
             size_t before=HR_LOG_MAX-take;
             if (before>h->log_limit-h->log_position) before=h->log_limit-h->log_position;
-            if (before) { first_offset=(off_t)h->log_limit-(off_t)before; e=read_span(fd,out,before,first_offset,length); }
+            if (before) { first_offset=(off_t)h->log_limit-(off_t)before; e=source_span(&src,out,before,first_offset,length); }
         }
-        if (!e && take) e=read_span(fd,out+*length,take,offset,length);
+        if (!e && take) e=source_span(&src,out+*length,take,offset,length);
         /* Discard a partial first tail record; never interpret it as a full one. */
         char previous='\n'; size_t one=0;
-        if (!e && tail && first_offset>0) e=read_span(fd,&previous,1,first_offset-1,&one);
+        if (!e && tail && first_offset>0) e=source_span(&src,&previous,1,first_offset-1,&one);
         if (tail && previous!='\n' && *length) {
             size_t skip=0; while (skip<*length && out[skip]!='\n') skip++;
             if (skip<*length) skip++;
             memmove(out,out+skip,*length-skip); *length-=skip;
         }
     }
-    if (close(fd) && !e) e=-errno;
+    int closed=source_close(&src); if (!e) e=closed;
     return e;
 }
 /* Read-only, bounded read of the guest build identity. A file larger than
@@ -154,31 +186,62 @@ void hr_native_collect(struct hr_native *n)
 }
 void hr_native_free(struct hr_native *n)
 { free(n->pci_names); free(n->usb_names); free(n->full_logs); free(n->archive); }
+/* fgets over the log service or a file (sec-sysvc, see source_open). */
+struct log_lines { struct log_source src; FILE *f; uint32_t at; size_t fill,pos; char chunk[2048]; };
+static int lines_open(struct log_lines *l,const char *name,const char *path)
+{
+    memset(l,0,sizeof(*l)); l->src.fd=-1;
+    size_t got=0; uint32_t total=0; char probe;
+    if (!ciuki_system_log_read(CIUKI_SYSTEM_LOG_MACHINE,name,0,&probe,0,&got,&total)) { l->src.name=name; l->src.size=total; return 0; }
+    if (errno!=ENOSYS && errno!=ENODEV) return -errno;
+    l->f=fopen(path,"rb"); return l->f ? 0 : -errno;
+}
+static char *lines_next(struct log_lines *l,char *line,size_t cap,int *error)
+{
+    if (l->f) { char *r=fgets(line,(int)cap,l->f); if (!r && ferror(l->f)) *error=-EIO; return r; }
+    size_t n=0;
+    while (n+1<cap) {
+        if (l->pos==l->fill) {
+            if (l->at>=l->src.size) break;
+            size_t got=0; uint32_t total=0;
+            if (ciuki_system_log_read(CIUKI_SYSTEM_LOG_MACHINE,l->src.name,l->at,l->chunk,sizeof(l->chunk),&got,&total)) { *error=-errno; return NULL; }
+            if (!got) break;
+            l->at+=(uint32_t)got; l->fill=got; l->pos=0;
+        }
+        char c=l->chunk[l->pos++]; line[n++]=c;
+        if (c=='\n') break;
+    }
+    if (!n) return NULL;
+    line[n]=0; return line;
+}
+static int lines_close(struct log_lines *l) { int e=l->f && fclose(l->f) ? -errno : 0; l->f=NULL; return e; }
 int hr_native_prepare_logs(struct hr_native *n)
 {
     static const char *const paths[]={"/system/logs/BOOT.LOG","/system/logs/BOOT1.LOG","/system/logs/BOOT2.LOG"};
+    static const char *const names[]={"BOOT.LOG","BOOT1.LOG","BOOT2.LOG"};
     char *text=malloc(HR_FULL_LOG_MAX);
-    if (!text) return -ENOMEM;
+    struct log_lines *l=malloc(sizeof(*l));
+    if (!text || !l) { free(text); free(l); return -ENOMEM; }
     size_t used=0; int e=0;
     for (unsigned i=0;i<3 && !e;i++) {
-        FILE *f=fopen(paths[i],"rb");
-        if (!f && (i==0 || errno!=ENOENT)) { e=-errno; break; }
-        int bytes=snprintf(text+used,HR_FULL_LOG_MAX-used,"\n[%s - full privacy-filtered log]\n%s\n",i==0 ? "BOOT.LOG" : i==1 ? "BOOT1.LOG" : "BOOT2.LOG",f ? "" : "Not present");
-        if (bytes<0 || (size_t)bytes>=HR_FULL_LOG_MAX-used) { if (f) fclose(f); e=-EFBIG; break; }
+        int opened=lines_open(l,names[i],paths[i]);
+        if (opened && (i==0 || opened!=-ENOENT)) { e=opened; break; }
+        int bytes=snprintf(text+used,HR_FULL_LOG_MAX-used,"\n[%s - full privacy-filtered log]\n%s\n",names[i],opened ? "Not present" : "");
+        if (bytes<0 || (size_t)bytes>=HR_FULL_LOG_MAX-used) { if (!opened) (void)lines_close(l); e=-EFBIG; break; }
         used+=(size_t)bytes;
-        if (!f) continue;
+        if (opened) continue;
         /* Fixed whitelist, bounded whole-file scan, no user-selected inputs. */
         char line[2048]; size_t read_bytes=0,lines=0;
-        while (!e && fgets(line,sizeof(line),f)) {
+        while (!e && lines_next(l,line,sizeof(line),&e)) {
             size_t got=strlen(line),written=0; read_bytes+=got;
             if (read_bytes>16u*1024u*1024u || ++lines>65536) { e=-EFBIG; break; }
             e=hr_filter_log(line,got,text+used,HR_FULL_LOG_MAX-used,&written);
             if (e==-ENOSPC) e=-EFBIG;
             used+=written;
         }
-        if (!e && ferror(f)) e=-EIO;
-        if (fclose(f) && !e) e=-errno;
+        int closed=lines_close(l); if (!e) e=closed;
     }
+    free(l);
     unsigned char *archive=NULL; size_t length=0;
     if (!e) e=hr_gzip(text,used,&archive,&length);
     if (e) { free(text); return e; }

@@ -45,7 +45,7 @@ class NativeDevelopmentTests(unittest.TestCase):
         return self.run_command([TCC / "tcc-host", *([] if args == ("-v",) else ["-B" + str(TCC / "sdk")]), *args])
 
     def test_ide_model_job_editor_and_navigation(self):
-        toolkit = ["draw", "widgets", "list", "menu", "dialog", "controls", "commdlg", "textarea", "icons", "icon_map"]
+        toolkit = ["draw", "widgets", "list", "menu", "dialog", "controls", "commdlg", "textarea", "icons", "icon_map", "iconx", "fileicon"]
         sources = [*(ROOT / f"apps/libdeskui/{n}.c" for n in toolkit),
                    ROOT / "apps/desktop/compositor.c", ROOT / "apps/desktop/theme.c",
                    *(ROOT / f"apps/ciukide/{n}.c" for n in ("app", "model", "job")),

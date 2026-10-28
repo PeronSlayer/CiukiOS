@@ -89,15 +89,40 @@ static char *master_strdup(const char *s)
 struct rt *reg_hardware(uint64_t previous)
 { (void)previous; errno=ENODEV; return NULL; }
 
+/* sec-user-05 (user-security-contract.md K-Q8): mixer levels are a session
+ * preference. A profile session saves them in its own personal Desktop root
+ * (CIUKI_PROFILE_SETTINGS, owner-writable, under the committed profile) and
+ * the desktop applies them again when the session starts. The machine
+ * default (System\Audio, read by the kernel at boot, and SYSTEM/AUDIO.CFG) is
+ * never written by an ordinary session; only a profile-less bootstrap
+ * desktop keeps the machine root, which the registry broker admits for
+ * administrators alone. */
+#define PERSONAL_AUDIO_KEY "Desktop\\Audio"
+static const char *personal_settings(void)
+{
+    const char *s=getenv("CIUKI_PROFILE_SETTINGS");
+    return s && s[0]=='/' && strlen(s)<200 ? s : NULL;
+}
+static struct reg_root *preference_root(const char *directory,const char **key)
+{
+    const char *personal=personal_settings();
+    *key=personal ? PERSONAL_AUDIO_KEY : CIUKI_MASTER_KEY;
+    return personal ? reg_open_root_at("Desktop",personal) : reg_open_root_at("System",directory);
+}
+static void workspace_reset(void)
+{
+    union master_block *first=(void *)workspace.bytes;
+    first->h.bytes=sizeof(workspace.bytes)-sizeof(*first); first->h.available=1;
+}
 int master_preference_save(const char *directory,unsigned left,unsigned right,unsigned mute)
 {
     if (left>100 || right>100 || mute>1) { errno=EINVAL; return -1; }
     int error=pthread_mutex_lock(&workspace_lock);
     if (error) { errno=error; return -1; }
-    union master_block *first=(void *)workspace.bytes;
-    first->h.bytes=sizeof(workspace.bytes)-sizeof(*first); first->h.available=1;
-    struct reg_root *r=reg_open_root_at("System",directory);
-    int result=r ? reg_set_int32(r,CIUKI_MASTER_KEY,CIUKI_MASTER_VALUE,ciuki_master_pack(left,right,mute)) : -1;
+    workspace_reset();
+    const char *key;
+    struct reg_root *r=preference_root(directory,&key);
+    int result=r ? reg_set_int32(r,key,CIUKI_MASTER_VALUE,ciuki_master_pack(left,right,mute)) : -1;
     error=errno; reg_close_root(r);
     pthread_mutex_unlock(&workspace_lock); errno=error; return result;
 }
@@ -105,19 +130,55 @@ int master_preference_save(const char *directory,unsigned left,unsigned right,un
 /* Each source preference is one registry transaction, using the same bounded
  * private libreg instance as the master. No partially updated stereo pair. */
 #include <ciuki/abi.h>
+static int line_value_name(char key[16],unsigned line,unsigned recording)
+{
+    if (recording) snprintf(key,16,"Recording");
+    else snprintf(key,16,"Source%u",line);
+    return 0;
+}
 int line_preference_save(const char *directory,const struct ciuki_mixer_line *line)
 {
     if (!line || line->line<1 || line->line>5 || line->recording>1 || (line->recording && line->line==CIUKI_MIXER_MIDI) || line->left>100 || line->right>100 || line->mute>1 || line->selected>1) { errno=EINVAL; return -1; }
     int error=pthread_mutex_lock(&workspace_lock);
     if (error) { errno=error; return -1; }
-    union master_block *first=(void *)workspace.bytes;
-    first->h.bytes=sizeof(workspace.bytes)-sizeof(*first); first->h.available=1;
-    char key[16];
-    if (line->recording) snprintf(key,sizeof(key),"Recording");
-    else snprintf(key,sizeof(key),"Source%u",(unsigned)line->line);
+    workspace_reset();
+    char name[16]; line_value_name(name,line->line,line->recording);
     int32_t value=ciuki_master_pack(line->left,line->right,line->mute) | (line->recording ? (int32_t)(line->line<<24) : 0);
-    struct reg_root *r=reg_open_root_at("System",directory);
-    int result=r ? reg_set_int32(r,CIUKI_MASTER_KEY,key,value) : -1;
+    const char *key;
+    struct reg_root *r=preference_root(directory,&key);
+    int result=r ? reg_set_int32(r,key,name,value) : -1;
     error=errno; reg_close_root(r);
     pthread_mutex_unlock(&workspace_lock); errno=error; return result;
+}
+/* sec-user-05: the session's saved levels, applied through the desktop's
+ * designated mixer control fd (session scope, never a machine save). Absent
+ * values keep the current machine default. Returns the number of levels
+ * applied, or -1 with errno when the personal root cannot be read. */
+int mixer_preferences_restore(int fd,int (*apply)(int,unsigned,void *,size_t))
+{
+    const char *personal=personal_settings();
+    if (!personal || fd<0 || !apply) return 0;
+    int error=pthread_mutex_lock(&workspace_lock);
+    if (error) { errno=error; return -1; }
+    workspace_reset();
+    struct reg_root *r=reg_open_root_at("Desktop",personal);
+    int applied=0; error=r ? 0 : errno;
+    int32_t packed; unsigned left, right, mute;
+    if (r && !reg_get_int32(r,PERSONAL_AUDIO_KEY,CIUKI_MASTER_VALUE,&packed) && ciuki_master_unpack(packed,&left,&right,&mute)) {
+        struct ciuki_mixer_master m={.version=1,.size=sizeof(m),.left=left,.right=right,.mute=mute};
+        if (!apply(fd,0,&m,sizeof(m))) applied++;
+    }
+    for (unsigned i=0; r && i<6; i++) {
+        char name[16]; line_value_name(name,i<5 ? i+1 : 0,i==5);
+        if (reg_get_int32(r,PERSONAL_AUDIO_KEY,name,&packed)) continue;
+        unsigned source=i<5 ? i+1 : ((uint32_t)packed>>24)&7u;
+        if (!ciuki_master_unpack(packed&0xffffff,&left,&right,&mute) || source<1 || source>5) continue;
+        struct ciuki_mixer_line line={.version=1,.size=sizeof(line),.line=source,.recording=i==5,
+            .left=left,.right=right,.mute=mute,.selected=i==5};
+        if (!apply(fd,1,&line,sizeof(line))) applied++;
+    }
+    reg_close_root(r);
+    pthread_mutex_unlock(&workspace_lock);
+    if (error) { errno=error; return -1; }
+    return applied;
 }

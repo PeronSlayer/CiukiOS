@@ -5,29 +5,54 @@
 #include <ciuki/files.h>
 #include <ciuki/process.h>
 #include <ciuki/signal.h>
+#include <ciuki/security.h> /* sec-user-05 */
 #include "dosvm_internal.h"
 /* Private on-disk protocol shared with the native spool producer. */
 #include "../../../apps/libprint/print.h"
 
 _Static_assert(sizeof(struct cp_job)==424,"native spool record");
-static void print_path(char *out,unsigned size,unsigned slot,const char *leaf)
-{ ksnprintf(out,size,"C:\\WINDOWS\\SPOOL\\j%03u%s",slot,leaf); }
+/* sec-user-05: a VM with a committed profile (dos_identity.h) captures into
+ * its creator's own queue, <profile>\SETTINGS\SPOOL, which that session's
+ * print worker services (apps/libprint/print.c); the machine queue
+ * C:\WINDOWS\SPOOL (administrator-writable) remains for the interim
+ * bootstrap session and kernel-internal VMs. The printer configuration is
+ * always the machine's C:\WINDOWS\SPOOL\printers. */
+#define PRINT_PATH 160u
+static void print_queue(const struct dosvm *v,char *out,unsigned size)
+{
+    if (!v->identity.profile[0]) { ksnprintf(out,size,"C:\\WINDOWS\\SPOOL"); return; }
+    ksnprintf(out,size,"C:%s\\SETTINGS\\SPOOL",v->identity.profile);
+    for (char *c=out+2;*c;c++) if (*c=='/') *c='\\';
+}
+static void print_path(const struct dosvm *v,char *out,unsigned size,unsigned slot,const char *leaf)
+{
+    char queue[PRINT_PATH]; print_queue(v,queue,sizeof(queue));
+    ksnprintf(out,size,"%s\\j%03u%s",queue,slot,leaf);
+}
 static int print_open(struct dosvm *v)
 {
     struct dosvm_print_capture *p=&v->print_capture;
-    int e=vfs_mkdir(&v->disk_table,"C:\\WINDOWS\\SPOOL",0);
+    char queue[PRINT_PATH]; print_queue(v,queue,sizeof(queue));
+    int e=0;
+    if (v->identity.profile[0]) { /* SETTINGS below the committed root, then the queue */
+        char settings[PRINT_PATH]; size_t n=strlen(queue)-(sizeof("\\SPOOL")-1);
+        memcpy(settings,queue,n); settings[n]=0;
+        e=vfs_mkdir(&v->disk_table,settings,0);
+        if (e && e!=-FS_EEXIST) return px_error(e);
+    }
+    e=vfs_mkdir(&v->disk_table,queue,0);
     if (e && e!=-FS_EEXIST) return px_error(e);
-    char path[64];
+    char path[PRINT_PATH];
     if (!p->slot) {
         for (unsigned id=1;id<=CP_JOBS;id++) {
-            print_path(path,sizeof(path),id,"");
+            print_path(v,path,sizeof(path),id,"");
             e=vfs_mkdir(&v->disk_table,path,0);
             if (!e) { p->slot=id; break; }
             if (e!=-FS_EEXIST) return px_error(e);
         }
         if (!p->slot) return -ENOSPC;
     }
-    print_path(path,sizeof(path),p->slot,"\\data");
+    print_path(v,path,sizeof(path),p->slot,"\\data");
     int fd=vfs_open(&v->disk_table,path,VFS_WRITE|VFS_CREATE,VFS_DENY_WRITE,0);
     if (fd<0) return px_error(fd);
     uint64_t at;
@@ -85,9 +110,9 @@ static int print_publish(struct dosvm *v)
     if (e) return e;
     size_t n=0;
     ksnprintf(job.title,sizeof(job.title),"DOS LPT1 VM %u",v->info.key.id);
-    char temp[64],path[64];
-    print_path(temp,sizeof(temp),p->slot,"\\job.tmp");
-    print_path(path,sizeof(path),p->slot,"\\job");
+    char temp[PRINT_PATH],path[PRINT_PATH];
+    print_path(v,temp,sizeof(temp),p->slot,"\\job.tmp");
+    print_path(v,path,sizeof(path),p->slot,"\\job");
     int fd=vfs_open(&v->disk_table,temp,VFS_WRITE|VFS_CREATE|VFS_TRUNCATE,VFS_DENY_WRITE,0);
     if (fd<0) return px_error(fd);
     e=vfs_write(&v->disk_table,fd,&job,sizeof(job),&n);
@@ -105,16 +130,27 @@ static int print_publish(struct dosvm *v)
  * spooler; here the published job rings the worker, which otherwise sleeps.
  * SIGCHLD to the PID in worker.lock\owner; its default action is to
  * ignore, so a record left by an earlier boot cannot harm another process. */
+#pragma weak security_credential
 static void print_ring(struct dosvm *v)
 {
     uint32_t pid=0; size_t n=0;
-    int fd=vfs_open(&v->disk_table,"C:\\WINDOWS\\SPOOL\\worker.lock\\owner",VFS_READ,VFS_DENY_NONE,0);
+    char owner[PRINT_PATH]; print_queue(v,owner,sizeof(owner));
+    size_t used=strlen(owner);
+    ksnprintf(owner+used,sizeof(owner)-used,"\\worker.lock\\owner");
+    int fd=vfs_open(&v->disk_table,owner,VFS_READ,VFS_DENY_NONE,0);
     if (fd<0) return;
     int e=vfs_read(&v->disk_table,fd,&pid,sizeof(pid),&n);
     (void)vfs_close(&v->disk_table,fd);
     if (e || n!=sizeof(pid) || !pid) return;
     struct process *p=proc_find(pid);
-    if (p && p->state==PROC_LIVE) proc_signal_post(p,0,SIGCHLD,0);
+    if (!p || p->state!=PROC_LIVE) return;
+    /* sec-user-05: a profile queue's owner record is user data; it rings
+     * only a worker of the VM creator's own uid and session. */
+    if (v->identity.profile[0]) {
+        const struct ciuki_credential *c=security_credential ? security_credential(p) : 0;
+        if (!c || c->uid!=v->identity.credential.uid || c->session_id!=v->identity.credential.session_id) return;
+    }
+    proc_signal_post(p,0,SIGCHLD,0);
 }
 int dosvm_print_byte(struct dosvm *v,uint8_t byte)
 {

@@ -307,6 +307,10 @@ def prepare(folder, src):
         shutil.copytree(src, tree)
         for patch in sorted((HERE / "patches").glob("*.patch")):
             run(["patch", "--batch", "--fuzz=0", "-p1", "-i", patch], tree)
+        # The release ships generated selectors. Regenerate after patches so
+        # the private computed-style fields and every accessor agree.
+        run([sys.executable, "-B", tree / "libcss/src/select/select_generator.py"],
+            env=environment())
     # Port files are owned here, not edits to retained upstream files.
     shutil.copytree(HERE / "port", tree / "netsurf/frontends/framebuffer/ciuki", dirs_exist_ok=True)
     shutil.copy2(HERE / "port/fetch_ciuki.c",tree / "netsurf/content/fetchers/ciuki.c")

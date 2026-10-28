@@ -15,6 +15,9 @@ def headers(root=ROOT):
     for name in ("tzrule.h", "tzdata.h"):  # G1: installed into the SDK by build_sdk.py
         result["ciuki/" + name] = root / "src/kernel/include/ciuki" / name
     result["ciuki/desktop.h"] = root / "apps/desktop/protocol.h"
+    # f7-14: the native OpenGL binding (backend policy, accounting, lease
+    # presentation); GL/gl.h itself is the generated OpenGL 1.1 declaration list.
+    result["ciuki/gl.h"] = root / "sdk/libgl/include/ciuki/gl.h"
     result["deskui.h"] = root / "apps/libdeskui/deskui.h"
     result["deskui/v3.h"] = root / "apps/libdeskui/v3.h"
     result["deskui/textarea.h"] = root / "apps/libdeskui/textarea.h"

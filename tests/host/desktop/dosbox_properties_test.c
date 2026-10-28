@@ -34,7 +34,7 @@ int dos_clip_action(unsigned action)
 static uint64_t tick;
 static unsigned input_events, queue_full, focus_refused, calls, marking, sensitivity, background, fs;
 static struct dosbox_key observed[10000];
-static int graphics;
+static int graphics, fs_refuse;
 static int model_clock(clockid_t id,struct timespec *t)
 { assert(id==CLOCK_MONOTONIC); t->tv_sec=(time_t)(tick/1000); t->tv_nsec=(long)(tick%1000)*1000000; return 0; }
 int ciuki_dosvm(uint32_t op,struct ciuki_dosvm_command *c)
@@ -42,7 +42,9 @@ int ciuki_dosvm(uint32_t op,struct ciuki_dosvm_command *c)
     assert(c->version==1 && c->size==136 && c->id==7 && c->generation==3); calls++;
     if (op==CIUKI_DOSVM_POLICY) { marking=c->policy.marking; sensitivity=c->policy.idle_sensitivity; return 0; }
     if (op==CIUKI_DOSVM_BACKGROUND) { background=c->focused; return 0; }
-    if (op==CIUKI_DOSVM_FULLSCREEN) { fs=c->focused; return 0; }
+    if (op==CIUKI_DOSVM_FULLSCREEN) { fs=fs_refuse ? 0 : c->focused; return 0; }
+    /* fx-dosfull: the DOS Box checks the outcome of its request. */
+    if (op==CIUKI_DOSVM_STATUS) { c->changed=fs ? CIUKI_DOSVM_FULL_SCREEN : 0; return 0; }
     if (op==CIUKI_DOSVM_TEXT_CHUNK) {
         if (graphics) { errno=EOPNOTSUPP; return -1; }
         assert(marking); c->text_chunk.columns=80; c->text_chunk.rows=25;
@@ -104,6 +106,62 @@ static void profile_tests(void)
     assert(!unlink(path));
     strcpy(p.directory,"C:\\DATA & DIR"); assert(!dosbox_profile_valid(&p));
     puts("PASS G17 profiles: arbitrary executables, case/slash/arguments identity, atomic save, defaults, corrupt/oversized/collision rejection");
+}
+static void write_bytes(const char *path,const void *bytes,size_t n)
+{ FILE *f=fopen(path,"wb"); assert(f && (!n || fwrite(bytes,1,n,f)==n) && !fclose(f)); }
+/* fx-dosfull: Screen usage defaults, DFP1 migration, the remembered switch,
+ * the usage-only save and the key of a program opened from Files. */
+static void usage_tests(void)
+{
+    struct dosbox_profile p,read; char path[192],key[97];
+    dosbox_profile_default(&p,"\\GAMES\\X.EXE -y"); assert(p.magic==DOSBOX_PROFILE_MAGIC && p.screen==DOSBOX_SCREEN_GRAPHICS);
+    dosbox_profile_default(&p,""); assert(!strcmp(p.key,"@PROMPT") && p.screen==DOSBOX_SCREEN_WINDOW);
+    /* A DFP1 program record had no usage of its own: Window becomes the new
+     * default; explicit full screen is kept; the prompt keeps its window. */
+    static const struct { const char *command; uint32_t before, after; int valid; } old[]={
+        {"\\OLD\\GAME.EXE",DOSBOX_SCREEN_WINDOW,DOSBOX_SCREEN_GRAPHICS,1},{"\\OLD\\GAME.EXE",DOSBOX_SCREEN_FULL,DOSBOX_SCREEN_FULL,1},
+        {"\\OLD\\GAME.EXE",DOSBOX_SCREEN_EXCLUSIVE,DOSBOX_SCREEN_EXCLUSIVE,1},{"\\OLD\\GAME.EXE",DOSBOX_SCREEN_GRAPHICS,0,0},
+        {"",DOSBOX_SCREEN_WINDOW,DOSBOX_SCREEN_WINDOW,1}};
+    for (unsigned i=0;i<sizeof(old)/sizeof(*old);i++) {
+        dosbox_profile_default(&p,old[i].command); p.magic=DOSBOX_PROFILE_MAGIC_V1; p.screen=old[i].before; p.zoom=1;
+        assert(!dosbox_profile_path(p.key,path,sizeof(path))); write_bytes(path,&p,sizeof(p));
+        dosbox_profile_default(&read,old[i].command);
+        if (old[i].valid) assert(dosbox_profile_load(&read)==1 && read.magic==DOSBOX_PROFILE_MAGIC && read.screen==old[i].after && read.zoom==1);
+        else assert(dosbox_profile_load(&read)<0 && read.screen==DOSBOX_SCREEN_GRAPHICS);
+        assert(!unlink(path));
+    }
+    /* Windows 98 reopens a program in the mode the user last chose. */
+    assert(dosbox_usage_after(DOSBOX_SCREEN_WINDOW,1,1)==DOSBOX_SCREEN_GRAPHICS && dosbox_usage_after(DOSBOX_SCREEN_WINDOW,1,0)==DOSBOX_SCREEN_FULL);
+    assert(dosbox_usage_after(DOSBOX_SCREEN_GRAPHICS,1,1)==DOSBOX_SCREEN_GRAPHICS && dosbox_usage_after(DOSBOX_SCREEN_GRAPHICS,1,0)==DOSBOX_SCREEN_FULL);
+    assert(dosbox_usage_after(DOSBOX_SCREEN_FULL,1,1)==DOSBOX_SCREEN_FULL && dosbox_usage_after(DOSBOX_SCREEN_EXCLUSIVE,1,0)==DOSBOX_SCREEN_EXCLUSIVE);
+    for (uint32_t u=0;u<=DOSBOX_SCREEN_MAX;u++) assert(dosbox_usage_after(u,0,1)==DOSBOX_SCREEN_WINDOW && dosbox_usage_after(u,0,0)==DOSBOX_SCREEN_WINDOW);
+    /* The usage-only save: no stored command (the launcher's stays), other fields kept. */
+    assert(!dosbox_profile_usage_save("\\GAMES\\X.EXE",DOSBOX_SCREEN_WINDOW));
+    dosbox_profile_default(&read,"\\games\\x.exe -other");
+    assert(dosbox_profile_load(&read)==1 && !read.command[0] && read.screen==DOSBOX_SCREEN_WINDOW && read.close_on_exit==1 && read.idle==50);
+    assert(!dosbox_profile_path(read.key,path,sizeof(path)) && !unlink(path));
+    dosbox_profile_default(&p,"\\GAMES\\Y.EXE -a"); p.zoom=2; strcpy(p.directory,"C:\\GAMES"); assert(!dosbox_profile_save(&p));
+    assert(!dosbox_profile_usage_save("\\GAMES\\Y.EXE",DOSBOX_SCREEN_FULL));
+    dosbox_profile_default(&read,"\\GAMES\\Y.EXE");
+    assert(dosbox_profile_load(&read)==1 && !strcmp(read.command,"\\GAMES\\Y.EXE -a") && read.zoom==2 && !strcmp(read.directory,"C:\\GAMES") && read.screen==DOSBOX_SCREEN_FULL);
+    assert(dosbox_profile_usage_save("\\GAMES\\Y.EXE",DOSBOX_SCREEN_MAX+1)<0 && errno==EINVAL);
+    assert(dosbox_profile_usage_save("\\games\\y.exe",DOSBOX_SCREEN_WINDOW)<0 && errno==EINVAL);   /* keys only */
+    assert(!dosbox_profile_path(read.key,path,sizeof(path)) && !unlink(path));
+    /* Files: the command the desktop types for a native path names the profile. */
+    assert(!dosbox_native_key("/GAMES/doom/doom.exe",key) && !strcmp(key,"C:\\GAMES\\DOOM\\DOOM.EXE"));
+    assert(!dosbox_native_key("/mnt/d/SETUP.EXE",key) && !strcmp(key,"D:\\SETUP.EXE"));
+    assert(dosbox_native_key("/Program Files/a.exe",key)<0 && dosbox_native_key("C:\\A.EXE",key)<0);
+    /* Which files are DOS programs (apps/desktop/win32_launch.c desk_w32_identify). */
+    char file[192]; unsigned char mz[128]={'M','Z'};
+    snprintf(file,sizeof(file),DOSBOX_SETTINGS_DIR "/dos.exe"); write_bytes(file,mz,64); assert(dosbox_dos_program(file)==1); assert(!unlink(file));
+    mz[60]=64; memcpy(mz+64,"PE\0\0",4);
+    snprintf(file,sizeof(file),DOSBOX_SETTINGS_DIR "/pe.exe"); write_bytes(file,mz,sizeof(mz)); assert(dosbox_dos_program(file)==0); assert(!unlink(file));
+    snprintf(file,sizeof(file),DOSBOX_SETTINGS_DIR "/tool.com"); write_bytes(file,"\xb4\x4c\xcd\x21",4); assert(dosbox_dos_program(file)==1); assert(!unlink(file));
+    snprintf(file,sizeof(file),DOSBOX_SETTINGS_DIR "/RUN.Bat"); write_bytes(file,"@echo off\r\n",11); assert(dosbox_dos_program(file)==1); assert(!unlink(file));
+    snprintf(file,sizeof(file),DOSBOX_SETTINGS_DIR "/empty.com"); write_bytes(file,"",0); assert(dosbox_dos_program(file)==0); assert(!unlink(file));
+    snprintf(file,sizeof(file),DOSBOX_SETTINGS_DIR "/notes.txt"); write_bytes(file,"text",4); assert(dosbox_dos_program(file)==0); assert(!unlink(file));
+    snprintf(file,sizeof(file),DOSBOX_SETTINGS_DIR "/missing.exe"); assert(dosbox_dos_program(file)<0 && errno==ENOENT);
+    puts("PASS fx-dosfull usage: program default graphics full screen, prompt window, DFP1 migration, remembered switch, usage-only save keeps the launcher command, Files key and DOS program identification");
 }
 static void launch_tests(void)
 {
@@ -216,7 +274,20 @@ static void ui_tests(void)
     assert(event(CIUKI_INPUT_KEY,CIUKI_KEY_ENTER,1,0)==DB_APPLY && !window.font_menu && window.profile.zoom==1);
     event(CIUKI_INPUT_WHEEL,0,INT32_MIN,0); assert(window.scroll_y==28);
     event(CIUKI_INPUT_WHEEL,0,INT32_MAX,0); assert(!window.scroll_y);
-    assert(!window_action(DB_FULLSCREEN,7,3,0) && fs==1);
+    /* The toolbar's Full screen at a text screen from a Window usage: the
+     * user's choice, remembered as the whole session (fx-dosfull). */
+    assert(window.profile.screen==DOSBOX_SCREEN_WINDOW);
+    assert(!window_action(DB_FULLSCREEN,7,3,0) && fs==1 && window.profile.screen==DOSBOX_SCREEN_FULL);
+    { struct dosbox_profile stored; dosbox_profile_default(&stored,"CUSTOM.EXE");
+      assert(dosbox_profile_load(&stored)==1 && stored.screen==DOSBOX_SCREEN_FULL && stored.zoom==1); }
+    /* A refusal (QEMU's readback, f3-29) keeps the window and the usage;
+     * the toolbar's user sees why. */
+    fs=0; window.notice[0]=0; fs_refuse=1; window.profile.screen=DOSBOX_SCREEN_WINDOW;
+    assert(!window_action(DB_FULLSCREEN,7,3,0) && !fs && window.profile.screen==DOSBOX_SCREEN_WINDOW);
+    assert(!strcmp(window.notice,"Full screen is unavailable on this display."));
+    { struct dosbox_profile stored; dosbox_profile_default(&stored,"CUSTOM.EXE");
+      assert(dosbox_profile_load(&stored)==1 && stored.screen==DOSBOX_SCREEN_FULL); }
+    fs_refuse=0; window.notice[0]=0;
     char path[192]; assert(!dosbox_profile_path(window.profile.key,path,sizeof(path)) && !unlink(path));
     puts("PASS G17 UI: all five pages, every editable setting, Cancel/Apply/OK, modal input, full/incremental scaled view, exclusive policy");
 }
@@ -252,7 +323,7 @@ int main(void)
     setvbuf(stdout,NULL,_IONBF,0);
     char clip[192]; snprintf(clip,sizeof(clip),DOSBOX_SETTINGS_DIR "/clipboard");
     assert(!mkdir(DOSBOX_SETTINGS_DIR,0755) || errno==EEXIST); assert(!du_clipboard_path(clip));
-    profile_tests(); launch_tests(); ui_tests(); clipboard_tests();
+    profile_tests(); usage_tests(); launch_tests(); ui_tests(); clipboard_tests();
     assert(calls>0);
     assert(!unlink(clip)); du_clipboard_path(NULL); assert(!rmdir(DOSBOX_SETTINGS_DIR));
     puts("PASS G17 DOS program properties and window controls"); return 0;

@@ -274,6 +274,13 @@ Follow `docs/design/test-architecture.md`:
   (ignored, never committed or redistributed; the book is extracted to
   `build/rskt/` for research). QEMU is allowed only for the DOS conformance
   battery of `f3-48` (dev diary 2026-10-19-06).
+- Owner decision 2026-10-27 (directives fx-accept, fx-selftest): every
+  hardware image first passes the automated acceptance suite `acc-t23` (the
+  owner's trial list on the QEMU `qemu-t23` profile, one QEMU at a time under
+  the caps above); a failing item blocks the image. The T23 trial starts with
+  the unattended self-test boot, whose report covers the hardware-only paths.
+  A defect found on hardware triggers an audit of its whole class, not a
+  single fix.
 - Owner decisions 2026-10-20 (dev diary 2026-10-20-08): F6 (network) runs
   now in parallel with F5; QEMU is allowed again for F6 network and F7 3D
   API development and tests (the T23 stays the final confirmation), and for

@@ -129,12 +129,24 @@ static NTSTATUS open_key(void **out, ULONG access, const struct w32_object_attri
     while (used < chars && name[used] == '\\')
         used++;
     struct w32r_reply reply = {0};
-    NTSTATUS status = request(op, root, name + used, chars - used, w32_registry_access(access), &reply);
+    /* sec-user-05 (Windows XP): MAXIMUM_ALLOWED is the largest mask the
+     * service's sec-k06 policy admits: the full mask, else KEY_READ, with
+     * any explicitly named rights kept (as advapi32's open_key); a refused
+     * create opens an existing key for reading, an absent one stays denied. */
+    int maximum = !!(access & 0x02000000u), opened = 0;
+    ULONG mask = w32_registry_access(access & ~0x02000000u);
+    NTSTATUS status = request(op, root, name + used, chars - used, maximum ? mask | 0xf003fu : mask, &reply);
+    if (status == (NTSTATUS)0xc0000022 && maximum && (mask | 0x20019u) != (mask | 0xf003fu)) {
+        status = request(W32R_OPEN, root, name + used, chars - used, mask | 0x20019u, &reply);
+        if (op == W32R_CREATE && status == (NTSTATUS)0xc0000034)
+            status = (NTSTATUS)0xc0000022;
+        opened = op == W32R_CREATE;
+    }
     if (status)
         return status;
     *out = (void *)(uintptr_t)reply.key;
     if (disposition)
-        *disposition = reply.disposition;
+        *disposition = opened ? 2 : reply.disposition;
     if (!(reply.key & 0x80000000u))
         remember(reply.key);
     return 0;

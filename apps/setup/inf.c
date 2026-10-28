@@ -53,24 +53,23 @@ void setup_answers_defaults(struct setup_answers *a)
     a->restart = SETUP_RESTART_EJECT;
 }
 
-/* UTF-8 sequence for U+0020..U+007E and U+00A0..U+00FF (the face's range). */
-static int latin1_chars(const char *s, size_t *count)
-{
-    size_t n = 0;
-    for (const unsigned char *p = (const unsigned char *)s; *p; n++) {
-        if (*p >= 0x20 && *p < 0x7f) { p++; continue; }
-        if ((p[0] == 0xc2 && p[1] >= 0xa0 && p[1] <= 0xbf) || (p[0] == 0xc3 && p[1] >= 0x80 && p[1] <= 0xbf)) { p += 2; continue; }
-        return -1;
-    }
-    *count = n;
-    return 0;
-}
-
+/* sec-user-02: the Setup user is the first account (uid 1000), so its name
+ * follows the account rules (user-security-contract.md 3.1): 1-31 ASCII
+ * letters, digits, '_' or '-', and none of the reserved names, compared
+ * case-insensitively. CiukiUser is reserved: Setup never creates it. */
 int setup_valid_user(const char *s)
 {
-    size_t n;
-    if (latin1_chars(s, &n) || n < 1 || n > SETUP_USER_MAX) return 0;
-    return s[0] != ' ' && s[strlen(s) - 1] != ' ';
+    static const char *const reserved[] = {"SYSTEM", "CiukiAdministrator", "CiukiUser", "Guest",
+                                           "Administrators", "Users", "Guests"};
+    size_t n = strlen(s);
+    if (n < 1 || n > SETUP_USER_MAX) return 0;
+    for (size_t i = 0; i < n; i++) {
+        int c = (unsigned char)s[i];
+        if (!((c >= 'A' && c <= 'Z') || (c >= 'a' && c <= 'z') || (c >= '0' && c <= '9') || c == '_' || c == '-')) return 0;
+    }
+    for (unsigned i = 0; i < sizeof(reserved) / sizeof(reserved[0]); i++)
+        if (same(s, n, reserved[i])) return 0;
+    return 1;
 }
 
 /* RFC 1123 host-name label characters within the 15-character NetBIOS limit:
@@ -244,7 +243,7 @@ static int value(struct setup_answers *a, enum setup_key k, const char *v, size_
 {
     uint8_t flag;
     switch (k) {
-    case SETUP_KEY_VERSION: return n == 1 && v[0] == '1' ? 0 : -1;
+    case SETUP_KEY_VERSION: return n == 1 && (v[0] == '1' || v[0] == '2') ? 0 : -1;
     case SETUP_KEY_ACCEPT_LICENCES: if (yes_no(v, n, &flag) || !flag) return -1; a->accept_licences = 1; return 0;
     case SETUP_KEY_ERASE_DISK: if (yes_no(v, n, &flag)) return -1; a->erase_disk = flag; return 0;
     case SETUP_KEY_DISK: return disk_selector(a, v, n);
@@ -332,7 +331,7 @@ int setup_inf_parse(const char *text, size_t length, struct setup_answers *a, st
         const char *v = eq + 1; size_t vn = l.n - (size_t)(v - l.s);
         while (vn && (*v == ' ' || *v == '\t')) { v++; vn--; }
         vn = strip_comment(v, vn);
-        if (!(vn == 1 && v[0] == '1')) return stop(st, SETUP_ST_VERSION, "Version", l.number);
+        if (!(vn == 1 && (v[0] == '1' || v[0] == '2'))) return stop(st, SETUP_ST_VERSION, "Version", l.number);
     }
     /* Pass 2: strict reading in file order. */
     p = text; number = 0; in_setup = 0;
@@ -375,7 +374,7 @@ int setup_inf_parse(const char *text, size_t length, struct setup_answers *a, st
     return 0;
 }
 
-int setup_inf_complete(const struct setup_answers *a, struct setup_inf_status *st)
+static int keys_complete(const struct setup_answers *a, struct setup_inf_status *st)
 {
     static const enum setup_key order[] = {
         SETUP_KEY_ACCEPT_LICENCES, SETUP_KEY_DISK, SETUP_KEY_COMPONENTS, SETUP_KEY_USER_NAME,
@@ -383,6 +382,15 @@ int setup_inf_complete(const struct setup_answers *a, struct setup_inf_status *s
     };
     for (unsigned i = 0; i < sizeof(order) / sizeof(order[0]); i++)
         if (!(a->present & (1u << order[i]))) return stop(st, SETUP_ST_MISSING, setup_inf_key_names[order[i]], 0);
+    return 0;
+}
+int setup_inf_complete(const struct setup_answers *a, struct setup_inf_status *st)
+{
+    if (keys_complete(a, st)) return -1;
+    /* sec-user-02 (contract 5.2, M-Q5): the user and recovery passwords have
+     * no answer-file key and no secure transport; stop before any write. */
+    if (!a->account_seed || a->account_seed_length != CIUKI_PROVISION_SEED_BYTES)
+        return stop(st, SETUP_ST_MISSING, "UserPassword", 0);
     return 0;
 }
 
@@ -457,7 +465,7 @@ int st_answers_load(struct st_app *a)
     }
     int bad = setup_inf_parse(a->file, length, &a->answers, &a->status);
     snprintf(a->answers.source, sizeof(a->answers.source), "%s", path);
-    if (bad || setup_inf_complete(&a->answers, &a->status)) { a->status_valid = 1; return -1; }
+    if (bad || keys_complete(&a->answers, &a->status)) { a->status_valid = 1; return -1; }
     struct setup_inf_disk disks[4];
     memset(disks, 0, sizeof(disks));
     for (int i = 0; i < a->disk_count; i++) {
@@ -472,5 +480,7 @@ int st_answers_load(struct st_app *a)
         snprintf(disks[slot].release, sizeof(disks[slot].release), "%s", d->release);
     }
     if (setup_inf_disk_rules(&a->answers, disks, a->release, &a->status)) { a->status_valid = 1; return -1; }
+    /* sec-user-02: every other answer is checked first; the passwords stop last. */
+    if (setup_inf_complete(&a->answers, &a->status)) { a->status_valid = 1; return -1; }
     return 1;
 }

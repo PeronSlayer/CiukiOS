@@ -28,3 +28,10 @@ and stream callback signatures, and steal the oldest active voice after
 release-first exhaustion. The surrounding audio facade is original code.
 The image must retain this licence as `/system/licenses/TinySoundFont.txt`.
 FluidR3 bank notices are separate; see `assets/audio/soundfonts/README.md`.
+
+The InstallShield 5 replacement helper contains a bounded DCL decoder
+adapted from Mark Adler's blast 1.3 in zlib 1.3.1. Fixed Huffman tables and
+canonical decoding follow that implementation; error handling and output
+storage are different. Retain `is5boot/blast-LICENSE.txt` in source releases
+and `/system/licenses/IS5-blast.txt` in images. No installer or game payload
+is redistributed with the helper.

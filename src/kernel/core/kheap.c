@@ -5,16 +5,18 @@
 #include <ciuki/mm.h>
 #include <ciuki/cpu.h>
 
-#define NCLASS 7                          /* 32 .. 2048 bytes incl. header */
+#define NCLASS KHEAP_CLASS_COUNT           /* 32 .. 2048 bytes incl. header */
 struct hdr { uint32_t cls; uint32_t magic; };
+_Static_assert(sizeof(struct hdr) == KHEAP_HEADER_BYTES, "heap header geometry");
 #define HDR_MAGIC 0xC1A0F00Du
 
 static void *freelist[NCLASS];
 static size_t in_use;
 static size_t peak;
 static uint32_t pool_pages;
+static uint32_t refused; /* fx-selftest: oversize or failed refill */
 
-static unsigned class_size(unsigned c) { return 32u << c; }
+static unsigned class_size(unsigned c) { return KHEAP_CLASS_MIN << c; }
 
 void kheap_init(void)
 {
@@ -49,19 +51,22 @@ static bool refill(unsigned c)
     return true;
 }
 
-void *kmalloc(size_t size)
+void *(kmalloc)(size_t size)
 {
     if (ledger_assert_pinned_context) ledger_assert_pinned_context(true,(uintptr_t)__builtin_return_address(0));
+    if (size > KHEAP_MAX_REQUEST) { __atomic_add_fetch(&refused, 1, __ATOMIC_RELAXED); return 0; }
     size_t need = size + sizeof(struct hdr);
     unsigned c = 0;
     while (c < NCLASS && class_size(c) < need)
         c++;
-    if (c == NCLASS)
+    if (c == NCLASS) {
+        __atomic_add_fetch(&refused, 1, __ATOMIC_RELAXED);
         return 0;
+    }
     uint32_t f = irq_save();
     if (!freelist[c]) {
         irq_restore(f);
-        if (!refill(c)) return 0;
+        if (!refill(c)) { __atomic_add_fetch(&refused, 1, __ATOMIC_RELAXED); return 0; }
         f = irq_save();
     }
     struct hdr *h = freelist[c];
@@ -75,7 +80,7 @@ void *kmalloc(size_t size)
     return h + 1;
 }
 
-void *kzalloc(size_t size)
+void *(kzalloc)(size_t size)
 {
     void *p = kmalloc(size);
     if (p)
@@ -104,6 +109,6 @@ size_t kheap_in_use(void) { return in_use; }
 void kheap_snapshot(struct kheap_ledger *out)
 {
     uint32_t f = irq_save();
-    *out = (struct kheap_ledger){.pages=pool_pages,.in_use=in_use,.peak=peak};
+    *out = (struct kheap_ledger){.pages=pool_pages,.in_use=in_use,.peak=peak,.refused=refused};
     irq_restore(f);
 }

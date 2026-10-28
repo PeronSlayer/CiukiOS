@@ -25,7 +25,7 @@ sys.dont_write_bytecode = True
 ROOT = Path(__file__).resolve().parents[3]
 TOOLKIT = ["apps/libdeskui/draw.c", "apps/libdeskui/widgets.c", "apps/libdeskui/list.c",
            "apps/libdeskui/menu.c", "apps/libdeskui/dialog.c", "apps/libdeskui/controls.c", "apps/libdeskui/commdlg.c", "apps/libdeskui/textarea.c", "apps/desktop/compositor.c", "apps/desktop/theme.c",
-           "apps/libdeskui/icons.c", "apps/libdeskui/icon_map.c"]
+           "apps/libdeskui/icons.c", "apps/libdeskui/icon_map.c", "apps/libdeskui/iconx.c", "apps/libdeskui/fileicon.c"]
 
 # Reviewed frames (2026-10-11): an unpinned run prints the new digests. Convert
 # the harness frames (XRGB8888, 400x300 toolkit, 760x520 Files) to PNG and
@@ -79,6 +79,8 @@ FILES_FRAMES = {
     'files-rename-error.xrgb': '6cdd24b8827fa7ca852ed8262d17a52a6c0241ebfa84673518d34e3d9bc6311e',
     'files-replace-prompt.xrgb': 'cec02d03e9d335d0a30d388a723b1dd96bca646d4a1c9cfb425c5653eea76819',
     'files-computer.xrgb': 'b1ae97064dec9bc510c53263f622d91e22239a4fc6c0f031744611ddd8c7a916',
+    'files-empty-cd-computer.xrgb': '5aa3fa9899537cbd5007062e2c71aaa00c562bba19c228b2f5c0f95453db52a1',
+    'files-empty-cd-insert.xrgb': '3006ffdbe7a6a19db345c90de848bea4f0d545f595bb59cbc689bffa72fe99dc',
     'files-c-drive.xrgb': '4d1cea3e20a476875979d6a6f5bd3bb1e1b8cbac70dc12ab57cb67e357fff174',
     'files-root-details.xrgb': 'a805bd6fd7b4574c2b87c4cb46cd2bb4f4e59616f81e043127b3cd68d413be25',
     'files-sort-size-desc.xrgb': 'f1099a836f08f9d8ac97b566077a1a4cce53f46ae1e07a4c9ba3e83895c6c09e',
@@ -93,10 +95,12 @@ FILES_FRAMES = {
 PIN = "PIN-FROM-FIRST-RUN"
 
 # Fix A (2026-10-24): reviewed regional text and combined property-sheet frames.
-# G6: reviewed property sheets, drive pie/counting, Version and Attributes.
+# G6: reviewed property sheets, drive pie/counting, Version and Attributes;
+# fx-dosfull: a DOS program's Screen page (Usage).
 G6_FRAMES = {
     "g6-attributes.xrgb": "36c4b31cf29863de56400ecf085ed32903fd69f2cfc9eb64683fbdf24568fd40",
     "g6-counting.xrgb": "ee3d760c0609ee2cbeaff3cd8845687e3a61c7f216256a1f0e82901fac2f97d2",
+    "g6-dos-screen.xrgb": "aae40ec2684c02e63ee446e4e144cbe0f65469230eb731a6b872b0131f1733e7",
     "g6-drive.xrgb": "44e70c1c971f2e8cc9caf125425b222b54eb8efc5c6705cc4cd5ee29ce915923",
     "g6-file.xrgb": "78f6614dd348b74028bed3ae0c3d247d27d6dc762a2a61b41683dd302538e2f7",
     "g6-folder.xrgb": "bfb0324a30b2e80c88d939ea5455cda68e60b14c71adffbd06223f9c9198b9f5",
@@ -297,7 +301,7 @@ class DeskuiTests(unittest.TestCase):
     def test_files_ui_script_and_frames(self):
         stdout, digests = self.files_ui()
         self.assertIn("PASS Files UI", stdout)
-        self.assertEqual(len(digests), 29)
+        self.assertEqual(len(digests), 31)
         self.check_frames(digests, FILES_FRAMES, "FILES")
 
     def test_files_qemu_script_targets(self):

@@ -196,7 +196,11 @@ static bool park_released(void *arg)
 void dosvm_fullscreen_checkpoint(struct dosvm *v)
 {
     if (!v->fullscreen_hold && !v->fullscreen_suspended && !v->window_marking && !v->clipboard_mark) return;
+    uint32_t flags=irq_save();
+    v->fullscreen_park_tick=g_ticks;
+    uint64_t cycles=dosvm_perf_clock();
     v->fullscreen_parked=true;
+    irq_restore(flags);
     /* fx-22: a suspended VM is not scheduled (VMM Suspend_VM; VPICD
      * simulates no interrupt into it). The former 1 ms sleep loop kept the
      * focused VM runnable, with its pending virtual IRQ urgent, every tick:
@@ -205,7 +209,23 @@ void dosvm_fullscreen_checkpoint(struct dosvm *v)
      * wake this queue; the bound covers a resume path without a wake. */
     while (!park_released(v))
         (void)kwait_wait_until(&v->wake,park_released,v,deadline_after_ms(FS_PARK_RECHECK_MS));
+    flags=irq_save();
+    uint64_t paused=g_ticks-v->fullscreen_park_tick;
+    cycles=dosvm_perf_clock()-cycles;
+    /* fx-biosvm2: sleeping in a display transaction is not guest ISR
+     * execution. Preserve the remaining 50 ms completion guard and its
+     * exact IRET/trampoline records, including a refused mode switch. */
+    for (unsigned irq=0;irq<16;irq++)
+        if (v->irq.rm[irq].active) v->irq.rm[irq].tick+=paused;
+    for (unsigned i=0;i<v->dpmi.depth;i++) {
+        struct dpmi_record *r=&v->dpmi.rec[i];
+        if ((r->flags&DPMI_RF_HWINT) && r->isr_measured) {
+            r->isr_tick+=paused;
+            r->isr_tsc+=cycles;
+        }
+    }
     v->fullscreen_parked=false;
+    irq_restore(flags);
 }
 static int park(struct dosvm *v,unsigned timeout)
 {
@@ -271,15 +291,19 @@ static uint8_t fullscreen_dac[256][3],fullscreen_mask;
  * 1bb063bd0, P2: a CRTC cursor-register loop held the first-frame credit). */
 static bool linear_palette(struct dosvm *v,bool force)
 {
+    const struct dos_video_mode *m=dos_video_mode(v->vbe_mode);
+    if (!m || m->bpp!=8) return false;
+    unsigned bits=display_fullscreen_dac_bits();
+    if (bits!=6 && bits!=8) return false;
     if (!force && fullscreen_palette==v->vga.display_changes) return false;
     fullscreen_palette=v->vga.display_changes;
     if (!force && fullscreen_mask==v->vga.dac_mask &&
         !memcmp(fullscreen_dac,v->vga.dac,sizeof(fullscreen_dac))) return false;
     outb(0x3C6,v->vga.dac_mask);outb(0x3C8,0);
-    /* Native packed setup uses X.Org's eight-bit CLUT; guests retain the
-     * six-bit VGA DAC advertised by the synthetic VBE interface. */
+    /* Guests retain six-bit components. A BIOS mode set resets the DAC
+     * to six bits; expand only for a provider's verified eight-bit CLUT. */
     for (unsigned i=0;i<256;i++) for (unsigned k=0;k<3;k++) {
-        unsigned c=v->vga.dac[i][k];outb(0x3C9,(c<<2)|(c>>4));
+        unsigned c=v->vga.dac[i][k];outb(0x3C9,bits==8 ? (c<<2)|(c>>4) : c);
     }
     memcpy(fullscreen_dac,v->vga.dac,sizeof(fullscreen_dac)); fullscreen_mask=v->vga.dac_mask;
     return true;
@@ -328,6 +352,9 @@ int dosvm_fullscreen_enter(struct dosvm_key key)
     if ((e=display_fullscreen_checkpoint("vga-load",0))) goto rollback;
     unsigned bad=0;
     if (fullscreen_linear) {
+        const struct dos_video_mode *m=dos_video_mode(mode);
+        unsigned bits=display_fullscreen_dac_bits();
+        if (m->bpp==8 && bits!=6 && bits!=8) { e=-EOPNOTSUPP; goto rollback; }
         (void)linear_palette(v,true);
         e=dosvm_vbe_flush(v,true);
         if (e<0) goto rollback;
@@ -348,6 +375,7 @@ int dosvm_fullscreen_enter(struct dosvm_key key)
     dosvm_kbd_release(v); dosvm_mouse_event(v,0,0,0);
     fullscreen_dirty=0; fullscreen_revoked=false; /* the load above is a full synchronisation */
     fullscreen_owner=v; v->fullscreen=true;
+    v->fullscreen_hotkey=false; /* fx-dosfull: the hotkey path marks its own entry */
     fullscreen_background=false;
     v->fullscreen_progress=g_ticks; v->fullscreen_ip=UINT32_MAX;
     v->fullscreen_seconds=v->fullscreen_frame_seconds=0;
@@ -394,6 +422,7 @@ int dosvm_fullscreen_leave(struct dosvm_key key, bool background)
     uint64_t began=g_ticks;
     struct dosvm *v=fullscreen_owner;
     v->fullscreen_cause=fullscreen_cause_next ? fullscreen_cause_next : DOSVM_FS_REQUEST;
+    v->fullscreen_hotkey=v->fullscreen_cause==DOSVM_FS_HOTKEY;
     fullscreen_cause_next=0;
     display_fullscreen_return_request();
     display_fullscreen_checkpoint("guest-revoke",0);
@@ -442,7 +471,7 @@ int dosvm_fullscreen_leave(struct dosvm_key key, bool background)
     fullscreen_dirty=0;
     v->fullscreen_model=false;
     v->video_presented=false; v->video_lut_valid=false; v->video_read_window=false;
-    dosvm_kbd_release(v); dosvm_mouse_event(v,0,0,0); v->pointer_known=false;
+    dosvm_kbd_release(v); dosvm_mouse_event(v,0,0,0); v->pointer_known=false; v->mouse_captured=false;
     uint64_t restore_began=g_ticks;
     int restored=display_fullscreen_end();
     uint64_t restore_ms=g_ticks-restore_began;
@@ -596,6 +625,9 @@ release:
         if (v && same_key(key,dosvm_focused_key())) v->fullscreen_suspended=false;
         int e=dosvm_fullscreen_enter(key);
         if (e==DISPLAY_FULLSCREEN_WINDOWED) e=0;
+        /* fx-dosfull: an entry through Alt+Enter is the user's choice (STATUS
+         * CIUKI_DOSVM_FULLSCREEN_HOTKEY); a refusal changes nothing. */
+        if (!e && dosvm_fullscreen_active(key) && (v=dosvm_lookup(key))) v->fullscreen_hotkey=true;
         entry_error(key,e);
         if (e) klog("[dosvm] fullscreen_refused vm=%u generation=%u error=%d",key.id,key.generation,e);
     }

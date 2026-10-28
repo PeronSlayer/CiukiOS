@@ -99,6 +99,9 @@ static void attach_thread(void *arg)
     klog("[floppy] result=%d ready=%u pnp=%u drives=%02x reason=%s",e,controller.ready,ev.pnp,types,
          controller.reason ? controller.reason : "fdc_pin_failed");
     if (e) return;
+    /* fx-emptydrive: A:/B: belong to the drive whether or not a diskette is
+     * in it (Win32 GetLogicalDrives/GetDriveType, "not ready" when empty). */
+    for (unsigned i=0;i<2;i++) if (controller.drive[i].present) storage_reserve_floppy(i);
     for (unsigned i=0;i<2;i++) if (controller.drive[i].present) (void)floppy_mount(i);
     /* A single task observes DIR for leased drives. Guest port polling only
      * reads cached state. Media loss expires native cache/handles before

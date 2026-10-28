@@ -18,7 +18,7 @@ class FirstbootTests(unittest.TestCase):
                 (inc/name).write_bytes((ROOT/'sdk/sysroot-overlay/include/ciuki'/name).read_bytes())
             binary=d/'native-test'
             sources=['tests/host/desktop/firstboot_native_test.c','apps/desktop/firstboot.c','apps/desktop/firstboot_games.c',
-                     'apps/desktop/sounds.c','sdk/libreg/registry.c','sdk/libreg/storage.c','sdk/libreg/hardware.c']
+                     'apps/desktop/sounds.c','sdk/libreg/registry.c','sdk/libreg/storage.c','sdk/libreg/hardware.c','sdk/libreg/transport.c']
             subprocess.run(['clang','-std=c17','-O1','-g','-Wall','-Wextra','-Werror','-D_POSIX_C_SOURCE=200809L',
                             '-fsanitize='+os.environ.get('CIUKI_FIRSTBOOT_SANITIZERS','address,undefined'),
                             '-fno-sanitize-recover=undefined','-ffunction-sections','-fdata-sections','-Wl,--gc-sections',
@@ -39,7 +39,7 @@ class FirstbootTests(unittest.TestCase):
                 (inc/name).write_bytes((ROOT/'sdk/sysroot-overlay/include/ciuki'/name).read_bytes())
             sources=['apps/desktop/firstboot.c','apps/desktop/firstboot_games.c','tests/host/desktop/firstboot_test.c',
                      'apps/libdeskui/draw.c','apps/desktop/theme.c','apps/desktop/settings.c',
-                     'sdk/libreg/registry.c','sdk/libreg/storage.c','sdk/libreg/hardware.c']
+                     'sdk/libreg/registry.c','sdk/libreg/storage.c','sdk/libreg/hardware.c','sdk/libreg/transport.c']
             binary=d/'firstboot-test'
             subprocess.run(['clang','-std=c17','-O1','-g','-Wall','-Wextra','-Werror','-D_POSIX_C_SOURCE=200809L',
                             '-fsanitize='+os.environ.get('CIUKI_FIRSTBOOT_SANITIZERS','address,undefined'),

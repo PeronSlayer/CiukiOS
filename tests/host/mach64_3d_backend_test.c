@@ -158,7 +158,7 @@ static struct set make_set(struct render3d_service *s,enum render3d_policy polic
 static void bind(struct render3d_request *q,const struct set *s)
 {
     q->target=s->target;
-    q->depth=q->flags&(R3D_CLEAR_DEPTH|R3D_DEPTH_TEST|R3D_DEPTH_WRITE) ? s->depth : 0;
+    q->depth=q->flags&R3D_DEPTH_FLAGS ? s->depth : 0;
     q->texture=q->flags&R3D_TEXTURED ? s->tex0 : 0;
     q->texture1=q->flags&R3D_TEXTURE1 ? s->tex1 : 0;
     q->copy_target=q->flags&R3D_COPY ? s->copy : 0;
@@ -280,7 +280,8 @@ static void differential(void)
         q.flags=flags; q.clear_color=0xff102030u; q.clear_depth=65535;
         q.state.sampler[0].filter=q.state.sampler[1].filter=R3D_BILINEAR;
         random_uv(&q,false,1); random_uv(&q,true,1);
-        bool invalid=(flags&R3D_TEXTURE1) && !(flags&R3D_TEXTURED);
+        bool invalid=((flags&R3D_TEXTURE1) && !(flags&R3D_TEXTURED)) ||
+            (flags&(R3D_STENCIL_TEST|R3D_CLEAR_STENCIL));
         pair(&q,32,32,flags&R3D_TEXTURED ? &flags0 : 0,flags&R3D_TEXTURE1 ? &flags1 : 0,invalid ? -EINVAL : 0);
     }
     /* 1. Flat/Gouraud geometry, every depth function, write on/off. */
@@ -427,6 +428,9 @@ static void qualification(void)
     CHECK(M.device.measured_filter_levels[0]>=192 && M.device.measured_filter_levels[1]>=192);
     struct ciuki_r3d_caps caps;
     mach64_3d_backend()->query_caps(&M.device,&caps);
+    CHECK(caps.features==MACH64_3D_FEATURES && caps.features==127u);
+    CHECK(!(caps.features&(R3D_STENCIL_TEST|R3D_CLEAR_STENCIL)));
+    CHECK(caps.depth_formats==CIUKI_R3D_D16);
     CHECK(caps.max_width==320 && caps.max_height==240 && caps.max_vertices==R3D_VERTICES && caps.max_pixel_work==2*320*240);
     CHECK(caps.sampling_features==(CIUKI_R3D_AFFINE_EXACT|CIUKI_R3D_PROJECTIVE_BILINEAR) && caps.max_texture_size==256);
     CHECK(caps.alpha_functions==255 && caps.blend_factors==3 && caps.filters==3 && caps.combine_modes==11);

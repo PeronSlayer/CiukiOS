@@ -7,8 +7,9 @@
 #include <stdbool.h>
 #include <stddef.h>
 #include <ciuki/ledger.h>
+#include <ciuki/kheap_limits.h>
+#include <ciuki/memory_limits.h>
 
-#define PMM_MAX_PAGES   (768u * 256u)      /* direct map limit: 768 MiB */
 #define ZONE_LOW        0
 #define ZONE_DMA        1
 #define ZONE_NORMAL     2
@@ -48,6 +49,7 @@ static inline void mm_free(uint32_t phys, enum mm_owner owner)
     else pmm_free(phys); /* fake-PMM host fixtures */
 }
 uint32_t pmm_free_count(void);
+uint32_t pmm_refusals(void);           /* fx-selftest: public allocations that returned 0 */
 uint32_t pmm_zone_free(int zone);
 uint32_t pmm_zone_total(int zone);
 uint32_t pmm_total_usable(void);
@@ -122,7 +124,10 @@ int as_seal_borrowed(struct aspace *, uint32_t va, uint32_t phys);
 /* Replace 1..32 already-present pages within one table; no allocation or
  * ownership change. Caller excludes guest execution/interrupts. Return old
  * D/A bits as page masks, clear D, and INVLPG each changed entry of the
- * active AS (fx-27: never a whole-TLB CR3 reload).
+ * active AS (fx-27: never a whole-TLB CR3 reload) whose replaced value had
+ * A or D set (fx-doswin3; Intel SDM Vol. 3A 5.10.2.3, 5.10.4.3). Valid only
+ * on one CPU with CR4.PGE and CR4.PCIDE clear, with every A 1->0 writer
+ * invalidating while its space is current (vmm.c as_replace_pages).
  * frames == NULL keeps frames/permissions (dirty collection only). */
 int as_replace_pages(struct aspace *, uint32_t va, const uint32_t *frames,
                      unsigned count, uint32_t flags, uint32_t *dirty, uint32_t *accessed);
@@ -134,6 +139,18 @@ bool as_range_ok(const struct aspace *as, uint32_t va, uint32_t len, bool write)
 void kheap_init(void);
 void *kmalloc(size_t size);
 void *kzalloc(size_t size);
+/* Keep the real symbols for allocator definitions and runtime boundary tests.
+ * sizeof never evaluates size: even a side-effecting argument runs only once.
+ * A negative array bound rejects oversized constants at every optimization level. */
+#define KHEAP_CHECK_SIZE(size) \
+    ((void)sizeof(char[__builtin_constant_p(size) ? \
+        ((size_t)(size) <= KHEAP_MAX_REQUEST ? 1 : -1) : 1]))
+#ifndef kmalloc
+#define kmalloc(size) (KHEAP_CHECK_SIZE(size), (kmalloc)(size))
+#endif
+#ifndef kzalloc
+#define kzalloc(size) (KHEAP_CHECK_SIZE(size), (kzalloc)(size))
+#endif
 void kfree(void *p);
 size_t kheap_in_use(void);
 /* Class-pool pages retained for reuse; class bytes include headers/padding.
@@ -141,6 +158,7 @@ size_t kheap_in_use(void);
 struct kheap_ledger {
     uint32_t pages;
     size_t in_use, peak;
+    uint32_t refused; /* fx-selftest: kmalloc returned NULL (oversize or no page) */
 };
 void kheap_snapshot(struct kheap_ledger *out);
 

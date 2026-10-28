@@ -76,6 +76,20 @@ static uint64_t vga_frame_us(const cvga_state *g)
     if (lines < 262) lines = 449;                 /* unprogrammed or nonsensical: 70 Hz */
     return lines * 1000000u / VGA_LINE_HZ;
 }
+/* fx-doswin3 round 3: how long after a CRTC start-address change only the
+ * displayed page wakes the presenter (dosvm_present_store_wake): twice the
+ * gap since the previous change, at least one refresh, at most
+ * DOSVM_FLIP_HOLD_MS (Windows 9x refreshed a windowed DOS display every
+ * WindowUpdateTime, 50 ms by default). A first or single change holds for
+ * one refresh; fizzles, menus and pause screens that draw into the shown
+ * page without a flip appear after at most that hold. */
+static unsigned flip_hold_ms(uint64_t gap_us, uint64_t period_us)
+{
+    uint64_t hold = gap_us > DOSVM_FLIP_HOLD_MS * 1000u ? DOSVM_FLIP_HOLD_MS * 1000u : 2 * gap_us;
+    if (hold < period_us) hold = period_us;
+    if (hold > DOSVM_FLIP_HOLD_MS * 1000u) hold = DOSVM_FLIP_HOLD_MS * 1000u;
+    return ((uint32_t)hold + 999u) / 1000u;
+}
 uint8_t dosvm_vga_status(struct dosvm *v, uint64_t tick)
 {
     uint64_t now = tick * 1000u;
@@ -106,6 +120,68 @@ static unsigned video_register(const cvga_state *v, unsigned p)
     if (p >= 0x3C6 && p <= 0x3C9) return DOSVM_VGA_DAC;
     return DOSVM_VGA_OTHER;
 }
+/* f3-19: a map-mask (SR02), read-map-select (GR04) or graphics-mode (GR05)
+ * data write: the register update and, when the CPU's plane window changes,
+ * one 16-PTE exchange. Shared by dosvm_vga_port and dosvm_vga_select_fast. */
+static void video_select(struct dosvm *v, unsigned p, uint8_t byte)
+{
+    uint8_t data = byte & (p == 0x3C5 ? 15 : v->vga.gc_index == 4 ? 3 : 0x7B);
+    uint8_t old = p == 0x3C5 ? v->vga.seq[2] : v->vga.gc[v->vga.gc_index];
+    bool was_read = v->video_read_window;
+    if (p == 0x3C5) v->video_read_window = false;
+    else if (v->vga.gc_index == 4 && cvga_direct_read_plane(&v->vga) >= 0)
+        v->video_read_window = true;
+    if (data != old || was_read != v->video_read_window) {
+        dosvm_vga_model(v); /* linear backing uses the OLD memory state */
+        cvga_write_port(&v->vga, (uint16_t)p, data);
+        video_direct(v, true);
+    }
+}
+/* fx-doomwin: the plane selects dosvm_trap_fast retires at trap entry,
+ * physical IF clear for the whole exit. An unchained planar VGA in the
+ * window (not a full screen, not VBE, chain-4 off, the CPU window closed
+ * or on one plane) takes only sequencer/graphics-controller index writes
+ * and the f3-19 data writes above: an OUT DX,AL to 3C4h/3CEh, to 3C5h with
+ * index 2, to 3CFh with index 4 or 5, or an OUT DX,AX to 3C4h with AL=2 or
+ * to 3CEh with AL=4/5. With chain-4 off cvga_direct_linear is false (it
+ * requires SR04 bits 1-3), so the window never becomes the linear backing
+ * here: no harvest or 64 KiB chain-4 seed (up to 512 us, dosvm_vga_sync),
+ * only the bounded 16-entry exchange (vmm.c as_replace_pages). The state
+ * reached is exactly dosvm_vga_port's for the same bytes;
+ * dosvm_vga_select_ok decides, without changing anything. Windows 3.x/9x's
+ * VDD likewise traps the ports of a windowed VM, keeps their values and
+ * maps the video pages its virtual controller state selects (Windows 3.0
+ * DDK, Virtual Device Adaptation Guide, 18.1.3 "VDD I/O Trapping and Hooked
+ * Pages"); DOSBox (vga_seq.cpp write_p3c5) and QEMU (vga.c
+ * vga_ioport_write) also only store SR02 and apply it at each emulated
+ * store. */
+bool dosvm_vga_select_ok(const struct dosvm *v, uint16_t port, unsigned width, uint32_t value)
+{
+    if (v->fullscreen || v->vbe_mode || !v->as.pd_phys || v->video_direct >= VIDEO_LINEAR ||
+        (v->vga.seq[4] & 8) || (v->launch_exec && !v->launch_ready)) return false;
+    uint8_t low = (uint8_t)value;
+    return width == 1 ? port == 0x3C4 || port == 0x3CE ||
+        (port == 0x3C5 && v->vga.seq_index == 2) ||
+        (port == 0x3CF && (v->vga.gc_index == 4 || v->vga.gc_index == 5)) :
+        width == 2 && ((port == 0x3C4 && (low & 7) == 2) ||
+                       (port == 0x3CE && ((low & 15) == 4 || (low & 15) == 5)));
+}
+void dosvm_vga_select_fast(struct dosvm *v, uint16_t port, unsigned width, uint32_t value)
+{
+    uint64_t begin = dosvm_perf_stamp();
+    unsigned remaps = v->perf.port_remaps, reg = 0;
+    for (unsigned i = 0; i < width; i++) {
+        unsigned p = port + i;
+        uint8_t byte = (uint8_t)(value >> (8 * i));
+        reg = video_register(&v->vga, p);
+        v->perf.vga_reg = reg; v->perf.port_count[reg]++;
+        if (p == 0x3C4 || p == 0x3CE) cvga_write_port(&v->vga, (uint16_t)p, byte);
+        else video_select(v, p, byte);
+    }
+    uint64_t elapsed = dosvm_perf_stamp() - begin;
+    v->perf.port_cycles[reg] += elapsed;
+    if (v->perf.port_remaps != remaps) v->perf.remap_cycles += elapsed;
+}
 int dosvm_vga_port(struct dosvm *v, uint16_t port, unsigned width,
                       bool write, uint32_t *value, void *arg)
 {
@@ -130,19 +206,8 @@ int dosvm_vga_port(struct dosvm *v, uint16_t port, unsigned width,
                 bool fast = (p == 0x3C5 && v->vga.seq_index == 2) ||
                     (p == 0x3CF && (v->vga.gc_index == 4 || v->vga.gc_index == 5));
                 if (fast && (!v->launch_exec || v->launch_ready)) {
-                    uint8_t data = (uint8_t)(*value >> (8 * i)) &
-                        (p == 0x3C5 ? 15 : v->vga.gc_index == 4 ? 3 : 0x7B);
-                    uint8_t old = p == 0x3C5 ? v->vga.seq[2] : v->vga.gc[v->vga.gc_index];
-                    bool was_read = v->video_read_window;
-                    if (p == 0x3C5) v->video_read_window = false;
-                    else if (v->vga.gc_index == 4 && cvga_direct_read_plane(&v->vga) >= 0)
-                        v->video_read_window = true;
                     unsigned remaps = v->perf.port_remaps;
-                    if (data != old || was_read != v->video_read_window) {
-                        dosvm_vga_model(v); /* linear backing uses the OLD memory state */
-                        cvga_write_port(&v->vga, (uint16_t)p, data);
-                        video_direct(v, true);
-                    }
+                    video_select(v, p, (uint8_t)(*value >> (8 * i)));
                     uint64_t elapsed = dosvm_perf_task_clock() - begin;
                     v->perf.port_cycles[reg] += elapsed;
                     /* Share the enclosing clock pair: remap attribution
@@ -176,6 +241,7 @@ int dosvm_vga_port(struct dosvm *v, uint16_t port, unsigned width,
                 cvga_write_port(&v->vga, (uint16_t)p, (uint8_t)(*value >> (8 * i)));
                 if (flip && old_start != (unsigned)v->vga.crtc[0x0C] * 256u + v->vga.crtc[0x0D]) {
                     uint64_t now = g_ticks * 1000u, period = vga_frame_us(&v->vga);
+                    v->video_flip_tick = g_ticks;
                     /* Low/high writes within half a refresh form one change.
                      * Two refresh-spaced transitions establish fast flipping;
                      * repeated writes of the same address never do. */
@@ -183,6 +249,7 @@ int dosvm_vga_port(struct dosvm *v, uint16_t port, unsigned width,
                         uint64_t gap = now - v->video_flip_us;
                         v->video_flip_run = v->video_flip_seen && gap >= period / 2 && gap <= period * 3 / 2 ?
                             v->video_flip_run + (v->video_flip_run < 2) : 0;
+                        v->video_flip_hold_ms = flip_hold_ms(v->video_flip_seen ? gap : 0, period);
                         v->video_flip_us = now; v->video_flip_seen = true;
                     }
                 }
@@ -728,12 +795,69 @@ static int video_string(void *arg, uint32_t src, uint32_t dst, unsigned size,
                          uint32_t count, int back, int move, uint32_t value)
 { return video_string_run(arg, src, dst, size, count, back, move, value, false); }
 static uint32_t pm_segment_base(void *arg, uint16_t selector);
-struct video_burst_bus { struct dosvm *v; bool vram, preflight; };
+/* fx-doswin3: byte values remain live; only resident RAM translations and
+ * immutable selectors are cached during this non-yielding burst, as in the
+ * DAC decoder. Ports invalidate translations before another instruction;
+ * the next host tick ends the burst. Nothing is retained in the VM. */
+struct video_cache {
+    struct dosvm *v;
+    uint32_t page[2];               /* cached resident linear pages (code, data) */
+    const uint8_t *host[2];
+    /* Descriptors decoded once per burst: the decoder loads no selector. */
+    struct { uint16_t sel; bool valid; struct dpmi_seg seg; } seg[3];
+    unsigned next_seg;
+};
+static int video_cache_byte(struct video_cache *b, unsigned slot, uint32_t address, uint8_t *value)
+{
+    if (vram(address)) return -EFAULT;  /* a VGA memory read loads the latches */
+    uint32_t page = address & ~0xFFFu;
+    if (!b->host[slot] || b->page[slot] != page) {
+        uint32_t pte = 0, phys = as_lookup(&b->v->as, address, &pte);
+        /* Never pages in; never reads a borrowed (direct LFB lease) page,
+         * which is provider MMIO outside P2V (lean_fetch, dosvm.c). */
+        if (!phys || !(pte & PTE_U) || (pte & PTE_BORROWED)) return -EFAULT;
+        b->page[slot] = page; b->host[slot] = P2V(phys & ~0xFFFu);
+    }
+    *value = b->host[slot][address & 0xFFFu];
+    return 0;
+}
+/* dpmi_ptr's segment checks on a per-burst descriptor cache; the page
+ * check is video_cache_byte's (resident user pages only, stricter than
+ * dosvm_range), so no per-byte page-table walk. */
+static int video_cache_validate(struct video_cache *b, uint16_t sel, uint32_t off, unsigned size, int write)
+{
+    const struct dpmi_seg *s = 0;
+    for (unsigned i = 0; i < 3 && !s; i++) if (b->seg[i].valid && b->seg[i].sel == sel) s = &b->seg[i].seg;
+    if (!s) {
+        unsigned i = b->next_seg++ % 3;
+        b->seg[i].valid = dpmi_seg(b->v, sel, &b->seg[i].seg);
+        if (!b->seg[i].valid) return -EFAULT;
+        b->seg[i].sel = sel; s = &b->seg[i].seg;
+    }
+    if (!size || !s->present || (write ? !s->writable : !s->readable)) return -EFAULT;
+    uint32_t last = off + size - 1;
+    if (last < off) return -EFAULT;
+    if (s->down) {
+        if (off <= s->limit || last > (s->big ? 0xFFFFFFFFu : 0xFFFFu)) return -EFAULT;
+    } else if (last > s->limit) return -EFAULT;
+    return s->base + off + size - 1 < s->base + off ? -EFAULT : 0;
+}
+struct video_burst_bus {
+    struct dosvm *v;
+    bool vram, preflight, cached, replay;
+    struct video_cache cache;
+    unsigned writes;
+    struct { uint32_t address; uint8_t value; } store[4];
+};
 static int burst_read(void *arg, uint32_t address, uint8_t *value)
 {
     struct video_burst_bus *b = arg;
+    if (b->cached && !vram(address)) return video_cache_byte(&b->cache, 1, address, value);
     if (b->preflight) {
-        if (vram(address)) { *value = cvga_peek_vram(&b->v->vga, address); return 0; }
+        if (vram(address)) {
+            b->replay = true; /* a real read must load the VGA latches */
+            *value = cvga_peek_vram(&b->v->vga, address); return 0;
+        }
         /* f3-46: never page in between burst instructions; a pool page that
          * is not resident ends the burst before this instruction commits. */
         return dosvm_read_resident(b->v, address, value, 1);
@@ -745,25 +869,46 @@ static int burst_write(void *arg, uint32_t address, uint8_t value)
 {
     struct video_burst_bus *b = arg;
     if (!vram(address)) return -EFAULT;             /* refused before any byte moves */
-    if (b->preflight) return 0;
+    if (b->preflight) {
+        if (b->writes < ARRAY_SIZE(b->store)) {
+            b->store[b->writes].address = address;
+            b->store[b->writes++].value = value;
+        } else b->replay = true;
+        if (b->v->vbe_mode) b->replay = true;
+        return 0;
+    }
     b->vram = true;
+    if (b->cached && !b->v->vbe_mode) {
+        /* Preflight already checked the complete instruction. The byte bus
+         * has no range to walk, RAM to page in, or physical adapter to write. */
+        dosvm_vga_model(b->v);
+        b->v->perf.trapped_bytes++;
+        dosvm_launch_video(b->v);
+        cvga_write_vram(&b->v->vga, address, value);
+        return 0;
+    }
     return video_write(b->v, address, value);
 }
 static int burst_fetch(void *arg, uint32_t address, uint8_t *value)
 {
     struct video_burst_bus *b = arg;
-    return video_fetch(b->v, address, value);
+    return b->cached ? video_cache_byte(&b->cache, 0, address, value) : video_fetch(b->v, address, value);
 }
 static uint32_t burst_base(void *arg, uint16_t sel)
 { return pm_segment_base(((struct video_burst_bus *)arg)->v, sel); }
 static int burst_validate(void *arg, uint16_t sel, uint32_t off, unsigned size, int write)
-{ return pm_validate(((struct video_burst_bus *)arg)->v, sel, off, size, write); }
+{
+    struct video_burst_bus *b = arg;
+    return b->cached ? video_cache_validate(&b->cache, sel, off, size, write) :
+        pm_validate(b->v, sel, off, size, write);
+}
 static int burst_string(void *arg, uint32_t src, uint32_t dst, unsigned size,
                          uint32_t count, int back, int move, uint32_t value)
 {
     struct video_burst_bus *b = arg;
     /* The same full-span checks run twice; only the committed call writes
      * planes. Unsupported string modes use the bytewise preflight. */
+    b->replay = true; /* the checked bulk copier has its own transaction */
     int done = video_string_run(b->v, src, dst, size, count, back, move, value, b->preflight);
     if (done && !b->preflight) b->vram = true;
     return done;
@@ -777,15 +922,20 @@ static int burst_port(void *arg, uint16_t port, unsigned size, int write, uint32
     if (port < 0x3B0 || port + size - 1 > 0x3DF ||
         (port<=0x3BE && port+size>0x3BC)) return -EFAULT;
     if (b->preflight) {
+        b->replay = true; /* status/DAC reads and register writes have effects */
         if (!write) *value = 0; /* IN has no access-dependent side effects in this instruction. */
         return 0;
     }
     b->vram = true;
+    /* A sequencer/GC port can exchange the aperture or deinterleave it.
+     * Do not carry a cached translation across any committed port. */
+    b->cache.host[0] = b->cache.host[1] = 0;
     return dosvm_vga_port(b->v, port, size, write != 0, value, 0);
 }
 static void video_burst(struct dosvm *v, struct v86_frame *f, const cvx_cpu *first)
 {
-    struct video_burst_bus ctx = {v, false, false};
+    struct video_burst_bus ctx = {.v=v, .cached=!v->fullscreen && !v->fullscreen_hold,
+                                  .cache={.v=v}};
     const cvx_bus bus = {.read=burst_read, .write=burst_write, .fetch=burst_fetch, .context=&ctx,
         .segment_base=v->frame_pm ? burst_base : 0, .validate=v->frame_pm ? burst_validate : 0,
         .string=burst_string, .port=burst_port};
@@ -795,7 +945,9 @@ static void video_burst(struct dosvm *v, struct v86_frame *f, const cvx_cpu *fir
     c.gpr[4] = f->tf.user_esp; c.gpr[5] = f->tf.ebp; c.gpr[6] = f->tf.esi; c.gpr[7] = f->tf.edi;
     c.eip = f->tf.eip; c.eflags = f->tf.eflags;
     unsigned idle = 0;
+    uint64_t tick = g_ticks;
     for (unsigned n = 0; n < VIDEO_BURST && idle < VIDEO_BURST_IDLE; n++) {
+        if (ctx.cached && g_ticks != tick) break;
         if (video_run_blocked(v, f)) break;
         cvx_cpu next = c;
         cvx_result result;
@@ -805,13 +957,32 @@ static void video_burst(struct dosvm *v, struct v86_frame *f, const cvx_cpu *fir
          * directions. Memory callbacks cannot yield; committed VGA ports may
          * swap mappings, just as a scalar port instruction does. */
         ctx.preflight = true;
+        ctx.replay = false; ctx.writes = 0;
         int e = cvx_execute(&next, &bus, VIDEO_STRING_BUDGET, &result);
         ctx.preflight = false;
         if (e != CVX_DONE && e != CVX_PARTIAL) break;
-        next = c;
         ctx.vram = false;
         v->video_bus_fault = false;
-        e = cvx_execute(&next, &bus, VIDEO_STRING_BUDGET, &result);
+        if (ctx.cached && !ctx.replay) {
+            /* Register/RAM-only operations have no bus side effects. For
+             * a scalar store, preflight already decoded every byte and
+             * validated every segment/access. Commit its at most four
+             * VGA bytes in order and reuse the computed register state.
+             * Latch reads, ports and bulk strings keep the two-pass path. */
+            for (unsigned i=0; i<ctx.writes; i++)
+                burst_write(&ctx, ctx.store[i].address, ctx.store[i].value);
+        } else {
+            /* Bulk strings and VBE transfers can enter existing paging or
+             * scheduling paths. Their committed pass uses the original
+             * resolver; no cached RAM alias may survive such a call, even
+             * if a voluntary service point returns within the same tick. */
+            bool cached = ctx.cached;
+            ctx.cached = false;
+            ctx.cache.host[0] = ctx.cache.host[1] = 0;
+            next = c;
+            e = cvx_execute(&next, &bus, VIDEO_STRING_BUDGET, &result);
+            ctx.cached = cached;
+        }
         if ((e != CVX_DONE && e != CVX_PARTIAL) || v->video_bus_fault) {
             v->video_bus_fault = false;              /* nothing moved: the CPU repeats it natively */
             break;
@@ -896,75 +1067,79 @@ void dosvm_vga_burst(struct dosvm *v, struct v86_frame *f)
  * frame rather than per entry. */
 #define DAC_LOOKAHEAD 8u
 #define DAC_BURST_INSN 8192u
-struct dac_bus {
-    struct dosvm *v;
-    bool detect, found;
-    uint32_t page[2];               /* cached resident linear pages (code, data) */
-    const uint8_t *host[2];
-    /* Descriptors decoded once per burst: the decoder loads no selector. */
-    struct { uint16_t sel; bool valid; struct dpmi_seg seg; } seg[3];
-    unsigned next_seg;
-};
+struct dac_bus { struct video_cache cache; bool detect, found; };
 static bool dac_port_ok(uint16_t port, unsigned size, int write)
 {
     if (size > 2) return false;
     if (port >= 0x3C6 && port <= 0x3C9) return true;   /* DAC mask, indexes, data */
     return !write && size == 1 && (port == 0x3DA || port == 0x3BA);
 }
-static int dac_byte(struct dac_bus *b, unsigned slot, uint32_t address, uint8_t *value)
-{
-    if (vram(address)) return -EFAULT;  /* a VGA memory read loads the latches */
-    uint32_t page = address & ~0xFFFu;
-    if (!b->host[slot] || b->page[slot] != page) {
-        uint32_t pte = 0, phys = as_lookup(&b->v->as, address, &pte);
-        /* Never pages in; never reads a borrowed (direct LFB lease) page,
-         * which is provider MMIO outside P2V (lean_fetch, dosvm.c). */
-        if (!phys || !(pte & PTE_U) || (pte & PTE_BORROWED)) return -EFAULT;
-        b->page[slot] = page; b->host[slot] = P2V(phys & ~0xFFFu);
-    }
-    *value = b->host[slot][address & 0xFFFu];
-    return 0;
-}
-static int dac_read(void *arg, uint32_t address, uint8_t *value) { return dac_byte(arg, 1, address, value); }
-static int dac_fetch(void *arg, uint32_t address, uint8_t *value) { return dac_byte(arg, 0, address, value); }
+static int dac_read(void *arg, uint32_t address, uint8_t *value) { return video_cache_byte(&((struct dac_bus *)arg)->cache, 1, address, value); }
+static int dac_fetch(void *arg, uint32_t address, uint8_t *value) { return video_cache_byte(&((struct dac_bus *)arg)->cache, 0, address, value); }
 static int dac_write(void *arg, uint32_t address, uint8_t value)
 { (void)arg; (void)address; (void)value; return -EFAULT; }
-static uint32_t dac_base(void *arg, uint16_t sel) { return pm_segment_base(((struct dac_bus *)arg)->v, sel); }
-/* dpmi_ptr's segment checks on a per-burst descriptor cache; the page
- * check is dac_byte's (resident user pages only, stricter than
- * dosvm_range), so no per-byte page-table walk. */
+static uint32_t dac_base(void *arg, uint16_t sel) { return pm_segment_base(((struct dac_bus *)arg)->cache.v, sel); }
 static int dac_validate(void *arg, uint16_t sel, uint32_t off, unsigned size, int write)
-{
-    struct dac_bus *b = arg;
-    const struct dpmi_seg *s = 0;
-    for (unsigned i = 0; i < 3 && !s; i++) if (b->seg[i].valid && b->seg[i].sel == sel) s = &b->seg[i].seg;
-    if (!s) {
-        unsigned i = b->next_seg++ % 3;
-        b->seg[i].valid = dpmi_seg(b->v, sel, &b->seg[i].seg);
-        if (!b->seg[i].valid) return -EFAULT;
-        b->seg[i].sel = sel; s = &b->seg[i].seg;
-    }
-    if (!size || !s->present || (write ? !s->writable : !s->readable)) return -EFAULT;
-    uint32_t last = off + size - 1;
-    if (last < off) return -EFAULT;
-    if (s->down) {
-        if (off <= s->limit || last > (s->big ? 0xFFFFFFFFu : 0xFFFFu)) return -EFAULT;
-    } else if (last > s->limit) return -EFAULT;
-    return s->base + off + size - 1 < s->base + off ? -EFAULT : 0;
-}
+{ return video_cache_validate(&((struct dac_bus *)arg)->cache, sel, off, size, write); }
 static int dac_port(void *arg, uint16_t port, unsigned size, int write, uint32_t *value)
 {
     struct dac_bus *b = arg;
     if (!dac_port_ok(port, size, write)) return -EFAULT;
     if (b->detect) { b->found = true; return -EAGAIN; }  /* unsupported: no effect */
-    return dosvm_vga_port(b->v, port, size, write != 0, value, 0);
+    return dosvm_vga_port(b->cache.v, port, size, write != 0, value, 0);
+}
+/* A counted resident-byte DAC loop, after its OUT:
+ *   jmp $+2; mov al,[ebx/esi/edi]; inc ebx/esi/edi; out dx,al;
+ *   dec ecx; jnz loop
+ * All six intervening instructions used to be decoded by the lookahead
+ * for every component. Recognize live bytes, validate the next source,
+ * and use the instruction decoder for INC (including its exact flags).
+ * DEC's flags are overwritten by INC; CF is preserved by both. The final
+ * DEC/JNZ stays native, as when ordinary lookahead finds no further OUT.
+ * This is a byte-loop optimization, independent of the guest executable. */
+static unsigned dac_counted_run(struct dosvm *v, struct v86_frame *f, cvx_cpu *c,
+                                struct dac_bus *b, const cvx_bus *bus,
+                                unsigned budget, uint64_t tick)
+{
+    if (v->fullscreen || v->fullscreen_hold || !c->code32 || c->eip < 6 ||
+        (c->gpr[CVX_EDX] & 0xFFFFu) != 0x3C9) return 0;
+    uint8_t code[9];
+    for (unsigned i=0; i<sizeof(code); i++) {
+        uint32_t off=c->eip-6+i;
+        if (off<c->eip-6 || video_cache_validate(&b->cache,c->sreg[CVX_CS],off,1,0) ||
+            dac_fetch(b,c->seg_base[CVX_CS]+off,&code[i])) return 0;
+    }
+    unsigned reg=code[3]&7u;
+    if (code[0]!=0xEB || code[1] || code[2]!=0x8A ||
+        (reg!=CVX_EBX && reg!=CVX_ESI && reg!=CVX_EDI) || code[3]!=reg ||
+        code[4]!=0x40u+reg || code[5]!=0xEE || code[6]!=0x49 ||
+        code[7]!=0x75 || code[8]!=0xF7) return 0;
+    unsigned done=0;
+    uint32_t ip=c->eip;
+    uint32_t base=pm_segment_base(v,c->sreg[CVX_DS]);
+    while (done<budget && c->gpr[CVX_ECX]>1 && g_ticks==tick && !video_run_blocked(v,f)) {
+        uint32_t off=c->gpr[reg]; uint8_t value;
+        if (video_cache_validate(&b->cache,c->sreg[CVX_DS],off,1,0)) break;
+        if (dac_read(b,base+off,&value)) break;
+        cvx_cpu next=*c;
+        next.gpr[CVX_ECX]--; /* taken JNZ; JMP $+2 and MOV leave flags alone */
+        next.gpr[CVX_EAX]=(next.gpr[CVX_EAX]&~0xFFu)|value;
+        next.eip=ip-2; /* the real INC instruction, flags included */
+        cvx_result result;
+        if (cvx_execute(&next,bus,1,&result)!=CVX_DONE) break;
+        uint32_t output=value;
+        b->detect=false;
+        if (dac_port(b,0x3C9,1,1,&output)) break;
+        next.eip=ip; *c=next; done++;
+    }
+    return done;
 }
 int dosvm_vga_dac_burst(struct dosvm *v, struct v86_frame *f)
 {
     if (!dosvm_vga_ports_modeled(v) || video_run_blocked(v, f)) return 0;
     cvx_cpu c = {0};
     c.lock_sp = v->dpmi.if_armed != 0;   /* no SP/ESP write beside an owned stack image */
-    struct dac_bus ctx = {.v = v};
+    struct dac_bus ctx = {.cache = {.v = v}};
     cvx_bus bus = {.read = dac_read, .write = dac_write, .fetch = dac_fetch, .context = &ctx, .port = dac_port};
     if (v->frame_pm) {
         struct dpmi_seg cs;
@@ -986,6 +1161,11 @@ int dosvm_vga_dac_burst(struct dosvm *v, struct v86_frame *f)
     uint64_t tick = g_ticks;
     unsigned executed = 0, ports = 0;
     while (executed < DAC_BURST_INSN && g_ticks == tick && !video_run_blocked(v, f)) {
+        unsigned count=dac_counted_run(v,f,&c,&ctx,&bus,(DAC_BURST_INSN-executed)/6,tick);
+        if (count) {
+            executed+=count*6; ports+=count; v->perf.dac_counted+=count;
+            continue;
+        }
         cvx_cpu ahead = c;
         unsigned pure = 0;
         ctx.detect = true; ctx.found = false; v->video_bus_fault = false;
@@ -1218,6 +1398,26 @@ void dosvm_present_checkpoint(struct dosvm *v)
     dosvm_present_notify(v);
 }
 
+/* fx-accept: one record per change of the windowed layout, also in quiet
+ * boots: the acceptance suite (tests/suites/acc-t23.json) and the T23
+ * captures see a DOS game leave the text prompt for its graphics mode (the
+ * demo loop or gameplay follows). vbe is the VBE mode number (0 for the VGA
+ * model), width/height the presented geometry, text 1 for a text mode. The
+ * prefix is not "[dosvm]" on purpose: the f3 records keep their counts. */
+#define DOSVM_WINDOW_VIDEO_RECORDS 32u
+static void window_video_record(struct dosvm *v, unsigned vbe, unsigned width, unsigned height, unsigned text)
+{
+    /* bit 63 set: never 0, the value of a new VM */
+    uint64_t key = 1ull << 63 | (uint64_t)(vbe & 0xffffu) << 32 | (uint64_t)(width & 0x7fffu) << 16 |
+                   (uint64_t)(height & 0x7fffu) << 1 | (text ? 1u : 0u);
+    if (key == v->window_video_key) return;
+    v->window_video_key = key;
+    if (v->window_video_records >= DOSVM_WINDOW_VIDEO_RECORDS) return;
+    v->window_video_records++;
+    klog("[dosvm-window] video vm=%u gen=%u vbe=%x width=%u height=%u text=%u",
+         v->info.key.id, v->info.key.generation, vbe, width, height, text);
+}
+
 int dosvm_vga_present(struct dosvm *v, int (*row)(void *, unsigned, const void *, unsigned),
                       void *arg, uint64_t tick, struct ciuki_rect *damage)
 {
@@ -1226,10 +1426,15 @@ int dosvm_vga_present(struct dosvm *v, int (*row)(void *, unsigned, const void *
     memset(v->video_rows,0,sizeof(v->video_rows));
     if (v->fullscreen || v->fullscreen_hold) return 0;
     if (v->launch_armed && !v->launch_ready) return 0;
-    if (v->vbe_mode) return dosvm_vbe_present(v,row,arg,tick,damage);
+    if (v->vbe_mode) {
+        const struct dos_video_mode *m = dos_video_mode(v->vbe_mode);
+        if (m) window_video_record(v, v->vbe_mode, m->width, m->height, 0);
+        return dosvm_vbe_present(v,row,arg,tick,damage);
+    }
     uint64_t period = dosvm_vga_period_us(v, tick);
     cvga_geometry current = {0};
     cvga_get_geometry(&v->vga, &current);
+    window_video_record(v, 0, current.width, current.height, current.text ? 1u : 0u);
     v->video_present_rate = (unsigned)((1000000u + period / 2) / period);
     if (!v->video_presented || v->video_period_us != period) {
         v->video_due_us = v->video_presented ? v->video_tick * 1000u + period : tick * 1000u;

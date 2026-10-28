@@ -53,6 +53,7 @@ static void test_shutdown_lock_order(void)
     CHECK(kmutex_order_conflict(&audio_dma.register_lock,&audio_lock.service));
 
     unsigned before=pages_used;hardware_setup(&ac97);
+    backend_selected=true; /* a normal boot selected the AC'97 backend */
     resource_releases=resource_quarantines=irq_removals=0;
     for(unsigned i=0;i<12;i++) {
         ac97.claims[i]=i;ac97.claim_generation[i]=100+i;
@@ -81,4 +82,47 @@ static void test_shutdown_lock_order(void)
     memset(&ac97,0,sizeof(ac97)); memset(&hec,0,sizeof(hec));
     power_stopped=false; audio.error=saved_error;
     puts("audio shutdown order: call-73 barrier net/audio/EC/usb and the worker error turn hold sync.h (level, address) order (service<control, outer to DMA register and EC locks); trial layout negative control names both locks PASS");
+}
+/* fx-acc1 (acceptance run 2026-10-27, case acc-safe-restart-shutdown,
+ * serial lines 670-671): Restart from a Safe Mode session stopped at
+ * "[audio] failure stage=shutdown backend=ac97 reason=stop_unproved" and
+ * "[power] native quiesce failed: -5" (the owner's T23 report "il restart
+ * non funziona"). Safe Mode starts no sound backend: audio_init returns at
+ * reason "safe_mode" (Windows 98 Safe Mode loads no sound driver), so
+ * nothing was claimed and the call-73 barrier must stop nothing. Before the
+ * fix the never-initialised AC'97 record (zeroed static storage) carried
+ * twelve "claims" equal to registry handle 0, another owner's resource:
+ * shutdown failed its generation check, quarantined it and returned EIO. */
+static void test_safe_mode_quiesce(void)
+{
+    struct audio_state saved_audio=audio; uint32_t flags=g_boot.flags;
+    bool selected=backend_selected, dma=dma_selected; enum audio_backend_kind kind=audio_dma.kind;
+    audio_dma.kind=(enum audio_backend_kind)0;   /* no DMA-family record either */
+    /* The state audio_init leaves in Safe Mode (thinkpad_ec_test.inc runs
+     * that early return itself): initialised, no backend selection. */
+    memset(&ac97,0,sizeof(ac97)); memset(&hec,0,sizeof(hec));
+    memset(audio_resources,0,sizeof(audio_resources));
+    audio_resources[0]=(struct resource){.generation=7,.state=RS_ACTIVE}; /* the storage driver's handle 0 */
+    resource_releases=resource_quarantines=irq_removals=0;
+    g_boot.flags=CBI_F_SAFE_MODE; audio.initialized=true; audio.ready=false; audio.quarantined=false;
+    audio.reason="safe_mode"; audio.error=0; backend_selected=false; dma_selected=false;
+    audio_locks_init(); power_stopped=false; quiesce_order[0]=0;
+    unsigned logs=audio_log_count; audio_log[0]=0;
+    CHECK(!power_devices_quiesce_terminal() && power_stopped && !strcmp(quiesce_order,"NU"));
+    CHECK(!audio.quarantined && !resource_quarantines && !resource_releases && !irq_removals);
+    CHECK(audio_resources[0].state==RS_ACTIVE && audio_resources[0].generation==7);
+    CHECK(audio_log_count==logs);   /* no "[audio] failure stage=shutdown" record */
+    /* The desktop's repeated request after a refusal is a no-op too. */
+    quiesce_order[0]=0;
+    CHECK(!power_devices_quiesce_terminal() && !strcmp(quiesce_order,"NU") && !resource_quarantines);
+    /* The record as the image loads it (ac97.c, backend.c: every claim -1)
+     * names no handle even when a shutdown walks it. */
+    for (unsigned i=0;i<12;i++) ac97.claims[i]=-1;
+    backend_selected=true; power_stopped=false; logs=audio_log_count;
+    CHECK(!power_devices_quiesce_terminal() && power_stopped && !audio.quarantined && !ac97.quarantine);
+    CHECK(!resource_quarantines && !resource_releases && audio_resources[0].state==RS_ACTIVE && audio_log_count==logs);
+    /* A normal boot's selection still stops what it started (above, test_shutdown_lock_order). */
+    power_stopped=false; backend_selected=selected; dma_selected=dma; audio_dma.kind=kind; audio=saved_audio; g_boot.flags=flags;
+    memset(&ac97,0,sizeof(ac97)); memset(audio_resources,0,sizeof(audio_resources));
+    puts("audio safe-mode restart: no backend selected, the call-73 barrier stops nothing, never quarantines another owner's handle 0 PASS");
 }

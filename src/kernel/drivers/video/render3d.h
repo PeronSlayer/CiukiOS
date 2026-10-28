@@ -24,7 +24,10 @@
 #define R3D_COPY CIUKI_R3D_COPY
 #define R3D_FEATURES 63u
 #define R3D_TEXTURE1 CIUKI_R3D_TEXTURE1
-#define R3D_ALL_FEATURES 127u
+#define R3D_ALL_FEATURES 511u
+#define R3D_STENCIL_TEST CIUKI_R3D_STENCIL_TEST
+#define R3D_CLEAR_STENCIL CIUKI_R3D_CLEAR_STENCIL
+#define R3D_DEPTH_FLAGS (R3D_CLEAR_DEPTH|R3D_DEPTH_TEST|R3D_DEPTH_WRITE|R3D_STENCIL_TEST|R3D_CLEAR_STENCIL)
 #define R3D_REFS 5u
 #define R3D_MIPS 11u
 
@@ -89,8 +92,18 @@ enum render3d_kind {
     R3D_COLOR = CIUKI_R3D_RESOURCE_COLOR,
     R3D_D16 = CIUKI_R3D_RESOURCE_D16,
     R3D_TEXTURE = CIUKI_R3D_RESOURCE_TEXTURE,
-    R3D_LINEAR_COLOR = CIUKI_R3D_RESOURCE_LINEAR_COLOR
+    R3D_LINEAR_COLOR = CIUKI_R3D_RESOURCE_LINEAR_COLOR,
+    R3D_D24S8 = CIUKI_R3D_RESOURCE_D24S8,
+    R3D_COLOR565 = CIUKI_R3D_RESOURCE_COLOR565,
+    R3D_LINEAR565 = CIUKI_R3D_RESOURCE_LINEAR565
 };
+static inline uint32_t render3d_pack565(uint32_t p)
+{ return ((p>>8)&0xf800)|((p>>5)&0x7e0)|((p>>3)&31); }
+static inline uint32_t render3d_expand565(uint32_t p)
+{
+    unsigned r=p>>11&31,g=p>>5&63,b=p&31;
+    return 0xff000000u|((r<<3|r>>2)<<16)|((g<<2|g>>4)<<8)|(b<<3|b>>2);
+}
 enum render3d_status { R3D_SOFTWARE_ONLY, R3D_NOT_IMPLEMENTED, R3D_UNQUALIFIED };
 struct render3d_backend;
 /* Potential features are research metadata, NEVER application capabilities. */
@@ -106,6 +119,7 @@ struct render3d_caps {
     uint32_t texture_heap_bytes;
 };
 /* Screen X/Y Q16.16 [0,1024]; normalized Z Q0.16 [0,65535];
+ * D24S8 uses normalized Z 0..16777215 instead;
  * reciprocal W Q16.16 [1/256,256]; U/V Q16.16 [-16,16].
  * RGBA is packed 0xAARRGGBB. No kernel FP or implicit API-origin conversion. */
 #define render3d_vertex ciuki_r3d_vertex
@@ -129,7 +143,10 @@ struct render3d_extent { uint32_t first, bytes; };
 struct render3d_resource {
     uint32_t handle, kind, width, height, pitch, bytes, offset, reserved;
     uint32_t references;
-    bool live, pending_free, hardware, resident;
+    uint32_t copied_from; /* Invalidate when the completed tiled source changes. */
+    /* stale: the resident device copy is newer than the canonical shadow
+     * (backends with download only); the shadow is synchronized on demand. */
+    bool live, pending_free, hardware, resident, stale;
     uint32_t format, levels, level_offset[R3D_MIPS];
     uint64_t last_use;
     void *shadow;
@@ -144,12 +161,13 @@ struct render3d_context {
     struct render3d_resource *resources;
 };
 struct render3d_job {
-    uint32_t context, row, triangle, phase;
+    uint32_t context, row, triangle, phase, column;
     struct render3d_fence fence;
     int result;
     bool occupied, complete;
     bool software;
 };
+struct fb_device;
 struct render3d_service;
 struct render3d_host;
 /* Hooks share the display driver's existing owner: enter takes presenter,
@@ -177,6 +195,16 @@ struct render3d_backend {
     void (*query_caps)(void *, struct ciuki_r3d_caps *);
     uint32_t resident_bytes; /* Backend-owned staging charged to the ceiling. */
     bool whole_context_fallback; /* Latch AUTO refusal for this context. */
+    /* First/last hardware context: revocable owner heap, outside execution. */
+    int (*prepare)(uint32_t); /* Optional short mode check before lease publication. */
+    int (*reserve)(void *);
+    void (*unreserve)(void *);
+    int (*scanout)(void *, const struct render3d_resource *, const struct fb_device *);
+    /* Optional, inside enter/leave: copy one resident attachment's device
+     * pixels into its canonical shadow (bounded, may yield the presenter).
+     * A backend with download leaves attachments device-resident after
+     * execute; one without it keeps every shadow current in execute. */
+    int (*download)(void *, struct render3d_resource *);
 };
 struct render3d_host {
     void *ctx;
@@ -189,6 +217,8 @@ struct render3d_host {
  * cursor, firmware, COB and the 2D offscreen reservation. No BAR alias is
  * another heap. Unsupported AGP never receives an allocation. */
 struct render3d_service {
+    /* Optional trusted background allocation pacing; never a wire callback. */
+    int (*allocation_checkpoint)(void *);
     struct render3d_host host;
     const struct render3d_backend *backend;
     void *device;
@@ -226,20 +256,29 @@ int render3d_submit(struct render3d_service *, uint32_t, uint32_t,
                    const struct render3d_request *, size_t, struct render3d_fence *);
 int render3d_step(struct render3d_service *);
 int render3d_wait(struct render3d_service *, uint32_t, uint32_t, struct render3d_fence, uint32_t);
+/* Synchronizes a device-resident attachment first (only when it is stale). */
 int render3d_readback(struct render3d_service *, uint32_t, uint32_t, uint32_t, void *, size_t);
 void render3d_process_exit(struct render3d_service *, uint32_t);
 int render3d_close(struct render3d_service *);
 /* Native/Win32 trusted adapter boundary: uses the already bound display
  * nomination, never chooses a family or grants a presentation lease. */
+int render3d_native_prepare(void);
+int render3d_scanout(struct render3d_service *, uint32_t, const struct ciuki_w32_render3d_args *, const struct fb_device *);
 int render3d_native_init(struct render3d_service *, const struct render3d_host *);
+int render3d_native_refresh(struct render3d_service *);
 /* Private fbdev exclusion; successful enter must pair with leave on the
  * same task. No allocation, file I/O or logging inside this interval. */
 int fbdev_render3d_enter(uint32_t);
 void fbdev_render3d_leave(void);
+/* Inside enter/leave only: yields the presenter mutex, keeps the job's claim. */
+void fbdev_render3d_yield(void);
 int fbdev_render3d_prepare(uint32_t);
 void fbdev_render3d_prepared(void);
+int fbdev_render3d_cache(uint32_t, int (*)(void *, bool), void *, bool);
 void render3d_device_lost(struct render3d_service *);
 /* Private software slice; returns 1 when complete, 0 for another slice. */
 int render3d_scalar_slice(const struct render3d_request *, struct render3d_resource *const [R3D_REFS],
                           struct render3d_job *, const struct render3d_host *);
+int render3d_scalar_sample_slice(const struct render3d_request *, struct render3d_resource *const [R3D_REFS],
+                                 struct render3d_job *, const struct render3d_host *);
 #endif

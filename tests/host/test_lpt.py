@@ -27,7 +27,8 @@ class LptTests(unittest.TestCase):
                         "-fsanitize=address,undefined", "-fno-sanitize-recover=undefined",
                         "-ffunction-sections", "-fdata-sections", "-Wl,--gc-sections",
                         "-I", str(ROOT / "src/kernel/include"),
-                        str(ROOT / "tests/host/lpt_test.c"), "-o", str(binary)], check=True)
+                        str(ROOT / "tests/host/lpt_test.c"),
+                        str(ROOT / "tests/host/security/subject_fixture.c"), "-o", str(binary)], check=True)
         subprocess.run([binary], check=True)
 
     def test_target_compile(self):

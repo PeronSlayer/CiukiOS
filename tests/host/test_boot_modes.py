@@ -324,6 +324,8 @@ class LoaderParserTests(unittest.TestCase):
                    'safe=0\tserial=1', 'safe=1\x00', 'A'*127, ' '*127, ' '*128,
                    'ecpoll=0', 'safe=1 ecpoll=0\r\nusbscan=0', 'ecpoll=1', 'ecpoll=00',
                    'serial=0 ecpoll=1\r\necpoll=0', 'ecpoll=2', 'ecpoll=11',
+                   '3d=probe', 'safe=0 serial=1 3d=probe', '3d=probe\r\nsafe=1',
+                   'serial=0 3d=probe\n', '3d=probeX', 'x3d=probe', '3d=', '3d=off',
                    # G14 Startup menu and AutoScan tokens.
                    'menu=1', 'autoscan=0', 'autoscan=2', 'safe=0 serial=1 menu=1 autoscan=2\n', 'menu=0', 'autoscan=1', 'menu=11')
         for flags in (0, 1, 2, 3):
@@ -342,6 +344,23 @@ class LoaderParserTests(unittest.TestCase):
         self.assertTrue(self.machine.config(text))
         self.assertEqual(self.machine.field(8) & 0x43, 0x41)
         self.assertFalse(self.machine.config(text + '\nprobe=f0:core run=12345678'))
+
+    def test_assembled_3d_probe_reaches_kernel_without_a_test_selector(self):
+        text='safe=0 serial=1 3d=probe'
+        # Reproduce the old fatal path using the same assembled parser: hide
+        # only the newly added table entry, then restore it for acceptance.
+        at=self.machine.initial.find(b'3d=probe\0')
+        self.assertGreaterEqual(at,0x20000)
+        self.assertLess(at,0x26000)
+        self.machine.initial[at]=ord('x')
+        try:
+            self.assertFalse(self.machine.config(text, 2))
+        finally:
+            self.machine.initial[at]=ord('3')
+        self.assertTrue(self.machine.config(text, 2))
+        self.assertEqual(self.machine.field(8) & 0x43, 2)
+        start=0x20000+self.machine.info+0x0a8  # CBI options, independent wire offset
+        self.assertEqual(self.machine.mem[start:start+len(text)+1],text.encode()+b'\0')
 
     def test_elf_fills_shared_scratch_before_first_header_validation(self):
         m = self.machine
@@ -414,8 +433,9 @@ int main(void)
     bad += !!cbi_quiet_console(CBI_F_VERBOSE);
     bad += !!cbi_quiet_console(CBI_F_TEXT_MODE);
     bad += !!cbi_quiet_console(CBI_F_HW_CHECK);
-    bad += CBI_F_VERBOSE != 0x800u || CBI_F_DIAG_VERBOSE != 0x1000u;
-    bad += CBI_F_INPUT_DETECTED != 0x4000u || CBI_F_DEFINED_MASK != 0xFF7FFFFFu;
+    bad += !!cbi_quiet_console(CBI_F_SELF_TEST);
+    bad += CBI_F_VERBOSE != 0x800u || CBI_F_DIAG_VERBOSE != 0x1000u || CBI_F_SELF_TEST != 0x800000u;
+    bad += CBI_F_INPUT_DETECTED != 0x4000u || CBI_F_DEFINED_MASK != 0xFFFFFFFFu;
     bad += CBI_F_BOOT_FAILED != 0x8000u || CBI_F_MENU_SHOWN != 0x400000u || CBI_F_SKIP_SHIFT != 24u;
     bad += !cbi_quiet_console(CBI_F_CMD_ONLY | CBI_F_BOOT_FAILED | CBI_F_SKIP_MASK);
     printf("quiet predicate: %u failures\n", bad);
@@ -580,7 +600,7 @@ int main(void)
     def test_power_call_wiring_and_sdk_wrapper(self):
         abi = (ROOT / 'src/kernel/include/ciuki/abi.h').read_text()
         self.assertRegex(abi, r'CIUKI_SYS_DOSVM = 72,\n    CIUKI_SYS_POWER = 73,\n    CIUKI_SYS_DISPLAY = 74,\n    CIUKI_SYS_LAUNCH_MARK = 75,\n    CIUKI_SYS_DEVICES = 76,\n    CIUKI_SYS_DISPLAY_ACCEL = 77,\n    CIUKI_SYS_SOCKET = 78,\n    CIUKI_SYS_BIND = 79,\n    CIUKI_SYS_CONNECT = 80,\n    CIUKI_SYS_LISTEN = 81,\n    CIUKI_SYS_ACCEPT = 82,\n    CIUKI_SYS_SENDTO = 83,\n    CIUKI_SYS_RECVFROM = 84,\n    CIUKI_SYS_SHUTDOWN = 85,\n    CIUKI_SYS_SOCKNAME = 86,\n    CIUKI_SYS_SOCKOPT = 87,\n    CIUKI_SYS_POLL = 88,\n    CIUKI_SYS_RESOLVE4 = 89,\n    CIUKI_SYS_NETCTL = 90,\n    CIUKI_SYS_GETENTROPY = 91,\n')
-        self.assertRegex(abi, r'CIUKI_SYS_TIME = 97,\n    CIUKI_SYS_FILE_INFO = 98,\n    CIUKI_SYS_RECOVERY = 99,\n    CIUKI_SYS_NET_INFO = 100,\n};')
+        self.assertRegex(abi, r'CIUKI_SYS_TIME = 97,\n    CIUKI_SYS_FILE_INFO = 98,\n    CIUKI_SYS_RECOVERY = 99,\n    CIUKI_SYS_NET_INFO = 100,\n    CIUKI_SYS_SECURITY = 101,\n};')
         for name, value in (('REBOOT', 1), ('OFF', 2), ('QUERY', 3), ('CAN_REBOOT', 1), ('CAN_OFF', 2)):
             self.assertIn(f'#define CIUKI_POWER_{name} {value}u', abi)
         syscall = (ROOT / 'src/kernel/core/syscall.c').read_text()
@@ -589,8 +609,12 @@ int main(void)
         power = (ROOT / 'src/kernel/core/power.c').read_text()
         body = power.split('int32_t power_syscall(uint32_t action)', 1)[1]
         # G11b: the caller check is power_authorized() (the desktop, or Setup with its capability).
-        self.assertLess(body.index('if (!power_authorized(caller)) return -EPERM;'), body.index('CIUKI_POWER_QUERY'))
-        self.assertIn('caller->pid == supervisor_desktop_pid()', power.split('static bool power_authorized(', 1)[1].split('}', 1)[0])
+        # sec-k04: QUERY is a read-only capability report for every caller (the logon screen
+        # offers Shut Down, contract K-Q8); every action after it needs the caller check.
+        self.assertLess(body.index('CIUKI_POWER_QUERY'), body.index('if (!power_authorized(caller)) return -EPERM;'))
+        self.assertLess(body.index('if (!power_authorized(caller)) return -EPERM;'), body.index('action == CIUKI_POWER_STANDBY'))
+        # sec-k04: the desktop is recognized by its retained device identity, not its pid.
+        self.assertIn('security_device_desktop(caller)', power.split('static bool power_authorized(', 1)[1].split('}', 1)[0])
         # fx-5: call 73 runs one serialized sequence after the caller check.
         self.assertLess(body.index('CIUKI_POWER_QUERY'), body.index('power_sequence(off)'))
         sequence = power.split('static int power_sequence(bool off)', 1)[1].split('int32_t power_syscall(uint32_t action)', 1)[0]
@@ -602,6 +626,10 @@ int main(void)
         self.assertIn('CU_CALL(POWER, action, 0, 0, 0, 0, 0)', wrapper)
         header = (ROOT / 'sdk/sysroot-overlay/include/ciuki/power.h').read_text()
         self.assertIn('int ciuki_power(uint32_t action);', header)
+        security = (ROOT / 'sdk/libciuki/proc.c').read_text()
+        self.assertIn('CU_CALL(SECURITY, CU_PTR(args), sizeof(*args), 0, 0, 0, 0)', security)
+        header = (ROOT / 'sdk/sysroot-overlay/include/ciuki/security.h').read_text()
+        self.assertIn('int ciuki_security(struct ciuki_security_args *args);', header)
         docs = (ROOT / 'docs/design/execution-abi.md').read_text()
         self.assertIn('Syscall **73**, `CIUKI_SYS_POWER`', docs)
 

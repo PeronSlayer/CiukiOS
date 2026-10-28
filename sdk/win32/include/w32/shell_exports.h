@@ -10,5 +10,6 @@
  X(FindExecutableA) X(SHAppBarMessage) X(Shell_NotifyIconA) X(Shell_NotifyIconW) \
  X(SHChangeNotify) X(DllGetClassObject) X(SHGetMalloc) X(SHGetFileInfoA) \
  X(ExtractIconA) X(ExtractIconW) X(ExtractIconExA) X(ExtractIconExW) \
- X(DragAcceptFiles) X(DragQueryFileA) X(DragFinish)
+ X(DragAcceptFiles) X(DragQueryFileA) X(DragFinish) \
+ X(IsUserAnAdmin) /* sec-user-05 */
 #endif

@@ -1,0 +1,282 @@
+CiukiOS: bounded CSS Color 4 RGB/alpha hex parsing. Specification:
+https://www.w3.org/TR/css-color-4/#rgb-functions
+https://www.w3.org/TR/css-color-4/#hex-notation
+
+rgb/rgba accept modern space/slash and legacy comma grammar, fractional
+channels, percentage alpha and non-interpolated none. Clamp before scaling;
+quantize modern syntax to nearest 8-bit channels (ties up), retaining
+legacy comma truncation for existing golden compatibility. Keep bare-hex
+quirks at 3/6 digits. No allocations, new retained state or budget changes.
+Host checks: tests/host/netsurf/test_modern.py.
+
+--- a/libcss/src/parse/properties/utils.c
++++ b/libcss/src/parse/properties/utils.c
+@@ -351,6 +351,93 @@
+ #undef ORGB
+ }
+ 
++/* CiukiOS: Color 4 RGB has two separator grammars, sharing the same
++ * channel conversion. Clamp before scaling so even saturated input cannot
++ * overflow fixed-point arithmetic. No allocation or recursive parsing. */
++static css_error ciuki_rgb_component(const css_token *token, bool alpha,
++		bool allow_none, bool legacy, uint8_t *result)
++{
++	css_fixed number, maximum;
++	size_t consumed = 0;
++
++	if (token == NULL)
++		return CSS_INVALID;
++	if (allow_none && token->type == CSS_TOKEN_IDENT &&
++			lwc_string_length(token->idata) == 4 &&
++			strncasecmp(lwc_string_data(token->idata), "none", 4) == 0) {
++		*result = 0;
++		return CSS_OK;
++	}
++	if (token->type != CSS_TOKEN_NUMBER &&
++			token->type != CSS_TOKEN_PERCENTAGE)
++		return CSS_INVALID;
++	number = css__number_from_lwc_string(token->idata, false, &consumed);
++	if (consumed != lwc_string_length(token->idata))
++		return CSS_INVALID;
++	maximum = token->type == CSS_TOKEN_PERCENTAGE ? F_100 :
++			(alpha ? F_1 : F_255);
++	if (number <= 0)
++		*result = 0;
++	else if (number >= maximum)
++		*result = 255;
++	else
++		*result = ((int64_t)number * 255 + (legacy ? 0 : maximum / 2)) / maximum;
++	return CSS_OK;
++}
++
++static css_error ciuki_parse_rgb(const parserutils_vector *vector,
++		int32_t *ctx, uint8_t *r, uint8_t *g, uint8_t *b, uint8_t *a)
++{
++	uint8_t *channels[] = { r, g, b };
++	css_token_type first_type = CSS_TOKEN_NUMBER;
++	bool legacy = false;
++	const css_token *token;
++
++	for (unsigned i = 0; i < 3; i++) {
++		consumeWhitespace(vector, ctx);
++		token = parserutils_vector_iterate(vector, ctx);
++		if (i == 0 && token != NULL) {
++			first_type = token->type;
++			consumeWhitespace(vector, ctx);
++			legacy = tokenIsChar(parserutils_vector_peek(vector, *ctx), ',');
++		}
++		if (legacy && (token == NULL || token->type != first_type))
++			return CSS_INVALID;
++		if (ciuki_rgb_component(token, false, !legacy, legacy,
++				channels[i]) != CSS_OK)
++			return CSS_INVALID;
++		consumeWhitespace(vector, ctx);
++		token = parserutils_vector_peek(vector, *ctx);
++		if (i < 2 && legacy) {
++			if (!tokenIsChar(token, ','))
++				return CSS_INVALID;
++			parserutils_vector_iterate(vector, ctx);
++		}
++	}
++	if (tokenIsChar(token, legacy ? ',' : '/')) {
++		parserutils_vector_iterate(vector, ctx);
++		consumeWhitespace(vector, ctx);
++		token = parserutils_vector_iterate(vector, ctx);
++		if (ciuki_rgb_component(token, true, !legacy, legacy, a) != CSS_OK)
++			return CSS_INVALID;
++		consumeWhitespace(vector, ctx);
++		token = parserutils_vector_peek(vector, *ctx);
++	}
++	if (!tokenIsChar(token, ')'))
++		return CSS_INVALID;
++	parserutils_vector_iterate(vector, ctx);
++	return CSS_OK;
++}
++
++/* Bare colors in quirks mode retain their old 3/6-digit grammar. */
++static css_error ciuki_parse_quirks_colour(lwc_string *data, uint32_t *result)
++{
++	size_t length = lwc_string_length(data);
++	if (length != 3 && length != 6)
++		return CSS_INVALID;
++	return css__parse_hash_colour(data, result);
++}
++
+ /**
+  * Parse a colour specifier
+  *
+@@ -414,7 +501,7 @@
+ 
+ 		error = css__parse_named_colour(c, token->idata, result);
+ 		if (error != CSS_OK && c->sheet->quirks_allowed) {
+-			error = css__parse_hash_colour(token->idata, result);
++			error = ciuki_parse_quirks_colour(token->idata, result);
+ 			if (error == CSS_OK)
+ 				c->sheet->quirks_used = true;
+ 		}
+@@ -427,14 +514,14 @@
+ 			goto invalid;
+ 	} else if (c->sheet->quirks_allowed &&
+ 			token->type == CSS_TOKEN_NUMBER) {
+-		error = css__parse_hash_colour(token->idata, result);
++		error = ciuki_parse_quirks_colour(token->idata, result);
+ 		if (error == CSS_OK)
+ 			c->sheet->quirks_used = true;
+ 		else
+ 			goto invalid;
+ 	} else if (c->sheet->quirks_allowed &&
+ 			token->type == CSS_TOKEN_DIMENSION) {
+-		error = css__parse_hash_colour(token->idata, result);
++		error = ciuki_parse_quirks_colour(token->idata, result);
+ 		if (error == CSS_OK)
+ 			c->sheet->quirks_used = true;
+ 		else
+@@ -501,83 +588,9 @@
+ 		}
+ 
+ 		if (colour_channels == 3 || colour_channels == 4) {
+-			int i;
+-			css_token_type valid = CSS_TOKEN_NUMBER;
+-			uint8_t *components[4] = { &r, &g, &b, &a };
+-
+-			for (i = 0; i < colour_channels; i++) {
+-				uint8_t *component;
+-				css_fixed num;
+-				size_t consumed = 0;
+-				int32_t intval;
+-				bool int_only;
+-
+-				component = components[i];
+-
+-				consumeWhitespace(vector, ctx);
+-
+-				token = parserutils_vector_peek(vector, *ctx);
+-				if (token == NULL || (token->type !=
+-						CSS_TOKEN_NUMBER &&
+-						token->type !=
+-						CSS_TOKEN_PERCENTAGE))
+-					goto invalid;
+-
+-				if (i == 0)
+-					valid = token->type;
+-				else if (i < 3 && token->type != valid)
+-					goto invalid;
+-
+-				/* The alpha channel may be a float */
+-				if (i < 3)
+-					int_only = (valid == CSS_TOKEN_NUMBER);
+-				else
+-					int_only = false;
+-
+-				num = css__number_from_lwc_string(token->idata,
+-						int_only, &consumed);
+-				if (consumed != lwc_string_length(token->idata))
+-					goto invalid;
+-
+-				if (valid == CSS_TOKEN_NUMBER) {
+-					if (i == 3) {
+-						/* alpha channel */
+-						intval = FIXTOINT(
+-							FMUL(num, F_255));
+-					} else {
+-						/* colour channels */
+-						intval = FIXTOINT(num);
+-					}
+-				} else {
+-					intval = FIXTOINT(
+-						FDIV(FMUL(num, F_255), F_100));
+-				}
+-
+-				if (intval > 255)
+-					*component = 255;
+-				else if (intval < 0)
+-					*component = 0;
+-				else
+-					*component = intval;
+-
+-				parserutils_vector_iterate(vector, ctx);
+-
+-				consumeWhitespace(vector, ctx);
+-
+-				token = parserutils_vector_peek(vector, *ctx);
+-				if (token == NULL)
+-					goto invalid;
+-
+-				if (i != (colour_channels - 1) &&
+-						tokenIsChar(token, ',')) {
+-					parserutils_vector_iterate(vector, ctx);
+-				} else if (i == (colour_channels - 1) &&
+-						tokenIsChar(token, ')')) {
+-					parserutils_vector_iterate(vector, ctx);
+-				} else {
+-					goto invalid;
+-				}
+-			}
++			error = ciuki_parse_rgb(vector, ctx, &r, &g, &b, &a);
++			if (error != CSS_OK)
++				goto invalid;
+ 		} else if (colour_channels == 5 || colour_channels == 6) {
+ 			/* hue - saturation - lightness */
+ 			size_t consumed = 0;
+@@ -897,7 +910,7 @@
+ }
+ 
+ /**
+- * Parse a hash colour (#rgb or #rrggbb)
++ * Parse a hash colour (#rgb, #rgba, #rrggbb or #rrggbbaa)
+  *
+  * \param data    Pointer to colour string
+  * \param result  Pointer to location to receive result (AARRGGBB)
+@@ -906,33 +919,28 @@
+  */
+ css_error css__parse_hash_colour(lwc_string *data, uint32_t *result)
+ {
+-	uint8_t r = 0, g = 0, b = 0, a = 0xff;
++	uint8_t channels[4] = { 0, 0, 0, 255 };
+ 	size_t len = lwc_string_length(data);
+ 	const char *input = lwc_string_data(data);
+-
+-	if (len == 3 &&	isHex(input[0]) && isHex(input[1]) &&
+-			isHex(input[2])) {
+-		r = charToHex(input[0]);
+-		g = charToHex(input[1]);
+-		b = charToHex(input[2]);
+-
+-		r |= (r << 4);
+-		g |= (g << 4);
+-		b |= (b << 4);
+-	} else if (len == 6 && isHex(input[0]) && isHex(input[1]) &&
+-			isHex(input[2]) && isHex(input[3]) &&
+-			isHex(input[4]) && isHex(input[5])) {
+-		r = (charToHex(input[0]) << 4);
+-		r |= charToHex(input[1]);
+-		g = (charToHex(input[2]) << 4);
+-		g |= charToHex(input[3]);
+-		b = (charToHex(input[4]) << 4);
+-		b |= charToHex(input[5]);
+-	} else
++	bool short_form = (len == 3 || len == 4);
++
++	if (!short_form && len != 6 && len != 8)
+ 		return CSS_INVALID;
+-
+-	*result = ((unsigned)a << 24) | (r << 16) | (g << 8) | b;
+-
++	for (size_t i = 0; i < len; i++) {
++		if (!isHex(input[i]))
++			return CSS_INVALID;
++	}
++	for (size_t i = 0; i < (short_form ? len : len / 2); i++) {
++		if (short_form) {
++			channels[i] = charToHex(input[i]) * 17;
++		} else {
++			channels[i] = (charToHex(input[2 * i]) << 4) |
++					charToHex(input[2 * i + 1]);
++		}
++	}
++	*result = ((uint32_t)channels[3] << 24) |
++			((uint32_t)channels[0] << 16) |
++			((uint32_t)channels[1] << 8) | channels[2];
+ 	return CSS_OK;
+ }
+ 

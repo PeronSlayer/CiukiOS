@@ -65,6 +65,16 @@ static uint32_t expand(const char *in,char *out,unsigned cap)
                 if (strlen(names[k])==n && !strncasecmp(names[k],in+1,n)) value=defaults[k];
         }
         if (end) {
+            /* sec-user-05: the session's native profile values (USERPROFILE,
+             * TEMP, TMP from the kernel launch) are DOS-spelled for Win32. */
+            char dos[264];
+            int profile_key=(n==11 && !strncasecmp(in+1,"USERPROFILE",11)) || (n==4 && !strncasecmp(in+1,"TEMP",4)) ||
+                            (n==3 && !strncasecmp(in+1,"TMP",3));
+            if (profile_key && value && value[0]=='/' && strlen(value)<sizeof(dos)-3) {
+                snprintf(dos,sizeof(dos),"C:%s",value);
+                for (char *c=dos+2;*c;c++) if (*c=='/') *c='\\';
+                value=dos;
+            }
             const char *bytes=value ? value : in;
             n=value ? strlen(value) : (size_t)(end-in+1);
             if(n>=cap-at)return 234;
@@ -145,10 +155,11 @@ int ciuki_win32_uninstall_list(struct desk_uninstall_entry *out, unsigned cap)
             if(error)break;
             uint32_t key=r->header.key;
             uint32_t e=string(r,key,"DisplayName",entry.name,sizeof(entry.name));
-            const char *names[]={"UninstallString","DisplayVersion","Publisher","InstallLocation"};
-            char *values[]={entry.command,entry.version,entry.publisher,entry.location};
-            unsigned sizes[]={sizeof(entry.command),sizeof(entry.version),sizeof(entry.publisher),sizeof(entry.location)};
-            for(unsigned k=0;!e && k<4;k++) {
+            /* fx-exeicons: DisplayIcon ("file[,index]") names the program's icon. */
+            const char *names[]={"UninstallString","DisplayVersion","Publisher","InstallLocation","DisplayIcon"};
+            char *values[]={entry.command,entry.version,entry.publisher,entry.location,entry.icon};
+            unsigned sizes[]={sizeof(entry.command),sizeof(entry.version),sizeof(entry.publisher),sizeof(entry.location),sizeof(entry.icon)};
+            for(unsigned k=0;!e && k<5;k++) {
                 uint32_t q=string(r,key,names[k],values[k],sizes[k]);if(q && q!=2)e=q;
             }
             const char *nums[]={"EstimatedSize","NoRemove","NoModify","SystemComponent"};

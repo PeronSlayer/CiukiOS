@@ -40,7 +40,7 @@ class AboutCreditsTests(unittest.TestCase):
         sources = [ROOT / "apps/desktop" / f"{n}.c" for n in ("client", "protocol", "input", "compositor", "theme", "shell", "autoplay",
                                                            "autoplay_content", "settings", "power_policy", "settings_io", "wallpaper", "keymap", "folder")]
         sources += [ROOT / "apps/files" / n for n in ("model.c", "transfer.c")]
-        sources += [ROOT / "apps/libdeskui" / f"{n}.c" for n in ("draw", "widgets", "list", "menu", "dialog", "controls", "commdlg", "textarea", "icons", "icon_map")]
+        sources += [ROOT / "apps/libdeskui" / f"{n}.c" for n in ("draw", "widgets", "list", "menu", "dialog", "controls", "commdlg", "textarea", "icons", "icon_map", "iconx", "fileicon")]
         sources += [ROOT / "tests/host/desktop" / n for n in ("fake.c", "compositor_capture.c")]
         binary = folder / "capture"
         subprocess.run(["clang", "-std=c17", "-D_POSIX_C_SOURCE=200809L", "-include", str(ROOT / "tests/host/desktop/replay_base.h"), "-O1",

@@ -7,6 +7,7 @@
 #include <ciuki/storage.h>
 #include <ciuki/net.h>
 #include <ciuki/mm.h>
+#include <ciuki/desktop.h>
 struct package_reader { struct vfs_table table; char directory[160]; };
 static int read_package(void *arg,const char *name,uint32_t offset,void *out,size_t bytes,size_t *got)
 {
@@ -43,8 +44,8 @@ int ndis_package_admit(const char *path,const uint8_t hash[32],const struct pci_
     if(!ndp_component(name)) return 0;
     struct storage *storage=storage_get();
     if(!storage || !storage->ready || storage->stopped) return 0;
-    struct package_reader *r=kmalloc(sizeof(*r)); struct ndp_manifest *m=kmalloc(sizeof(*m));
-    if(!r || !m) { if(r) kfree(r); if(m) kfree(m); return 0; }
+    struct package_reader *r=desktop_buffer_alloc(sizeof(*r),MM_IO_REQUEST); struct ndp_manifest *m=desktop_buffer_alloc(sizeof(*m),MM_IO_REQUEST);
+    if(!r || !m) { if(r) desktop_buffer_free(r,sizeof(*r),MM_IO_REQUEST); if(m) desktop_buffer_free(m,sizeof(*m),MM_IO_REQUEST); return 0; }
     int ok=0; memset(r,0,sizeof(*r));
     if(vfs_table_init(&storage->vfs,&r->table,2)) goto done;
     const char *root="C:\\System\\drivers\\"; size_t len=strlen(root);
@@ -65,5 +66,5 @@ int ndis_package_admit(const char *path,const uint8_t hash[32],const struct pci_
     }
     if(present && ndp_verify(m,&m->device,read_package,r)) ok=1;
  close: vfs_table_destroy(&r->table);
- done: kfree(m); kfree(r); return ok;
+ done: desktop_buffer_free(m,sizeof(*m),MM_IO_REQUEST); desktop_buffer_free(r,sizeof(*r),MM_IO_REQUEST); return ok;
 }

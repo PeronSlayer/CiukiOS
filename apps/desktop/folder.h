@@ -37,6 +37,7 @@ struct desk_folder {
     uint64_t poll_ns;
     unsigned revision;
     struct folder_worker *worker;
+    struct desk_union *merged;      /* sec-user-05: per-user + All Users desktop view, or NULL */
 };
 struct desk_launch_record;
 struct desktop;

@@ -27,7 +27,9 @@ The positive-probe backend currently permits targets up to 64x64 and one
 triangle per submission. These are admission limits, not measured silicon
 performance. Preserve them. Capabilities describe the admitted mode and format,
 including D16, canonical ARGB8888, two stages, texture heap and state masks.
-D24/S8, RGB565 render targets and polygon offset are unavailable; RGB565 and
+The f7-12 [qualified format extension](savage-default-formats.md) adds
+separate current-mode gates for D24/S8 and RGB565 render targets.
+Before those gates, D24/S8, RGB565 render targets and polygon offset are unavailable; RGB565 and
 ARGB4444 textures remain supported by native texture conversion. Unsupported
 OpenGL state or sampling precision falls back before a draw is submitted.
 

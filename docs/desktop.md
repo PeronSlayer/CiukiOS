@@ -561,6 +561,17 @@ keeps `applications-games`), Clock `appointment-new` (Date & Time keeps
 banner) are area-averaged conversions of the approved portrait, whose
 `#375564` surround is made transparent.
 
+Own icons (fx-exeicons, 2026-10-27; [file icons](design/file-icons.md)): a
+program or library, an icon file, a shortcut (its IconLocation or its
+target's icon), a PIF, an Internet shortcut, a read-only or system folder
+with a desktop.ini and a CD with an AUTORUN.INF `icon=` show their own icon
+wherever the shell shows them; the Tango icon above stays their type's
+default. libdeskui extracts them on a worker (`du_file_icon`, the bounded
+`iconx` core); the shell repaints its icons, open menus, AutoPlay and the
+taskbar when the worker publishes. Win32 windows send their icon
+(`DESK_V3_WINDOW_ICON`: WM_SETICON, the class icon, else the executable's)
+for the caption, the taskbar button and Alt+Tab.
+
 Desktop icon labels (Windows Vista/7 style, readable on any wallpaper): white
 Inter 13 (`DESK_FONT_LABEL`), up to two centred lines broken by width in a
 96 x 94 cell, over a soft dark halo: the glyph coverage blurred twice by the
@@ -1613,7 +1624,9 @@ an accepted choice. Media already present at desktop startup are arrivals.
 The actions are **Open folder to view files**, **Play music** for WAV, MP3,
 OGG or FLAC at the root or in a case-insensitive Music folder, **View pictures**
 for PNG, JPEG, BMP, GIF or XRGB at the root or in Pictures, **Run program**
-when declared by AUTORUN.INF, and **Do nothing**. Music Player receives the
+when declared by AUTORUN.INF, and **Do nothing**. When AUTORUN.INF names a
+program the medium can start, **Run program** is selected by default
+(fx-autorun, below). Music Player receives the
 containing directory and builds its playlist through its existing directory
 loader; Image Viewer opens the first matching picture (path order).
 The Music Player's existing directory loader includes subdirectories.
@@ -1632,11 +1645,85 @@ the program token (quoted paths without spaces are supported).
 [Microsoft PE format](https://learn.microsoft.com/en-us/windows/win32/debug/pe-format)
 defines the extended signature offset in the MZ stub. DOS COM/BAT and MZ
 EXE entries are offered, including small DOS headers described by the
-[Microsoft MS-DOS Encyclopedia](https://www.pcjs.org/documents/books/mspl13/msdos/encyclopedia/section2/); PE/NE/LE/LX executables remain
-visible and disabled (Windows programs require F5). Unreadable or unsupported
-entries are disabled. Explicit DOS commands such as
+[Microsoft MS-DOS Encyclopedia](https://www.pcjs.org/documents/books/mspl13/msdos/encyclopedia/section2/).
+Windows programs (PE, and 16-bit Windows NE such as InstallShield 5 setup
+stubs) start through the Win32 personality since fx-autorun (below); LE/LX
+and OS/2 NE executables are MS-DOS programs. A missing, unreadable or
+unsupported entry stays visible and disabled with its reason ("Run
+MISSING.EXE (not found)"). Explicit DOS commands such as
 `D:\SETUP\INSTALL.COM /S` type three lines: `D:`, `CD \SETUP`, then
 `INSTALL.COM /S`, setting the drive and working directory before execution.
+
+**Windows CD autoruns (fx-autorun, 2026-10-27).** Research:
+[Microsoft, Autorun.inf Entries](https://learn.microsoft.com/en-us/windows/win32/shell/autorun-cmds)
+(`open=[exepath\]exefile [param1 [param2] ...]`, a bare name in the drive's
+root, a path relative to the root otherwise; `icon=` represents the drive;
+without `shell=` the drive's default menu item is "AutoPlay", which launches
+the `open` program, and the default command also runs on double-click; the
+XP SP2 `action` entry "always appears as the first option in the Autoplay
+dialog and is selected by default"),
+[Microsoft, Enabling and Disabling AutoRun](https://learn.microsoft.com/en-us/windows/win32/shell/autoplay-reg)
+("Users can manually suppress AutoRun by holding down the SHIFT key when they
+insert the CD-ROM"; the drive's shortcut menu includes an **AutoPlay**
+command; "To run AutoRun manually, either right-click the drive icon and
+select AutoPlay from the shortcut menu or double-click the drive icon"),
+[Microsoft, Creating an AutoRun-Enabled Application](https://learn.microsoft.com/en-us/windows/win32/shell/autoplay-works)
+and the Windows 98 Resource Kit (App. G, `wrkappg_1.htm`: "To bypass Autorun
+when inserting a compact disc: Press SHIFT while inserting the compact
+disc"; Ch. 17 and 24: AutoPlay is enabled by default and shows the disc's
+own banner program). On Windows 98 AutoRun starts `open=` at once; CiukiOS
+keeps the owner's chooser (f2-51) and makes that program its first, selected
+choice, so Enter starts it and **Always do this** remembers it.
+
+- **Classification** (`apps/desktop/exe_kind.h`, the rule of
+  [Wine 10.0](https://gitlab.winehq.org/wine/wine/-/tree/wine-10.0)
+  `server/mapping.c` `get_image_params`, field offsets from `include/winnt.h`
+  `IMAGE_OS2_HEADER`): "PE\0\0" at e_lfanew is Win32; "NE" with target OS 2
+  (Windows, NE+0x36) is 16-bit Windows; NE for OS/2/BOSS, LE/LX and plain MZ
+  are MS-DOS programs (Wine's `CreateProcessInternalW` hands all of them to
+  its VDM). AutoPlay reads the header at e_lfanew also beyond its 4 KiB
+  sniff, up to 64 KiB into the file.
+- **Windows program**: launched with a record (target on the disc, the
+  `open=` arguments, current directory = the disc root) through the desktop's
+  launch worker, the same path as shortcuts; an NE setup stub reaches the
+  kernel's InstallShield 5 admission there
+  ([installshield5-bootstrap.md](design/installshield5-bootstrap.md)). While
+  the worker runs, further arrivals wait; its result is recorded as
+  `[desktop] autoplay run kind=win32|win16 result=N`. **Always do this** is
+  saved only after the program started. A refused image (`-ENOEXEC`) is
+  explained by the Win32 personality's own dialog ("is not a valid Win32
+  application", "is a 16-bit Windows program ..."); any other failure opens
+  "AutoPlay: NAME could not be started. REASON (error N)". MS-DOS programs
+  keep the typed DOS Box route described above.
+- **Shift**: Shift held when the new medium is observed, or when its content
+  probe completes, skips AutoPlay for that insertion
+  (`[desktop] autoplay skipped drive=D reason=shift`); the drive is mounted
+  and usable.
+- **ICON=**: the dialog and the drive show the disc's icon (fx-exeicons).
+- **My Computer** (Files): a drive whose AUTORUN.INF names a startable
+  program has **AutoPlay** as the first, bold item of its shortcut menu, and
+  double-click/Enter on the drive runs it, as on Windows; **Open** still
+  browses the disc, and the folder tree and address bar never run it. The
+  label cache (`ap_drive_info`, read on the Files scan worker when the
+  medium or its AUTORUN.INF changes) carries the launch record; the verb
+  sends it to the desktop as an ordinary shortcut launch.
+- **Desktop launch routing**: Start > Run, Files and My Computer, desktop
+  shortcuts, the Startup folder and AutoPlay share `desk_w32_identify`: PE
+  and 16-bit Windows programs go to the Win32 personality, MZ DOS programs,
+  `.com` and `.bat` to the DOS Box. The Win32 launcher names the image in
+  Windows form (`D:\SETUP.EXE`, `C:\Program Files\...`) in argv[0] and the
+  command line, as Explorer does, so GetModuleFileName, the IS5 admission's
+  sibling lookup and the bootstrap's `-f`/`-x1` operands use the disc's drive
+  whatever the current drive is.
+
+Host coverage: `tests/host/desktop/autoplay_test.c` (PE and IS5 NE autoruns,
+header past the sniff, deferred arrivals and saved choice, refusal and
+failure wording, missing program, Shift at arrival and at probe end, LE and
+OS/2 NE as DOS, the drive verb record), `files_ui_test.c`
+(`autoplay_verb_tests`), `win32_adapter_test.c` (routing of PE, NE IS5 stub,
+other NE, LE/LX, MZ, .com, .bat; Windows names), `win32_launcher_test.c`
+(argv[0] and command line), `kernel_core_test.c` (the Win16 refusal record)
+and `v3_test.c` (its dialog text).
 
 **DOS Box window (2026-10-25):** `exit` at the DOS prompt closes the window;
 a program that ends within 10 seconds leaves its text on screen with the title
@@ -1689,8 +1776,8 @@ content scan. The original USB removal query and ABI remain unchanged.
 
 Host coverage: `tests/host/desktop/test_autoplay.py` runs the production shell
 against fake mounted files and real libreg storage under ASan/UBSan, covering
-music, CD autorun, pictures, saved choices across insertions/letters, disabled
-Windows entries, eject during confirmation, replacement and queued media,
+music, CD autorun, pictures, saved choices across insertions/letters, Windows
+autoruns (fx-autorun), eject during confirmation, replacement and queued media,
 parser bounds, unavailable saved actions, launch failures and optional sound
 notifications. The Control Panel desktop harness also checks listing, resetting,
 empty state and registry-read errors. Kernel file tests verify the new copied
@@ -1706,6 +1793,14 @@ window; `/Programs/dosbox --pause-background` instead pauses it until focus or
 full-screen entry resumes it. The window and taskbar entry survive throughout.
 Its retained surface says “Running full screen — Alt+Enter to return”. A refused
 entry reports its reason temporarily, while the DOS session remains available.
+
+Since fx-dosfull (owner decision 2026-10-27) a DOS game starts full screen by
+itself at its first graphics mode, as Windows 98 does; its text screens and the
+DOS prompt stay in the window. Alt+Enter, the toolbar's Full screen and the
+menu entry are remembered per program as the Screen tab's Usage (DOS Box
+Properties, or Files > Properties of the program). A refusal (QEMU's standard
+VGA) keeps the game in its window without a message and changes no setting.
+See `docs/design/dos-program-properties.md`.
 
 Presentation/acceleration return EBUSY while the display grant is suspended;
 the desktop keeps servicing its channels and input. This intentional pause does
