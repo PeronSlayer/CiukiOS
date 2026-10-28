@@ -1128,6 +1128,10 @@ NORMAL_BOOT_MILESTONES = (
     ('desktop_spawn', re.compile(rb'\[supervisor\] bootstrap: (?:spawning /Programs/desktop|trusted logon pid=[0-9]+)(?: |$)')),
     ('desktop_pid', re.compile(rb'(?:\[supervisor\]|\[security\] session [0-9]+) desktop pid=([0-9]+) pgid=([0-9]+)(?: |$)')),
 )
+# On a LOGON image the desktop composes concealed; LOGON shows it (console
+# leave) and logs "session S running" (apps/logon/coordinator.c). The screen
+# settles from that line there, not from the desktop pid.
+NORMAL_BOOT_SESSION = re.compile(rb'\[user [0-9]+\] \[logon\] session [0-9]+ running uid=[0-9]+(?: |$)')
 NORMAL_BOOT_NEGATIVE = (
     ('panic', re.compile(rb'Ciuki VMM (?:panic|double fault)')),
     ('panic', re.compile(rb'CIUKI_TEST .* (?:probe=panic|event=PANIC)(?: |$)')),
@@ -1268,9 +1272,15 @@ class NormalBootParser:
                      {'pid':int(match[1]), 'pgid':int(match[2])} if name == 'desktop_pid' else {}
             self.milestones[name] = row = record('MILESTONE', name, **fields)
             return row
+        if NORMAL_BOOT_SESSION.match(line) and 'session_running' not in self.milestones:
+            self.milestones['session_running'] = row = record('MILESTONE', 'session_running')
+            return row
         return None
     @property
-    def desktop_seen(self):return 'desktop_pid' in self.milestones
+    def logon(self):return 'trusted logon' in self.milestones.get('desktop_spawn',{}).get('text','')
+    @property
+    def desktop_seen(self):
+        return 'desktop_pid' in self.milestones and (not self.logon or 'session_running' in self.milestones)
     def failure_reason(self):
         f = self.failure
         return f"normal boot: {f['name']} at serial line {f['serial_line']}: {f['text']}"
@@ -1282,6 +1292,10 @@ class NormalBootParser:
             if row is None:raise EvidenceError('missing normal-boot milestone: '+name)
             if row['serial_line'] <= previous:raise EvidenceError('normal-boot milestone out of order: '+name)
             previous = row['serial_line']
+        if self.logon:
+            row = self.milestones.get('session_running')
+            if row is None:raise EvidenceError('missing normal-boot milestone: session_running')
+            if row['serial_line'] <= previous:raise EvidenceError('normal-boot milestone out of order: session_running')
         return True
     def summary(self):
         desktop = self.milestones.get('desktop_pid',{})

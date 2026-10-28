@@ -189,6 +189,26 @@ class NormalBootUnitTests(unittest.TestCase):
         with self.assertRaisesRegex(EvidenceError, 'repeated_milestone'):
             repeated.check()
 
+    def test_logon_image_settles_from_the_session_running_record(self):
+        logon = [('[supervisor] bootstrap: trusted logon pid=5' if l.startswith('[supervisor] bootstrap') else
+                  '[security] session 1 desktop pid=7 pgid=7' if l.startswith('[supervisor] desktop pid') else l)
+                 for l in GOOD_SERIAL]
+        running = '[user 35] [logon] session 1 running uid=1000 start_ms=1200'
+        parser = feed(logon)
+        self.assertTrue(parser.logon)
+        self.assertFalse(parser.desktop_seen)
+        with self.assertRaisesRegex(EvidenceError, 'missing normal-boot milestone: session_running'):
+            parser.check()
+        parser = feed(logon + [running])
+        self.assertTrue(parser.desktop_seen)
+        self.assertTrue(parser.check())
+        self.assertEqual(parser.summary()['desktop_pid'], 7)
+        with self.assertRaisesRegex(EvidenceError, 'out of order: session_running'):
+            feed(logon[:-1] + [running, logon[-1]]).check()
+        self.assertFalse(feed(logon + ['x' + running]).desktop_seen)
+        # Without LOGON the desktop pid alone settles the screen.
+        self.assertTrue(feed(GOOD_SERIAL).desktop_seen)
+
     def test_negative_lines_fail_and_mid_line_words_do_not(self):
         for line, kind in NEGATIVE_LINES.items():
             with self.subTest(line=line):
