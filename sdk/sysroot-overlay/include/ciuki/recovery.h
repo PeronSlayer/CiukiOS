@@ -41,4 +41,13 @@ int ciuki_driver_pack(struct ciuki_driver_pack_job *job);
 /* System File Checker "Restore file" (administrators): source + path must be
  * the baseline's original (EILSEQ otherwise, ENOENT: not in SFC.LST). */
 int ciuki_sfc_restore(const char *path, const char *source);
+/* sec-sysvc2: SYSTEM jobs and sealed boot settings of call 99 (abi.h
+ * "sec-sysvc2"). Each returns 0, or -1 with errno.
+ * system_job: run a CIUKI_SYSTEM_JOB_* as SYSTEM (every session, Guest too);
+ * *done (optional) counts the work done, e.g. the ScanDisk reports appended.
+ * system_setting_set: a sealed boot setting (CIUKI_SYSTEM_SETTING_HWPROFILES,
+ * _PERFORMANCE, _ACCEL_RETRY) becomes text (administrators; EPERM otherwise,
+ * EINVAL for text the kernel would not accept). */
+int ciuki_system_job(unsigned job, uint32_t *done);
+int ciuki_system_setting_set(unsigned setting, const char *text, size_t length);
 #endif

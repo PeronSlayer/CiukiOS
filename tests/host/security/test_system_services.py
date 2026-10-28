@@ -16,7 +16,8 @@ ROOT = Path(__file__).resolve().parents[3]
 OUT = ROOT / 'build/host/security'
 OWNER = [f'src/kernel/fs/{name}.c' for name in (
     'owner', 'owner_wire', 'owner_store', 'owner_checkpoint', 'owner_roots', 'owner_vfs',
-    'security_policy', 'security_path', 'sysvc', 'sysvc_drivers')]
+    'security_policy', 'security_path', 'sysvc', 'sysvc_drivers',
+    'sysvc_jobs')]  # sec-sysvc2: SYSTEM jobs and sealed boot settings
 
 
 class SystemServicesTests(unittest.TestCase):
@@ -30,7 +31,7 @@ class SystemServicesTests(unittest.TestCase):
                    'src/kernel/fs/path.c', 'src/kernel/fs/fat.c', 'src/kernel/fs/vfs.c',
                    'src/kernel/fs/fs_ro.c', 'src/kernel/fs/iso9660.c', 'tests/host/fs/fake.c',
                    'src/kernel/probes/f2_probes_files.c', 'src/kernel/lib/sha256.c',
-                   'src/kernel/ndis/package.c', *OWNER]
+                   'src/kernel/ndis/package.c', 'src/kernel/lib/tzrule.c', *OWNER]
         program = OUT / 'system_services'
         subprocess.run(['clang', '-std=c17', '-O1', '-g', '-Wall', '-Wextra', '-Werror',
                         '-ffunction-sections', '-fdata-sections', '-Wl,--gc-sections',

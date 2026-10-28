@@ -56,6 +56,24 @@ int sysvc_pack_install(struct security_subject *, const struct sysvc_pack_ops *,
 int sysvc_pack_remove(struct security_subject *, const struct sysvc_pack_ops *, const struct ndp_device *,
                       char reason[SYSVC_REASON]);
 
+/* ---- sec-sysvc2 (sysvc_jobs.c, abi.h "sec-sysvc2"): the SYSTEM jobs and
+ * the sealed boot settings of call 99, and the sysvc.c pieces they share. */
+#define SYSVC_HWPROFILES "/System/HWPROF.CFG"
+#define SYSVC_PERFORMANCE "/System/Settings/performance.cfg"
+#define SYSVC_ACCEL_RETRY "/System/Settings/accel-retry.cfg"
+/* Any live session subject, or SYSTEM: *done counts the work this call did. */
+int sysvc_job_run(struct security_subject *, unsigned job, uint32_t *done);
+/* Administrators or SYSTEM: CIUKI_SYSTEM_SETTING_* becomes text (validated). */
+int sysvc_setting_set(struct security_subject *, unsigned setting, const char *text, size_t length);
+/* Printable ASCII, tab, CR, LF. */
+bool sysvc_printable(const char *, size_t);
+/* SYSTEM rewrites a small file (folder made), restoring up to keep bytes of
+ * its previous text after a failed write. No subject check. */
+int sysvc_system_rewrite(const char *path, const char *text, size_t length, size_t keep);
+/* SYSTEM appends to C:\SYSTEM\LOGS\name (limit 0: the default). */
+int sysvc_log_system_append(const char *name, const void *data, size_t bytes, uint32_t limit, uint32_t *total);
+/* ---- end sec-sysvc2 ---- */
+
 /* Shared by sysvc.c and sysvc_drivers.c. */
 struct vfs_table;
 int sysvc_table(struct vfs_table *, struct security_subject *bound, unsigned *drive);

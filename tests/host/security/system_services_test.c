@@ -471,6 +471,166 @@ static void test_sfc_restore(void)
     puts("H16 System File Checker restore: sealed VMM.ELF and SFC.LST refuse direct writes; administrators restore the baseline's original (read as the caller, size and SHA-256 checked, Helpdesk backup, one replacing rename); EPERM for standard user/Guest, EILSEQ/ENOENT/EINVAL PASS");
 }
 
+/* ---- sec-sysvc2: SYSTEM jobs, sealed boot settings, Registry Checker's
+ * SYSTEM-only backups (fs/sysvc_jobs.c, fs/security_policy.c) ---- */
+#define SCANDISK_TEXT_VFORMAT vsnprintf
+#include <ciuki/scandisk_text.h>
+#include <strings.h>
+static struct actor service_subject; /* uid 1002, no session: not a desktop */
+/* The kernel's at-start ScanDisk records (mount.c in the kernel). */
+static struct ciuki_scandisk at_start[26]; static bool at_start_ran[26];
+int storage_scandisk_report(unsigned d,struct ciuki_scandisk *out)
+{
+    if(d>=26) return -EINVAL;
+    if(at_start_ran[d]) *out=at_start[d];
+    else { memset(out,0,sizeof(*out)); out->version=CIUKI_SCANDISK_VERSION; out->size=sizeof(*out); out->drive=d; }
+    return 0;
+}
+/* The display registry's declared attempt files (drivers/video/registry.c). */
+bool display_attempt_file(const char *leaf) { return !strcasecmp(leaf,"trident.cfg") || !strcasecmp(leaf,"nv2d0110.cfg"); }
+static int32_t job(struct actor *a,uint32_t which,uint32_t *done)
+{
+    struct ciuki_system_job r={.version=1,.size=sizeof(r),.job=which};
+    int32_t e=service(a,CIUKI_RECOVERY_JOB,&r,sizeof(r)); if(done) *done=r.done; return e;
+}
+static int32_t setting(struct actor *a,uint32_t which,const char *text,uint32_t length)
+{
+    struct ciuki_system_setting r={.version=1,.size=sizeof(r),.action=CIUKI_SYSTEM_SETTING_SET,.setting=which,
+        .buffer=length?a->data:0,.length=length};
+    as(a); if(length) CHECK(!ua_write(a->p->memory,a->data,text,length));
+    return service(a,CIUKI_RECOVERY_SETTING,&r,sizeof(r));
+}
+static void scandisk_record(unsigned d,uint32_t flags,uint32_t files)
+{
+    struct ciuki_scandisk *r=&at_start[d]; memset(r,0,sizeof(*r));
+    r->version=CIUKI_SCANDISK_VERSION; r->size=sizeof(*r); r->drive=d; r->flags=CIUKI_SCANDISK_RAN|CIUKI_SCANDISK_AT_START|flags;
+    r->cluster_bytes=4096; r->clusters=130000; r->free_clusters=100000; r->files=files; r->directories=56;
+    r->file_clusters=25000; r->directory_clusters=60; at_start_ran[d]=true;
+}
+static void test_jobs(void)
+{
+    char text[8192]; size_t n, before; uint32_t done=99;
+    /* (test_machine_logs left an administrator's entry in SCANDISK.LOG.) */
+    CHECK(!kernel_read("C:/System/Logs/SCANDISK.LOG",text,sizeof(text)-1,&before) && before);
+    /* Nothing ran at this start: nothing is written, for anyone. */
+    CHECK(!job(&guest,CIUKI_SYSTEM_JOB_STARTUP_REPORT,&done) && !done);
+    CHECK(!kernel_read("C:/System/Logs/SCANDISK.LOG",text,sizeof(text)-1,&n) && n==before);
+    scandisk_record(2,CIUKI_SCANDISK_FIX|CIUKI_SCANDISK_ERRORS|CIUKI_SCANDISK_FIXED,1234);
+    scandisk_record(3,0,77);
+    /* A Guest session's desktop asks; SYSTEM appends both reports, once. */
+    CHECK(!job(&guest,CIUKI_SYSTEM_JOB_STARTUP_REPORT,&done) && done==2);
+    CHECK(!kernel_read("C:/System/Logs/SCANDISK.LOG",text,sizeof(text)-1,&n) && n>before); text[n]=0;
+    CHECK(!strncmp(text+before,"ScanDisk, ",10));
+    char expected[2048]; scandisk_report_text(&at_start[2],expected,sizeof(expected));
+    CHECK(strstr(text,"drive C:, Standard (at start)\n") && strstr(text,expected) && strstr(text,"fixed them all"));
+    scandisk_report_text(&at_start[3],expected,sizeof(expected));
+    CHECK(strstr(text,"drive D:, Standard (at start)\n") && strstr(text,expected) && strstr(text,"77 user files"));
+    const size_t first=n;
+    /* The log stays SYSTEM's: no direct access, administrators read it through LOG. */
+    CHECK(sys_open_as(&guest,"/System/Logs/SCANDISK.LOG",O_RDONLY)==-EACCES && sys_open_as(&admin,"/System/Logs/SCANDISK.LOG",O_RDONLY)==-EACCES);
+    CHECK(log_read(&guest,CIUKI_SYSTEM_LOG_MACHINE,"SCANDISK.LOG",text,64,0)==-EPERM);
+    uint32_t total=0; CHECK(!log_read(&admin,CIUKI_SYSTEM_LOG_MACHINE,"SCANDISK.LOG",text,sizeof(text)-1,&total) && total==first);
+    /* Every other session, and SYSTEM, find the work done. */
+    struct actor *again[]={&alice,&bob,&admin,&interim,&systemp};
+    for(unsigned i=0;i<5;i++) { done=99; CHECK(!job(again[i],CIUKI_SYSTEM_JOB_STARTUP_REPORT,&done) && !done); }
+    CHECK(!kernel_read("C:/System/Logs/SCANDISK.LOG",text,sizeof(text)-1,&n) && n==first);
+    /* A report that appears later is appended by the next request (a Standard user's). */
+    scandisk_record(4,CIUKI_SCANDISK_THOROUGH,5);
+    CHECK(!job(&alice,CIUKI_SYSTEM_JOB_STARTUP_REPORT,&done) && done==1);
+    CHECK(!kernel_read("C:/System/Logs/SCANDISK.LOG",text,sizeof(text)-1,&n)); text[n]=0;
+    CHECK(n>first && strstr(text,"drive E:, Thorough (at start)\n"));
+    /* A subject without a session that is not SYSTEM has no session to maintain. */
+    CHECK(job(&service_subject,CIUKI_SYSTEM_JOB_STARTUP_REPORT,&done)==-EPERM);
+    /* Records: unknown job, version, reserved words, a nonzero `done` in. */
+    CHECK(job(&admin,7,&done)==-EINVAL);
+    struct ciuki_system_job bad={.version=2,.size=sizeof(bad),.job=1};
+    CHECK(service(&admin,CIUKI_RECOVERY_JOB,&bad,sizeof(bad))==-EINVAL);
+    bad.version=1; bad.reserved[3]=1; CHECK(service(&admin,CIUKI_RECOVERY_JOB,&bad,sizeof(bad))==-EINVAL);
+    bad.reserved[3]=0; bad.done=1; CHECK(service(&admin,CIUKI_RECOVERY_JOB,&bad,sizeof(bad))==-EINVAL);
+    puts("H16 sec-sysvc2 SYSTEM job: the at-start ScanDisk reports go to C:\\SYSTEM\\LOGS\\SCANDISK.LOG as SYSTEM for a Guest, standard user, administrator, interim or SYSTEM request, once per start and drive, in the tools' format; the log stays SYSTEM's; no-session service subject EPERM PASS");
+}
+static void test_settings(void)
+{
+    char text[512]; size_t n;
+    { int e=make_dir("/System/Settings"); CHECK(!e || e==-EEXIST); }
+    kernel_file("C:/System/HWPROF.CFG","0:name=Original Configuration\n",30);
+    kernel_file("C:/System/Settings/performance.cfg","version=1\nrole=0\n",17);
+    kernel_file("C:/System/Settings/accel.cfg","accel=attempt\n",14);
+    /* Boot inputs are sealed by name: every direct writer is refused (the
+     * administrator too), everyone may read them; ordinary settings stay
+     * administrator-writable. */
+    static const char *const sealed[]={"/System/HWPROF.CFG","/System/Settings/performance.cfg","/System/Settings/hwprofiles.cfg",
+        "/System/Settings/accel-retry.cfg","/System/Settings/accel.cfg","/System/Settings/ACCEL-S3SAVAGE-5333-8C2E.CFG",
+        "/System/Settings/accel-i810.cfg","/System/Settings/trident.cfg","/System/Settings/nv2d0110.cfg"};
+    for(unsigned i=0;i<sizeof(sealed)/sizeof(*sealed);i++) {
+        CHECK(sys_open_as(&admin,sealed[i],O_RDWR|O_CREAT)==-EACCES);
+        CHECK(sys_open_as(&interim,sealed[i],O_RDWR|O_CREAT)==-EACCES);
+    }
+    int32_t fd=sys_open_as(&alice,"/System/Settings/performance.cfg",O_RDONLY); CHECK(fd>=0); sys_close_as(&alice,fd);
+    fd=sys_open_as(&guest,"/System/HWPROF.CFG",O_RDONLY); CHECK(fd>=0); sys_close_as(&guest,fd);
+    fd=sys_open_as(&admin,"/System/Settings/desktop.cfg",O_RDWR|O_CREAT); CHECK(fd>=0); sys_close_as(&admin,fd);
+    fd=sys_open_as(&admin,"/System/Settings/trident2.cfg",O_RDWR|O_CREAT); CHECK(fd>=0); sys_close_as(&admin,fd);
+    CHECK(sys_open_as(&alice,"/System/Settings/desktop.cfg",O_RDWR)==-EACCES);
+    /* The SYSTEM service: administrators (the interim session too) and SYSTEM. */
+    const char perf[]="version=1\nrole=1\nread_ahead=2\ngraphics=0\nvm=1\nmin_mb=32\nmax_mb=256\n";
+    const char hw[]="0:name=Docked\n0:device=00010203 disabled=1 removed=0 driver=-\n1:name=Undocked\n";
+    const char retry[]="driver=s3savage\npci=5333:8c2e\n";
+    struct actor *refused[]={&alice,&bob,&guest,&service_subject};
+    for(unsigned i=0;i<4;i++) {
+        CHECK(setting(refused[i],CIUKI_SYSTEM_SETTING_PERFORMANCE,perf,sizeof(perf)-1)==-EPERM);
+        CHECK(setting(refused[i],CIUKI_SYSTEM_SETTING_HWPROFILES,hw,sizeof(hw)-1)==-EPERM);
+        CHECK(setting(refused[i],CIUKI_SYSTEM_SETTING_ACCEL_RETRY,retry,sizeof(retry)-1)==-EPERM);
+    }
+    CHECK(!kernel_read("C:/System/Settings/performance.cfg",text,sizeof(text),&n) && n==17);
+    CHECK(!setting(&admin,CIUKI_SYSTEM_SETTING_PERFORMANCE,perf,sizeof(perf)-1));
+    CHECK(!kernel_read("C:/System/Settings/performance.cfg",text,sizeof(text),&n) && n==sizeof(perf)-1 && !memcmp(text,perf,n));
+    CHECK(!setting(&interim,CIUKI_SYSTEM_SETTING_HWPROFILES,hw,sizeof(hw)-1));
+    CHECK(!kernel_read("C:/System/HWPROF.CFG",text,sizeof(text),&n) && n==sizeof(hw)-1 && !memcmp(text,hw,n));
+    CHECK(!kernel_exists("C:/System/Settings/accel-retry.cfg"));
+    CHECK(!setting(&systemp,CIUKI_SYSTEM_SETTING_ACCEL_RETRY,retry,sizeof(retry)-1));
+    CHECK(!kernel_read("C:/System/Settings/accel-retry.cfg",text,sizeof(text),&n) && n==sizeof(retry)-1 && !memcmp(text,retry,n));
+    /* A shorter text replaces the whole file. */
+    CHECK(!setting(&admin,CIUKI_SYSTEM_SETTING_HWPROFILES,"0:name=A\n",9));
+    CHECK(!kernel_read("C:/System/HWPROF.CFG",text,sizeof(text),&n) && n==9);
+    /* The kernel accepts only what it and the loader read at the next start. */
+    static const char *const bad_perf[]={"role=1\n","version=1\nrole=9\n","version=1\nmin_mb=8\n","version=2\n","version=1\nrole=1\nrole=2\n"};
+    for(unsigned i=0;i<sizeof(bad_perf)/sizeof(*bad_perf);i++) CHECK(setting(&admin,CIUKI_SYSTEM_SETTING_PERFORMANCE,bad_perf[i],(uint32_t)strlen(bad_perf[i]))==-EINVAL);
+    static const char *const bad_retry[]={"driver=S3\npci=5333:8c2e\n","driver=s3\npci=5333:8C2E\n","driver=s3\npci=5333:8c2e","driver=\npci=5333:8c2e\n",
+        "driver=abcdefghijklmnop\npci=5333:8c2e\n","driver=s3\npci=5333-8c2e\n","driver=s3\npci=5333:8c2e\nx"};
+    for(unsigned i=0;i<sizeof(bad_retry)/sizeof(*bad_retry);i++) CHECK(setting(&admin,CIUKI_SYSTEM_SETTING_ACCEL_RETRY,bad_retry[i],(uint32_t)strlen(bad_retry[i]))==-EINVAL);
+    CHECK(!setting(&admin,CIUKI_SYSTEM_SETTING_ACCEL_RETRY,"driver=abcdefghijklmno\npci=0000:ffff\n",37));
+    CHECK(setting(&admin,CIUKI_SYSTEM_SETTING_HWPROFILES,"0:name=\001\n",10)==-EINVAL);
+    CHECK(setting(&admin,9,"x",1)==-EINVAL);
+    CHECK(!kernel_read("C:/System/Settings/performance.cfg",text,sizeof(text),&n) && n==sizeof(perf)-1);
+    /* The record: the size bound, version, reserved words, the action. */
+    struct ciuki_system_setting r={.version=1,.size=sizeof(r),.action=CIUKI_SYSTEM_SETTING_SET,.setting=CIUKI_SYSTEM_SETTING_HWPROFILES,
+        .buffer=admin.data,.length=CIUKI_SYSTEM_SETTING_MAX+1};
+    CHECK(service(&admin,CIUKI_RECOVERY_SETTING,&r,sizeof(r))==-EINVAL);
+    r.length=4; r.reserved[1]=1; CHECK(service(&admin,CIUKI_RECOVERY_SETTING,&r,sizeof(r))==-EINVAL);
+    r.reserved[1]=0; r.action=2; CHECK(service(&admin,CIUKI_RECOVERY_SETTING,&r,sizeof(r))==-EINVAL);
+    r.action=1; r.version=2; CHECK(service(&admin,CIUKI_RECOVERY_SETTING,&r,sizeof(r))==-EINVAL);
+    r.version=1; r.buffer=0; CHECK(service(&admin,CIUKI_RECOVERY_SETTING,&r,sizeof(r))==-EINVAL);
+    /* A large hardware-profile file (the loader reads up to 24575 bytes). */
+    char *big=malloc(CIUKI_SYSTEM_SETTING_MAX); CHECK(big);
+    for(unsigned i=0;i<CIUKI_SYSTEM_SETTING_MAX;i++) big[i]=i%64==63?'\n':'a'+(char)(i%26);
+    as(&admin); struct ciuki_mmap_args mapping={.size=sizeof(mapping),.length=32*1024,.prot=PROT_READ|PROT_WRITE,.flags=MAP_PRIVATE|MAP_ANONYMOUS,.fd=-1};
+    uint32_t region=(uint32_t)ua_mmap(admin.p->memory,&mapping); CHECK(region>=CIUKI_MMAP_BASE);
+    CHECK(!ua_write(admin.p->memory,region,big,CIUKI_SYSTEM_SETTING_MAX));
+    r.buffer=region; r.length=CIUKI_SYSTEM_SETTING_MAX; CHECK(!service(&admin,CIUKI_RECOVERY_SETTING,&r,sizeof(r)));
+    struct vfs_table t; CHECK(!vfs_table_init(&vfs,&t,2)); struct fat_entry entry;
+    CHECK(!vfs_stat(&t,"C:/System/HWPROF.CFG",&entry) && entry.size==CIUKI_SYSTEM_SETTING_MAX); vfs_table_destroy(&t);
+    free(big);
+    puts("H16 sec-sysvc2 sealed boot settings: HWPROF.CFG, performance.cfg, hwprofiles.cfg and the display attempt files (accel*.cfg, declared driver files) refuse every direct writer, administrators included; the SYSTEM setting service saves validated text for administrators, the interim session and SYSTEM; standard users, Guest and a no-session subject EPERM PASS");
+
+    /* Registry Checker's backups are SYSTEM-only (the registry broker's). */
+    { int e=make_dir("/System/SysBckup"); CHECK(!e || e==-EEXIST); }
+    kernel_file("C:/System/SysBckup/RB000.CRB","CRB1",4);
+    CHECK(sys_open_as(&admin,"/System/SysBckup/RB000.CRB",O_RDONLY)==-EACCES && sys_open_as(&alice,"/System/SysBckup/RB000.CRB",O_RDONLY)==-EACCES);
+    CHECK(sys_open_as(&admin,"/System/SysBckup/RESTORE.PND",O_RDWR|O_CREAT)==-EACCES);
+    puts("H16 sec-sysvc2 Registry Checker backups: C:\\SYSTEM\\SYSBCKUP refuses every direct reader and writer, administrators included PASS");
+}
+/* ---- end sec-sysvc2 ---- */
+
 int main(int argc,char **argv)
 {
     CHECK(argc==3); setvbuf(stdout,0,_IONBF,0);
@@ -484,11 +644,13 @@ int main(int argc,char **argv)
     sysvc_attach(&vfs,2);
     identity(&alice,"alice",1007,1,545,0); identity(&bob,"bob",1001,1,545,0); identity(&admin,"admin",1000,2,544,545);
     identity(&guest,"guest",501,1,546,0); identity(&interim,"interim",1000,2,544,545); identity(&systemp,"system",0,0,0,0);
+    identity(&service_subject,"service",1002,1,545,0); /* sec-sysvc2 */
     session(&alice,0,ALICE_HOME); session(&bob,1,BOB_HOME); session(&guest,2,GUEST_HOME); session(&interim,3,0);
     bind_policy();
     test_boot_config(); test_machine_logs(); test_user_logs(); test_driver_packs(); test_sfc_restore();
-    struct actor *all[]={&alice,&bob,&admin,&guest,&interim,&systemp};
-    for(unsigned i=0;i<6;i++) { as(all[i]); for(int fd=0;fd<CIUKI_OPEN_MAX;fd++) if(all[i]->p->fds[fd].object) file_close(all[i]->p,fd); stop_collect(all[i]->p); }
+    test_jobs(); test_settings(); /* sec-sysvc2 */
+    struct actor *all[]={&alice,&bob,&admin,&guest,&interim,&systemp,&service_subject};
+    for(unsigned i=0;i<7;i++) { as(all[i]); for(int fd=0;fd<CIUKI_OPEN_MAX;fd++) if(all[i]->p->fds[fd].object) file_close(all[i]->p,fd); stop_collect(all[i]->p); }
     g_current=client_thread->task; all_closed(); stop_collect(client);
     for(int fd=0;fd<3;fd++) if(file_fd_object(proc_supervisor(),fd)) CHECK(!file_close(proc_supervisor(),fd));
     px_release(proc_supervisor()->cwd); proc_supervisor()->cwd=0;
@@ -503,6 +665,6 @@ int main(int argc,char **argv)
     for(unsigned i=0;i<2;i++) { fake_reset(&disk[i]); fake_close(&disk[i]); }
     kfree(supervisor_task); supervisor_task=0;
     CHECK(!pages_used); free(ram);
-    printf("H16 sec-sysvc SYSTEM services: boot configuration, system and user logs, driver packs, SFC restore, checks=%u PASS\n",checks);
+    printf("H16 sec-sysvc SYSTEM services: boot configuration, system and user logs, driver packs, SFC restore, sec-sysvc2 jobs and sealed settings, checks=%u PASS\n",checks);
     return 0;
 }

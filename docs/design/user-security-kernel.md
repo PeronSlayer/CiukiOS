@@ -531,6 +531,43 @@ Win32) are that user's own logs; the Log Viewer shows the user's logs and, to
 administrators, the system logs. Per-user crash reports follow the rule
 table's "may instead be placed in the owning profile".
 
+#### SYSTEM jobs, sealed boot settings and Registry Checker (sec-sysvc2 amendment, 2026-10-28)
+
+Implementation record, Windows XP research and evidence:
+`docs/validation/sec-sysvc2.md`.
+
+- **One per-user log location.** A session's own logs and crash reports
+  (`NETSURF.LOG`, `CRASHn.TXT`, `WCRASHn.TXT`) live only in
+  `<profile>\Local Settings\Application Data\CiukiOS\Logs`, the LOG service's
+  USER scope; sec-user-05's `Local Settings\Application Data\{NetSurf,Crash}`
+  folders are not used. Without the service (ENOSYS, ENODEV) a profile
+  session's programs write that same folder, and only the profile-less
+  bootstrap desktop writes the machine folders.
+- **SYSTEM jobs.** Scheduled system maintenance runs as SYSTEM whoever is
+  logged on. JOB (call 99 op 9, record `ciuki_system_job`) is open to every
+  live session subject and SYSTEM; STARTUP_REPORT appends each ScanDisk check
+  of this start to `C:\SYSTEM\LOGS\SCANDISK.LOG` once, formatted by the kernel
+  from its own record (no caller data). The daily Registry Checker backup is
+  the registry broker's SYSTEM job (below).
+- **Sealed boot settings.** The rule table's "files consumed as privileged
+  configuration during the next boot" now covers `C:\SYSTEM\HWPROF.CFG` and,
+  in `C:\SYSTEM\SETTINGS`, `performance.cfg`, `hwprofiles.cfg` and the display
+  attempt files (`accel*.cfg` and every registered driver's declared attempt
+  file): SEALED by name in `policy_child`, like the hive slots, without a trie
+  node. Administrators change HWPROF.CFG, performance.cfg and the DM8 retry
+  request through SETTING (call 99 op 10, record `ciuki_system_setting`),
+  which validates the text the loader and kernel accept and rewrites the file
+  as SYSTEM; the kernel alone writes the attempt markers.
+- **Registry Checker.** `C:\SYSTEM\SYSBCKUP` is SECRET (one trie rule, 30 of
+  32 nodes). Registry Checker runs in the SYSTEM registry broker
+  (`RB_CHECKER_*` of the private registry protocol): backups hold the broker's
+  machine registry (native System and Programs roots, the committed Win32
+  machine hive slot), BOOT.CFG, HWPROF.CFG and the settings files; LIST, BACKUP, RESTORE
+  and FIX are for administrators; DAILY (once a local day by the broker's
+  clock) and STATUS for every session. A restore is recorded and applied by the
+  broker at its next start, before any root or hive is loaded; a damaged root,
+  and a machine hive without a valid slot, are restored there too.
+
 ### Enforcement points and retained handles
 
 | Operation | Required checks before first side effect |

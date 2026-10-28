@@ -1,6 +1,7 @@
 #define _POSIX_C_SOURCE 200809L
 #include <ciuki/w32_diagnostics.h>
 #include "../../../../apps/desktop/win32_crash.h"
+#include <unistd.h> /* sec-sysvc2 */
 #include <errno.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -44,6 +45,21 @@ int main(int argc,char **argv){
     strcpy(f.exe,"fixture.exe");strcpy(f.module,"fixture.dll");f.stack[0]=0x12345678;f.stack[7]=0x87654321;
     for(unsigned i=0;i<12;i++){f.registers[0]=i;if(desk_w32_crash_store(argv[1],&f))return 2;}
     puts("PASS crash text rotation");
+    {   /* sec-sysvc2: a profile's own log folder without the log service uses
+         * the service's names (WCRASHn.TXT for Win32); a sibling folder,
+         * removed again, keeps argv[1]'s eight files. */
+        char dir[600],file[700];snprintf(dir,sizeof(dir),"%s.wcrash",argv[1]);
+        for(unsigned i=0;i<3;i++)if(desk_w32_crash_store_as(dir,"WCRASH",&f))return 20;
+        for(unsigned i=0;i<4;i++){
+            snprintf(file,sizeof(file),"%s/WCRASH%u.TXT",dir,i);int present=!access(file,F_OK);
+            if(present!=(i<3))return 21;
+            if(present)unlink(file);
+        }
+        snprintf(file,sizeof(file),"%s/CRASH0.TXT",dir);if(!access(file,F_OK))return 22;
+        if(rmdir(dir))return 23;
+        if(desk_w32_crash_store_as(dir,NULL,&f)!=-EINVAL)return 24;
+        puts("PASS profile log folder without the log service: WCRASHn.TXT");
+    }
     if(argc==3){
         /* G13: native fault records share the rotation and the first line. */
         struct ciuki_w32_fault n={.kind=W32_REPORT_NATIVE_FAULT,.pid=7,.tid=9,.code=14u|6u<<8,.eip=0x401234,.offset=0x10,.valid=0x03};

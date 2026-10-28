@@ -5,7 +5,10 @@
  * service; NetSurf's log and the crash reports of the user's programs are the
  * user's own logs (Local Settings\Application Data\CiukiOS\Logs), reached
  * through the same service (ciuki/recovery.h). The Setup log and the crash
- * files earlier releases wrote to C:\WINDOWS\CRASH stay ordinary files. */
+ * files earlier releases wrote to C:\WINDOWS\CRASH stay ordinary files.
+ * sec-sysvc2: this is the one per-user location scheme; sec-user-05's
+ * Local Settings\Application Data\{NetSurf,Crash} folders are superseded
+ * (docs/validation/sec-sysvc2.md). */
 #include "logview.h"
 #include <dirent.h>
 #include <errno.h>

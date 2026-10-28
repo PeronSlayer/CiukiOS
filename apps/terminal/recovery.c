@@ -43,8 +43,12 @@ static int scanreg(struct terminal *t, int n, char **a)
     }
     struct rc_backup list[RC_MAX_BACKUPS + 4];
     char date[32];
+    /* sec-sysvc2: Registry Checker runs in the SYSTEM registry broker and is
+     * an administrator tool (Windows 98 ScanReg /Restore, XP System Restore). */
+    static const char admin_only[] = "Registry Checker can be used by administrators only.\n";
     if (restore) {
         int count = rc_list("", list, RC_MAX_BACKUPS + 4);
+        if (count == -EPERM) { term_write(t, admin_only); return count; }
         if (count < 0) return count;
         if (!count) { term_write(t, "Registry Checker found no backups in C:\\SYSTEM\\SYSBCKUP.\n"); return 0; }
         if (!pick) {
@@ -58,21 +62,24 @@ static int scanreg(struct terminal *t, int n, char **a)
             return 0;
         }
         if (pick > count || !list[pick - 1].valid) { term_write(t, "That backup cannot be restored.\n"); return -EINVAL; }
-        /* Windows 98: an earlier registry is restored outside Windows only. */
-        if (!command_prompt_only()) {
-            term_write(t, "Restart, hold Ctrl and choose Command prompt only to restore a backup:\n"
-                          "the desktop and its programs use the registry now.\n");
-            return -EBUSY;
-        }
+        /* Windows 98 restores an earlier registry outside Windows; sec-sysvc2:
+         * the registry broker restores it at the next start, before any
+         * program uses the registry (XP's System Restore restarts as well). */
         int e = rc_restore("", list[pick - 1].name);
         if (e) return e;
         when(list[pick - 1].created, date, sizeof(date));
-        term_printf(t, "You have restored a good registry (%s, %s).\nType REBOOT to restart CiukiOS.\n", list[pick - 1].name, date);
+        term_printf(t, "Registry Checker will restore %s (%s) when CiukiOS starts again.\nType REBOOT to restart CiukiOS.\n",
+                    list[pick - 1].name, date);
         return 0;
     }
     unsigned damaged = 0;
     int e = rc_scan("", &damaged);
     if (e) return e;
+    /* Only administrators repair or back up (EPERM below for the others). */
+    if ((fix && damaged) || backup || comment) {
+        struct rc_backup probe;
+        if (rc_list("", &probe, 1) == -EPERM) { term_write(t, admin_only); return -EPERM; }
+    }
     if (damaged) {
         for (unsigned i = 0; i < RC_ROOTS; i++) if (damaged & (1u << i)) term_printf(t, "The %s root of the registry is damaged.\n", rc_root_name(i));
         if (fix) {

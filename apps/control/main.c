@@ -238,9 +238,25 @@ static int hw_load(void *ctx, char *text, size_t size, size_t *length)
     text[n] = 0; *length = n;
     return 0;
 }
+/* sec-sysvc2: HWPROF.CFG, performance.cfg and accel-retry.cfg are sealed
+ * boot inputs (the loader and the kernel read them at the next start). An
+ * administrator saves them through the SYSTEM setting service (EPERM for
+ * other accounts); ENOSYS (an older kernel) or ENODEV (no managed system
+ * volume) keep the direct file write. 1: write the file yourself. */
+static int setting_service(unsigned setting, const char *text, size_t length, int *error)
+{
+    *error = 0;
+    if (!ciuki_system_setting_set(setting, text, length)) return 0;
+    if (errno != ENOSYS && errno != ENODEV) { *error = -errno; return 0; }
+    return 1;
+}
 /* Atomic replace: temporary file, fsync, rename (cfg_write_at). */
 static int hw_save(void *ctx, const char *text, size_t length)
-{ (void)ctx; int e = cfg_write_at(CP_HW_FILE, "/system/HWPROF.TMP", text, length); return e ? -e : 0; }
+{
+    (void)ctx; int e;
+    if (!setting_service(CIUKI_SYSTEM_SETTING_HWPROFILES, text, length, &e)) return e;
+    e = cfg_write_at(CP_HW_FILE, "/system/HWPROF.TMP", text, length); return e ? -e : 0;
+}
 static uint32_t boot_serial(void *ctx)
 {
     (void)ctx; struct ciuki_recovery_status status;
@@ -264,7 +280,9 @@ static int perf_save(void *ctx, const struct system_perf *p)
     char text[256];
     int n = snprintf(text, sizeof(text), "version=1\nrole=%u\nread_ahead=%u\ngraphics=%u\nvm=%u\nmin_mb=%u\nmax_mb=%u\n",
         p->role, p->read_ahead, p->graphics, p->vm, p->min_mb, p->max_mb);
-    int e = cfg_write_at(SYSTEM_PERF_PATH, CFG_DIR "/performance.tmp", text, (size_t)n);
+    int e;
+    if (!setting_service(CIUKI_SYSTEM_SETTING_PERFORMANCE, text, (size_t)n, &e)) return e; /* sec-sysvc2 */
+    e = cfg_write_at(SYSTEM_PERF_PATH, CFG_DIR "/performance.tmp", text, (size_t)n);
     return e ? -e : 0;
 }
 static int memory_query(void *ctx, uint64_t *total_k, uint64_t *free_k)
@@ -545,6 +563,10 @@ static int accel_retry(void *ctx)
 {
     struct cp_main *m=ctx;
     if (!m->engine_ok || m->generic_engine.version!=CIUKI_DISPLAY_ENGINE_VERSION) return -EAGAIN;
+    /* sec-sysvc2: the retry request is a sealed boot input (setting_service). */
+    char text[48]; int n=cp_accel_retry_text(&m->generic_engine,text,sizeof(text)),e;
+    if (n<0) return n;
+    if (!setting_service(CIUKI_SYSTEM_SETTING_ACCEL_RETRY,text,(size_t)n,&e)) return e;
     return cp_accel_retry_request(CP_ACCEL_RETRY_PATH,&m->generic_engine);
 }
 static int engine_query(void *ctx, struct ciuki_accel_info *info)

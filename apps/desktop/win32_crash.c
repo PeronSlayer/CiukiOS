@@ -77,14 +77,16 @@ static int dir_replace(void *ctx,const char *name,const char *text,size_t n)
     if(fclose(out))error=EIO;
     return -error;
 }
-int desk_w32_crash_store(const char *directory,const struct ciuki_w32_fault *f)
+int desk_w32_crash_store_as(const char *directory,const char *prefix,const struct ciuki_w32_fault *f)
 {
-    if(!directory||!f||(f->kind!=W32_REPORT_CRASH&&f->kind!=W32_REPORT_NATIVE_FAULT))return -EINVAL;
-    char path[300];int n=snprintf(path,sizeof(path),"%s/CRASH0.TXT",directory);if(n<0||n>=(int)sizeof(path))return -ENAMETOOLONG;
+    if(!directory||!prefix||!f||(f->kind!=W32_REPORT_CRASH&&f->kind!=W32_REPORT_NATIVE_FAULT))return -EINVAL;
+    char path[300];int n=snprintf(path,sizeof(path),"%s/%s0.TXT",directory,prefix);if(n<0||n>=(int)sizeof(path))return -ENAMETOOLONG;
     if(mkdir(directory,0777)&&errno!=EEXIST)return -errno;
     struct desk_crash_io io={(void *)directory,dir_head,dir_replace};
-    return desk_w32_crash_write(&io,"CRASH",f);
+    return desk_w32_crash_write(&io,prefix,f);
 }
+int desk_w32_crash_store(const char *directory,const struct ciuki_w32_fault *f)
+{ return desk_w32_crash_store_as(directory,"CRASH",f); }
 
 /* ---- the user's own logs (sec-sysvc) ---- */
 #if defined(__CIUKIOS__) && !defined(__linux__)

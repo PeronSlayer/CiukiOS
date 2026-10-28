@@ -39,6 +39,12 @@ static inline const char *profile_temp(void)
     snprintf(derived,sizeof(derived),"%s/Local Settings/Temp",root);
     return derived;
 }
+/* sec-sysvc2: the one per-user log folder below Local Settings\Application
+ * Data, the kernel log service's USER scope (src/kernel/fs/sysvc.h
+ * SYSVC_USER_LOGS): NETSURF.LOG and the crash reports CRASHn.TXT (native)
+ * and WCRASHn.TXT (Win32). Programs reach it through the service; this name
+ * is for the fallback when the service is absent (ENOSYS, ENODEV). */
+#define PROFILE_LOGS "CiukiOS/Logs"
 /* <profile>/Local Settings/Application Data/<leaf> (or Application Data
  * when roaming), missing folders created inside the profile; NULL without a
  * profile session or when the folder cannot be made. Per-user logs, crash

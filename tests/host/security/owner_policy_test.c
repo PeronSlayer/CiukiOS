@@ -268,7 +268,8 @@ static void test_matrix(void)
         {"/Program Files",31,3},{"/Documents",31,15},{"/Documents/Desktop",31,15},
         {"/Documents/Desktop/Quake III Arena Demo",31,3},
         {"/CIUKILDR",31,1},{"/BOOT.CFG",31,1},
-        {"/System/SFC.LST",31,1} /* sec-sysvc: the SFC restore service's baseline */
+        {"/System/SFC.LST",31,1}, /* sec-sysvc: the SFC restore service's baseline */
+        {"/System/SysBckup",1,1}  /* sec-sysvc2: Registry Checker's backups, the broker's restore input */
     };
     CHECK(v.count==1+sizeof(expected)/sizeof(*expected));
     for(unsigned rule=0;rule<sizeof(expected)/sizeof(*expected);rule++) {
@@ -299,6 +300,22 @@ static void test_matrix(void)
         CHECK(!policy_child(&v,&parent,hives[file],100+file,0,&hive));
         for(unsigned who=0;who<5;who++) for(unsigned bit=1;bit<=POLICY_META;bit<<=1)
             CHECK((policy_check(&v,&hive,subjects[who],bit)==0)==(who==0));
+    }
+    /* sec-sysvc2: boot inputs among the machine settings are sealed by name
+     * (no trie node): everyone reads, only SYSTEM writes or renames them. */
+    static const struct { const char *path; unsigned write; } boot_inputs[]={
+        {"/System/HWPROF.CFG",1},{"/System/hwprof.cfg",1},{"/System/Settings/performance.cfg",1},
+        {"/System/Settings/hwprofiles.cfg",1},{"/System/Settings/accel.cfg",1},{"/System/Settings/ACCEL-RETRY.CFG",1},
+        {"/System/Settings/accel-s3savage-5333-8c2e.cfg",1},{"/System/Settings/accel-i810.cfg",1},
+        {"/System/Settings/desktop.cfg",3},{"/System/Settings/accel.txt",3},{"/System/Settings/xaccel.cfg",3},
+        {"/System/Settings/HWPROF.CFG",3},{"/System/performance.cfg",3},{"/Programs/HWPROF.CFG",3}};
+    for(unsigned i=0;i<sizeof(boot_inputs)/sizeof(*boot_inputs);i++) {
+        struct policy_label label=policy_path(&v,boot_inputs[i].path,0);
+        for(unsigned who=0;who<5;who++) {
+            CHECK(!policy_check(&v,&label,subjects[who],POLICY_READ));
+            CHECK((policy_check(&v,&label,subjects[who],POLICY_WRITE)==0)==!!(boot_inputs[i].write&(1u<<who)));
+            if(boot_inputs[i].write==1) CHECK((policy_check(&v,&label,subjects[who],POLICY_RENAME|POLICY_REMOVE)==0)==(who==0));
+        }
     }
     struct policy_label shared=policy_path(&v,"/Documents/Desktop/notes.txt",0);
     struct policy_label launch=policy_path(&v,"/Documents/Desktop/Quake III Arena Demo/Install Quake III Arena Demo.lnk",0);

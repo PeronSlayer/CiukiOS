@@ -89,8 +89,12 @@ static const char *profile_path="/Documents/NetSurf";
  * Application Data and its exit/fetch log in Local Settings\Application
  * Data, both below the committed profile root the kernel launch generated
  * (USERPROFILE). A profile-less bootstrap desktop keeps the former shared
- * locations. Missing folders are created inside the profile. */
-static char user_profile_path[160],user_log_path[200];
+ * locations. Missing folders are created inside the profile.
+ * sec-sysvc2: the log is in the one per-user log folder, Local Settings\
+ * Application Data\CiukiOS\Logs (the log service's USER scope, also used
+ * for crash reports); the path below is only the fallback without the
+ * service, its folder made when that fallback first writes. */
+static char user_profile_path[160],user_log_path[200],user_log_dir[180];
 static bool ensure_tree(char *path)
 {
     for(char *p=path+1;;p++){
@@ -104,12 +108,11 @@ static void select_user_paths(void)
 {
     const char *root=getenv("USERPROFILE");
     if(!root || strncmp(root,"/Windows/Profiles/",18) || !root[18] || strlen(root)>=96 || strstr(root,"/.."))return;
-    char log_dir[180];
     snprintf(user_profile_path,sizeof(user_profile_path),"%s/Application Data/NetSurf",root);
-    snprintf(log_dir,sizeof(log_dir),"%s/Local Settings/Application Data/NetSurf",root);
-    snprintf(user_log_path,sizeof(user_log_path),"%s/NETSURF.LOG",log_dir);
+    snprintf(user_log_dir,sizeof(user_log_dir),"%s/Local Settings/Application Data/CiukiOS/Logs",root);
+    snprintf(user_log_path,sizeof(user_log_path),"%s/NETSURF.LOG",user_log_dir);
     profile_path=user_profile_path;
-    ciuki_netsurf_log_path=ensure_tree(log_dir) ? user_log_path : NULL;
+    ciuki_netsurf_log_path=user_log_path;
     (void)ensure_tree(user_profile_path);
 }
 #endif
@@ -767,6 +770,8 @@ static void netsurf_log(const char *line)
         int r=ciuki_system_log_write(CIUKI_SYSTEM_LOG_USER,"NETSURF.LOG",0,record,a+b,CIUKI_NETSURF_LOG_MAX);
         int error=errno;free(record);
         if(!r || (error!=ENOSYS && error!=ENODEV))return;
+        /* sec-sysvc2: the profile's log folder, made on this first fallback. */
+        if(ciuki_netsurf_log_path==user_log_path && !ensure_tree(user_log_dir))return;
     }
 #endif
     struct stat st;int flags=O_WRONLY|O_CREAT|O_APPEND;

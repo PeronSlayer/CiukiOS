@@ -117,3 +117,22 @@ int ciuki_sfc_restore(const char *path, const char *source)
     memcpy(r.path, path, strlen(path) + 1); memcpy(r.source, source, strlen(source) + 1);
     return call(CIUKI_RECOVERY_SFC_RESTORE, &r, sizeof(r));
 }
+/* ---- sec-sysvc2: SYSTEM jobs and sealed boot settings (ciuki/recovery.h) ---- */
+int ciuki_system_job(unsigned job, uint32_t *done)
+{
+    struct ciuki_system_job r;
+    memset(&r, 0, sizeof(r));
+    r.version = CIUKI_SYSTEM_JOB_VERSION; r.size = sizeof(r); r.job = job;
+    int e = call(CIUKI_RECOVERY_JOB, &r, sizeof(r));
+    if (done) *done = r.done;
+    return e;
+}
+int ciuki_system_setting_set(unsigned setting, const char *text, size_t length)
+{
+    if ((length && !text) || length > CIUKI_SYSTEM_SETTING_MAX) { errno = EINVAL; return -1; }
+    struct ciuki_system_setting r;
+    memset(&r, 0, sizeof(r));
+    r.version = CIUKI_SYSTEM_SETTING_VERSION; r.size = sizeof(r); r.action = CIUKI_SYSTEM_SETTING_SET;
+    r.setting = setting; r.buffer = CU_PTR(text); r.length = (uint32_t)length;
+    return call(CIUKI_RECOVERY_SETTING, &r, sizeof(r));
+}

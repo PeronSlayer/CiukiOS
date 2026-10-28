@@ -14,6 +14,9 @@ static int admin(const struct rb_identity *s){if(!s->uid)return 1;for(unsigned i
 static const char *root_name(unsigned root){return root==RB_SYSTEM?"System":root==RB_PROGRAMS?"Programs":root==RB_USERS?"Users":NULL;}
 static void discard(struct rb_link *l){if(l->stage){memset(l->stage,0,l->total);free(l->stage);}l->stage=NULL;l->root=l->total=l->received=0;l->expected=0;}
 static int current(struct rb_broker *,struct rb_link *,struct rb_identity *);
+/* sec-sysvc2 (checker.c; weak: broker fixtures without Registry Checker). */
+extern int rb_checker_exchange(struct rb_checker *,const struct rb_identity *,unsigned,const uint8_t *,size_t,
+                               uint8_t *,size_t,size_t *) __attribute__((weak));
 static int io_live(struct rb_broker *b)
 {
     if(b->active_link<0||b->active_link>=(int)RB_LINK_MAX||b->faulted)return -ESRCH;
@@ -213,6 +216,9 @@ int rb_exchange(struct rb_broker *b,unsigned slot,unsigned op,const void *p,size
         if(n||cap<32)e=-EINVAL;
         else{memset(out,0,32);rb_put32(out,1);for(unsigned i=0;i<3;i++)rb_put32((uint8_t *)out+4+i*4,c.machine_sid[i]);
             rb_put64((uint8_t *)out+16,c.volume);rb_put64((uint8_t *)out+24,c.account_generation);*used=32;}
+    }else if(!e&&op>=RB_CHECKER_LIST&&op<=RB_CHECKER_STATUS){
+        /* sec-sysvc2: Registry Checker, as SYSTEM after the caller's check. */
+        e=b->checker&&rb_checker_exchange?rb_checker_exchange(b->checker,&c,op,p,n,out,cap,used):-EOPNOTSUPP;
     }else if(!e)e=op>=RB_WIN32?win32_stream(b,l,&c,op,p,n,out,cap,used):native(b,l,&c,op,p,n,out,cap,used);
     if(e){*used=0;if(e==-ESRCH||e==-EACCES)discard(l);}
     b->active_link=-1;b->busy=0;return e;

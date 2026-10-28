@@ -3901,6 +3901,118 @@ char source[256];
 
 ---- end sec-sysvc ----
 
+---- sec-sysvc2: SYSTEM jobs and sealed boot settings on call 99
+(user-security-kernel.md, sec-sysvc2 amendment). Same model as the
+services above: the kernel checks the caller's retained subject, then acts
+as SYSTEM on fixed targets.
+JOB (every live session subject, administrators, standard users, Guest,
+and SYSTEM): scheduled system maintenance runs as SYSTEM, never as the
+session user (Windows XP runs it under LocalSystem). STARTUP_REPORT appends
+every ScanDisk check this start ran (REPORT) to C:\SYSTEM\LOGS\SCANDISK.LOG,
+once per start and drive, formatted by the kernel from its own record; no
+caller data reaches the log. `done` returns the reports this call appended.
+SETTING SET (administrators, or SYSTEM): a sealed boot setting, a file the
+kernel or the loader reads at the next start, becomes `length` bytes read
+from `buffer`: HWPROFILES C:\SYSTEM\HWPROF.CFG (printable text, tab, CR,
+LF, at most SETTING_MAX), PERFORMANCE C:\SYSTEM\SETTINGS\performance.cfg
+(a complete valid performance record), ACCEL_RETRY the display retry
+request C:\SYSTEM\SETTINGS\accel-retry.cfg (exactly
+"driver=<id>\npci=<vvvv>:<dddd>\n" of DM8: id 1..15 of [a-z0-9_-],
+lowercase hex). EINVAL otherwise; the previous text is restored when the
+write fails.
+
+```c
+#define CIUKI_RECOVERY_JOB 9u
+#define CIUKI_RECOVERY_SETTING 10u
+#define CIUKI_SYSTEM_JOB_VERSION 1u
+#define CIUKI_SYSTEM_JOB_STARTUP_REPORT 1u
+struct ciuki_system_job {
+    uint32_t version;
+```
+
+0
+
+```c
+uint32_t size;
+```
+
+4
+
+```c
+uint32_t job;
+```
+
+8: CIUKI_SYSTEM_JOB_*
+
+```c
+uint32_t done;
+```
+
+12: out: work done by this call (reports appended)
+
+```c
+uint32_t reserved[4];
+```
+
+16: zero
+
+```c
+};
+
+#define CIUKI_SYSTEM_SETTING_VERSION 1u
+#define CIUKI_SYSTEM_SETTING_SET 1u
+#define CIUKI_SYSTEM_SETTING_HWPROFILES 1u
+#define CIUKI_SYSTEM_SETTING_PERFORMANCE 2u
+#define CIUKI_SYSTEM_SETTING_ACCEL_RETRY 3u
+#define CIUKI_SYSTEM_SETTING_MAX 24575u
+struct ciuki_system_setting {
+    uint32_t version;
+```
+
+0
+
+```c
+uint32_t size;
+```
+
+4
+
+```c
+uint32_t action;
+```
+
+8: CIUKI_SYSTEM_SETTING_SET
+
+```c
+uint32_t setting;
+```
+
+12: HWPROFILES, PERFORMANCE or ACCEL_RETRY
+
+```c
+uint32_t buffer;
+```
+
+16: address of the text
+
+```c
+uint32_t length;
+```
+
+20: bytes of text
+
+```c
+uint32_t reserved[2];
+```
+
+24: zero
+
+```c
+};
+```
+
+---- end sec-sysvc2 ----
+
 ```c
 struct ciuki_spawn_fd {
     int32_t source;
@@ -8369,6 +8481,19 @@ the baseline's original (EILSEQ otherwise, ENOENT: not in SFC.LST).
 
 ```c
 int ciuki_sfc_restore(const char *path, const char *source);
+```
+
+sec-sysvc2: SYSTEM jobs and sealed boot settings of call 99 (abi.h
+"sec-sysvc2"). Each returns 0, or -1 with errno.
+system_job: run a CIUKI_SYSTEM_JOB_* as SYSTEM (every session, Guest too);
+*done (optional) counts the work done, e.g. the ScanDisk reports appended.
+system_setting_set: a sealed boot setting (CIUKI_SYSTEM_SETTING_HWPROFILES,
+_PERFORMANCE, _ACCEL_RETRY) becomes text (administrators; EPERM otherwise,
+EINVAL for text the kernel would not accept).
+
+```c
+int ciuki_system_job(unsigned job, uint32_t *done);
+int ciuki_system_setting_set(unsigned setting, const char *text, size_t length);
 #endif
 ```
 

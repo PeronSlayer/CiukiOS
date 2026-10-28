@@ -342,10 +342,44 @@ static int sfc_call(struct process *p, struct security_subject *s, struct trap_f
     return e;
 }
 
+/* ---- sec-sysvc2: SYSTEM jobs and sealed boot settings (fs/sysvc_jobs.c) ---- */
+static int system_job(struct security_subject *s, struct trap_frame *tf)
+{
+    struct ciuki_system_job r;
+    if (tf->edx != sizeof(r)) return -EINVAL;
+    int e = copy_from_user(&r, tf->ecx, sizeof(r));
+    if (e) return e;
+    if (r.version != CIUKI_SYSTEM_JOB_VERSION || r.size != sizeof(r) || r.done ||
+        r.reserved[0] || r.reserved[1] || r.reserved[2] || r.reserved[3]) return -EINVAL;
+    e = sysvc_job_run(s, r.job, &r.done);
+    int copied = copy_to_user(tf->ecx, &r, sizeof(r));
+    return e ? e : copied;
+}
+static int system_setting(struct security_subject *s, struct trap_frame *tf)
+{
+    struct ciuki_system_setting r;
+    if (tf->edx != sizeof(r)) return -EINVAL;
+    int e = copy_from_user(&r, tf->ecx, sizeof(r));
+    if (e) return e;
+    if (r.version != CIUKI_SYSTEM_SETTING_VERSION || r.size != sizeof(r) || r.action != CIUKI_SYSTEM_SETTING_SET ||
+        r.reserved[0] || r.reserved[1] || r.length > CIUKI_SYSTEM_SETTING_MAX || (r.length && !r.buffer)) return -EINVAL;
+    /* The administrator check comes before the caller's text is copied. */
+    if (!sysvc_admin(s)) return -EPERM;
+    char *text = buffer_alloc(r.length);
+    if (!text) return -ENOMEM;
+    if (r.length) e = copy_from_user(text, r.buffer, r.length);
+    if (!e) e = sysvc_setting_set(s, r.setting, text, r.length);
+    buffer_free(text, r.length);
+    return e;
+}
+/* ---- end sec-sysvc2 ---- */
+
 /* Returns 1 when op is one of these services (result in *out). */
 int sysvc_syscall(struct process *p, struct security_subject *s, struct trap_frame *tf, int32_t *out)
 {
     switch (tf->ebx) {
+    case CIUKI_RECOVERY_JOB: *out = system_job(s, tf); return 1;          /* sec-sysvc2 */
+    case CIUKI_RECOVERY_SETTING: *out = system_setting(s, tf); return 1;  /* sec-sysvc2 */
     case CIUKI_RECOVERY_BOOT_CONFIG: *out = boot_config(s, tf); return 1;
     case CIUKI_RECOVERY_LOG: *out = system_log(s, tf); return 1;
     case CIUKI_RECOVERY_DRIVER_PACK: *out = driver_pack(p, s, tf); return 1;

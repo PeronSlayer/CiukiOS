@@ -1623,6 +1623,14 @@ private directory is an error, never a writable global Windows/TEMP or /tmp
 fallback. Clear stale per-session temp/console handles at logoff; private
 persistent crash reports remain bound to their owner.
 
+*sec-sysvc2 amendment (2026-10-28):* the one location of a session's own
+logs and crash reports is `<profile>\Local Settings\Application Data\CiukiOS\Logs`
+(the kernel LOG service's USER scope: NetSurf's `NETSURF.LOG`, `CRASHn.TXT`
+native and `WCRASHn.TXT` Win32 reports); every writer and reader (NetSurf,
+the desktop's crash writer, Log Viewer) uses it, and the profile-less
+bootstrap session keeps its logs with the system logs. Windows XP layout and
+research: `docs/validation/sec-sysvc2.md`.
+
 The kernel half's spawn allowlist includes generated LC_ALL=C, validated TZ
 (from the committed timezone parser, UTC0 if absent), canonical profile/settings
 paths and fixed PATH. The current supervisor-generated values are inputs to

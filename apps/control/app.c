@@ -1005,7 +1005,8 @@ static void event(struct du_ui *u, const struct du_event *e, void *user)
     case 976:
         if(e->type==DU_EV_ACTIVATE && a->host.accel_retry){
             int r=a->host.accel_retry(a->host.ctx);
-            text(a,975,r?"Could not re-arm acceleration; the marker was retained.":"Acceleration will be retried after you restart CiukiOS.");
+            text(a,975,r==-EPERM?"Only administrators can retry acceleration.": /* sec-sysvc2 */
+                       r?"Could not re-arm acceleration; the marker was retained.":"Acceleration will be retried after you restart CiukiOS.");
         }
         break;
     case CP_DISPLAY_TABS_ID:

@@ -607,6 +607,11 @@ python3 -B -m unittest discover -s "$root/tests/host/security" -p test_logon.py
 # user and Guest, with the direct routes refused by the bound policy.
 python3 -B -m unittest discover -s "$root/tests/host/security" -p test_system_services.py
 # ---- end sec-sysvc ----
+# ---- sec-sysvc2 (one block): H16 above also covers the SYSTEM jobs and the
+# sealed boot settings; H07 Registry Checker in the SYSTEM registry broker
+# (administrator-only tools, the daily SYSTEM job, the next-start restore).
+python3 -B -m unittest discover -s "$root/tests/host/security" -p test_registry_checker.py
+# ---- end sec-sysvc2 ----
 
 # F2 production parser, mappings, wait queues, stack and lifecycle with fake
 # physical memory/scheduling; no guest execution or host runner lock.

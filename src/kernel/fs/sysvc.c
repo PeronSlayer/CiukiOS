@@ -248,28 +248,47 @@ static int boot_put(struct vfs_table *t, int fd, const char *text, size_t length
     if (!e) e = sysvc_error(vfs_commit(t, fd));
     return e;
 }
+/* ---- sec-sysvc2: one SYSTEM rewrite of a small sealed file (BOOT.CFG and
+ * the boot settings of sysvc_jobs.c): created when missing with its folder,
+ * the previous text kept (up to `keep` bytes) and put back when the write
+ * fails. The caller has checked the subject and the text. */
+bool sysvc_printable(const char *text, size_t length) { return boot_text(text, length); }
+int sysvc_system_rewrite(const char *path, const char *text, size_t length, size_t keep)
+{
+    struct work *w = work_new();
+    if (!w) return -ENOMEM;
+    char *previous = keep ? fs_contig_alloc(keep + 1) : 0;
+    unsigned drive;
+    int e = keep && !previous ? -ENOMEM : sysvc_table(&w->t, 0, &drive);
+    if (!e) { w->table = true; e = sysvc_path(w->path, drive, path, 0, 0); }
+    if (!e) {
+        /* The folder (C:\SYSTEM\SETTINGS) normally exists; SYSTEM recreates it. */
+        size_t n = strlen(w->path), at = n;
+        while (at > 3 && w->path[at] != '/') at--;
+        if (at > 3) { w->path[at] = 0; e = make_folders(&w->t, w->path, 0); w->path[at] = '/'; }
+    }
+    int fd = e ? e : vfs_open(&w->t, w->path, VFS_READ | VFS_WRITE | VFS_CREATE, VFS_DENY_WRITE, 0);
+    if (fd >= 0) {
+        size_t old = 0; uint32_t size = 0;
+        e = handle_size(&w->t, fd, &size);
+        bool restore = !e && previous && size <= keep && !read_at(&w->t, fd, 0, previous, size, &old) && old == size;
+        if (!e) e = boot_put(&w->t, fd, text, length);
+        if (e && restore) (void)boot_put(&w->t, fd, previous, old);
+        int closed = sysvc_error(vfs_close(&w->t, fd));
+        if (!e) e = closed;
+    } else if (!e) e = sysvc_error(fd);
+    if (previous) fs_contig_free(previous, keep + 1);
+    work_free(w);
+    return e;
+}
+/* ---- end sec-sysvc2 ---- */
 int sysvc_boot_config_set(struct security_subject *s, const char *text, size_t length)
 {
     const struct ciuki_credential *c = s ? security_subject_credential(s) : 0;
     if (!sysvc_admin(s)) return -EPERM;
     if (!text || length > CIUKI_BOOT_CONFIG_MAX || !boot_text(text, length)) return -EINVAL;
-    struct work *w = work_new();
-    if (!w) return -ENOMEM;
-    unsigned drive;
-    int e = sysvc_table(&w->t, 0, &drive);
-    if (!e) { w->table = true; e = sysvc_path(w->path, drive, SYSVC_BOOT_CONFIG, 0, 0); }
-    int fd = e ? e : vfs_open(&w->t, w->path, VFS_READ | VFS_WRITE | VFS_CREATE, VFS_DENY_WRITE, 0);
-    if (fd >= 0) {
-        /* The loader's file is small: keep it to restore after a failed write. */
-        char previous[CIUKI_BOOT_CONFIG_MAX + 2]; size_t old = 0; uint32_t size = 0;
-        e = handle_size(&w->t, fd, &size);
-        bool restore = !e && size < sizeof(previous) && !read_at(&w->t, fd, 0, previous, size, &old) && old == size;
-        if (!e) e = boot_put(&w->t, fd, text, length);
-        if (e && restore) (void)boot_put(&w->t, fd, previous, old);
-        int closed = sysvc_error(vfs_close(&w->t, fd));
-        if (!e) e = closed;
-    } else e = sysvc_error(fd);
-    work_free(w);
+    /* The loader's file is small: kept to restore after a failed write. */
+    int e = sysvc_system_rewrite(SYSVC_BOOT_CONFIG, text, length, CIUKI_BOOT_CONFIG_MAX + 1);
     sysvc_log("[sysvc] boot configuration saved uid=%u bytes=%u result=%d", c ? c->uid : 0, (unsigned)length, e);
     return e;
 }
@@ -364,6 +383,27 @@ int sysvc_log_read(struct security_subject *s, unsigned scope, const char *name,
     work_free(w);
     return e;
 }
+/* The folder of w->f (made as needed), then name appended (starting over
+ * past limit) or replaced. */
+static int write_log(struct work *w, const char *name, bool replace, uint32_t limit, const void *data, size_t bytes,
+                     uint32_t *total)
+{
+    int e = make_folders(&w->t, w->f.path, w->f.existing);
+    if (!e) e = log_path(&w->f, name, w->path);
+    int fd = e ? e : vfs_open(&w->t, w->path, VFS_READ | VFS_WRITE | VFS_CREATE | (replace ? VFS_TRUNCATE : 0), VFS_DENY_WRITE, 0);
+    if (fd >= 0) {
+        uint32_t size = 0;
+        e = handle_size(&w->t, fd, &size);
+        /* Past the limit the file starts over (NETSURF.LOG's rule). */
+        if (!e && !replace && size + bytes > limit) { e = sysvc_error(vfs_truncate(&w->t, fd, 0)); size = 0; }
+        if (!e) e = write_at(&w->t, fd, size, data, bytes);
+        if (!e) e = sysvc_error(vfs_commit(&w->t, fd));
+        if (!e) *total = size + (uint32_t)bytes;
+        int closed = sysvc_error(vfs_close(&w->t, fd));
+        if (!e) e = closed;
+    } else if (!e) e = sysvc_error(fd);
+    return e;
+}
 int sysvc_log_write(struct security_subject *s, unsigned scope, const char *name, bool replace,
                     uint32_t limit, const void *data, size_t bytes, uint32_t *total)
 {
@@ -378,20 +418,25 @@ int sysvc_log_write(struct security_subject *s, unsigned scope, const char *name
     struct work *w = work_new();
     if (!w) return -ENOMEM;
     int e = scope_table(s, scope, w);
-    if (!e) e = make_folders(&w->t, w->f.path, w->f.existing);
-    if (!e) e = log_path(&w->f, name, w->path);
-    int fd = e ? e : vfs_open(&w->t, w->path, VFS_READ | VFS_WRITE | VFS_CREATE | (replace ? VFS_TRUNCATE : 0), VFS_DENY_WRITE, 0);
-    if (fd >= 0) {
-        uint32_t size = 0;
-        e = handle_size(&w->t, fd, &size);
-        /* Past the limit the file starts over (NETSURF.LOG's rule). */
-        if (!e && !replace && size + bytes > limit) { e = sysvc_error(vfs_truncate(&w->t, fd, 0)); size = 0; }
-        if (!e) e = write_at(&w->t, fd, size, data, bytes);
-        if (!e) e = sysvc_error(vfs_commit(&w->t, fd));
-        if (!e) *total = size + (uint32_t)bytes;
-        int closed = sysvc_error(vfs_close(&w->t, fd));
-        if (!e) e = closed;
-    } else if (!e) e = sysvc_error(fd);
+    if (!e) e = write_log(w, name, replace, limit, data, bytes, total);
+    work_free(w);
+    return e;
+}
+/* sec-sysvc2: SYSTEM's own append to C:\SYSTEM\LOGS, for the kernel's SYSTEM
+ * jobs (sysvc_jobs.c); no subject, the caller decides what is written. */
+int sysvc_log_system_append(const char *name, const void *data, size_t bytes, uint32_t limit, uint32_t *total)
+{
+    if (!total || (bytes && !data) || bytes > CIUKI_SYSTEM_LOG_DATA_MAX || !log_name(name, false)) return -EINVAL;
+    if (!limit) limit = CIUKI_SYSTEM_LOG_LIMIT;
+    if (limit > CIUKI_SYSTEM_LOG_LIMIT_MAX) return -EINVAL;
+    if (bytes > limit) return -EFBIG;
+    *total = 0;
+    struct work *w = work_new();
+    if (!w) return -ENOMEM;
+    unsigned drive;
+    int e = sysvc_table(&w->t, 0, &drive);
+    if (!e) { w->table = true; w->f.existing = 0; w->f.as_caller = false; e = sysvc_path(w->f.path, drive, SYSVC_LOGS, 0, 0); }
+    if (!e) e = write_log(w, name, false, limit, data, bytes, total);
     work_free(w);
     return e;
 }

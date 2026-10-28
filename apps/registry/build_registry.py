@@ -15,11 +15,13 @@ SDK = ROOT / 'build/tools/ciuki-sdk'
 # SYSTEM-only metadata directory the service owns (K-Q1).
 IMAGE_PATH = '/System/Services/registry'
 STORE_DIRECTORY = '/System/Security'
-SERVICE_SOURCES = ('broker.c','storage.c','accounts.c','kernel_adapter.c','server.c','restart.c','restart_store.c','restart_quarantine.c','restart_posix.c','main.c')
+SERVICE_SOURCES = ('broker.c','storage.c','accounts.c','kernel_adapter.c','server.c','restart.c','restart_store.c','restart_quarantine.c','restart_posix.c','main.c',
+                   'checker.c')  # sec-sysvc2: Registry Checker as the broker's SYSTEM work
 SHARED_SOURCES = ('apps/w32srv/registry.c','apps/w32srv/storage.c','apps/w32srv/defaults.c',
                   'apps/w32srv/directory.c','apps/w32srv/posix_io.c',
-                  'apps/accounts/kernel_sys_ciuki.c','src/kernel/lib/sha256.c')
-CFLAGS = ['-O2', '-Wall', '-Wextra', '-Werror']
+                  'apps/accounts/kernel_sys_ciuki.c','src/kernel/lib/sha256.c',
+                  'apps/sysrecovery/regcheck.c')  # sec-sysvc2: built with RC_LOCAL (the engine itself)
+CFLAGS = ['-O2', '-Wall', '-Wextra', '-Werror', '-DRC_LOCAL=1']
 
 
 def module(name, path):
@@ -36,6 +38,7 @@ def digest(path):
 def inputs():
     paths = [p for p in (ROOT / 'apps/registry').iterdir() if p.is_file() and p.suffix in ('.c','.h','.py')]
     paths += [ROOT/p for p in SHARED_SOURCES]
+    paths += [ROOT/'apps/sysrecovery/recovery.h']  # sec-sysvc2
     paths += [ROOT/'apps/w32srv/registry.h',ROOT/'apps/accounts/kernel_sys.h',
               ROOT/'sdk/private/registry_protocol.h',ROOT/'sdk/libreg/transport.h',
               ROOT/'src/kernel/include/ciuki/abi.h',SDK/'manifest.json']

@@ -13,6 +13,9 @@ struct desk_crash_io {
 int desk_w32_crash_write(const struct desk_crash_io *, const char *prefix, const struct ciuki_w32_fault *);
 /* CRASHn.TXT in directory (created when missing). */
 int desk_w32_crash_store(const char *, const struct ciuki_w32_fault *);
+/* sec-sysvc2: <prefix>n.TXT in directory, the service's names (CRASH native,
+ * WCRASH Win32) for a profile's log folder without the log service. */
+int desk_w32_crash_store_as(const char *directory, const char *prefix, const struct ciuki_w32_fault *);
 /* sec-sysvc: the faulting user's own logs through the SYSTEM log service:
  * CRASHn.TXT (native), WCRASHn.TXT (Win32). -ENOSYS: an older kernel. */
 int desk_w32_crash_log(const struct ciuki_w32_fault *);
