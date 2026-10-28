@@ -1,5 +1,6 @@
 /* System Monitor window. SPDX-License-Identifier: MIT */
 #include "sysmon_view.h"
+#include "../desktop/profile.h" /* sec-user-04: My Documents is per user */
 #include "sysui.h"
 #include <errno.h>
 #include <stdlib.h>
@@ -373,7 +374,7 @@ int smv_init(struct sysmon_app *a, struct du_ui *u, const struct sysmon_host *ho
     if (!a || !u || !host || !host->sample || !host->log_open || !host->log_write || !host->log_close || !host->quit) return -EINVAL;
     memset(a, 0, sizeof(*a));
     a->ui = u; a->host = *host; a->selected = 0; a->log_capacity = sizeof(a->log_row);
-    snprintf(a->folder, sizeof(a->folder), "/Documents");
+    snprintf(a->folder, sizeof(a->folder), "%s", profile_home());
     sm_init(&a->mon);
     a->file_items[0] = (struct du_menu_item){ "Start &Logging...", SMM_LOG_START, 0, 0, 0 };
     a->file_items[1] = (struct du_menu_item){ "S&top Logging", SMM_LOG_STOP, 0, 0, DU_ITEM_DISABLED };

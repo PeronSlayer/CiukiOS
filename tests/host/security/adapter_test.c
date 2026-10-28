@@ -27,7 +27,7 @@ int security_owner_verify(const struct ciuki_security_profile *p) { (void)p; ret
 /* kernel_sys.h bound to the harness: the adapter always acts as ACCOUNT. */
 static struct proc_thread *account_thread;
 static void (*logon_responder)(void);
-static unsigned responder_calls, entropy_counter, idle_waits;
+static unsigned responder_calls, entropy_counter, idle_waits, entropy_unready;
 static int picture_present=1, boot_flags_error;
 static uint32_t boot_flags_value;
 static struct process *account_process(void) { desktop_select(account_thread); return account_thread->process; }
@@ -80,7 +80,8 @@ int acct_sys_pids(uint32_t *pids, unsigned capacity)
 }
 uint64_t acct_sys_monotonic_ms(void) { return g_ticks; }
 int acct_sys_entropy(void *buffer, size_t bytes)
-{ uint8_t *b=buffer; for (size_t i=0;i<bytes;i++) b[i]=(uint8_t)(++entropy_counter*7u); return 0; }
+{ if (entropy_unready) { entropy_unready--; return -EAGAIN; }
+  uint8_t *b=buffer; for (size_t i=0;i<bytes;i++) b[i]=(uint8_t)(++entropy_counter*7u); return 0; }
 int acct_sys_boot_flags(uint32_t *flags) { if (boot_flags_error) return boot_flags_error; *flags=boot_flags_value; return 0; }
 int acct_sys_file_present(const char *path) { return strstr(path,"/System/Security/Pictures/")!=NULL && picture_present; }
 void acct_sys_log(const char *line) { printf("  [service] %s\n",line); }
@@ -333,13 +334,23 @@ static void test_lease_and_gate(void)
     CHECK(acct_service_open(&acct_srv.service,&acct_srv.tables,0)==-ENOSYS);
     CHECK(!acct_server_open(&acct_srv,0) && acct_srv.last_open_error==-EIO); /* no evidence is not fresh */
     fake_provision(&fake,1);
-    CHECK(acct_server_open(&acct_srv,ACCT_SERVER_OPEN_RETRY_MS) && acct_srv.opened);
+    /* The kernel generator is not yet seeded at the first open (getentropy
+     * EAGAIN): the server closes and reopens shortly, so the promotion
+     * resumes through the recovery of the next open. */
+    entropy_unready=1;
+    CHECK(!acct_server_open(&acct_srv,ACCT_SERVER_OPEN_RETRY_MS) && !acct_srv.opened && !acct_srv.kernel.leased);
+    CHECK(acct_srv.firstboot_result==-EAGAIN && !entropy_unready);
+    CHECK(!acct_server_open(&acct_srv,ACCT_SERVER_OPEN_RETRY_MS+ACCT_SERVER_FIRSTBOOT_RETRY_MS-1));
+    CHECK(acct_server_open(&acct_srv,ACCT_SERVER_OPEN_RETRY_MS+ACCT_SERVER_FIRSTBOOT_RETRY_MS) && acct_srv.opened);
     CHECK(acct_srv.kernel.leased && acct_srv.kernel.pid==account_thread->process->pid && acct_srv.kernel.generation==1);
     CHECK(!acct_srv.kernel.safe_mode);
     struct acct_service other;
     CHECK(acct_service_open(&other,&acct_srv.tables,1)==-EBUSY);
+    /* sec-user-02: the server's first-boot adapter promoted the staged seed
+     * during open; a second explicit bootstrap is refused. */
     struct acct_db seed; fake_seed(&seed,1); uint8_t bytes[ACCT_FILE_MAX]; size_t n;
-    CHECK(!acct_encode(&seed,1,bytes,sizeof(bytes),&n)); CHECK(!acct_service_bootstrap(&acct_srv.service,bytes,n,ACCT_READY));
+    CHECK(acct_srv.firstboot_result==ACCT_FIRSTBOOT_PROMOTED);
+    CHECK(!acct_encode(&seed,1,bytes,sizeof(bytes),&n)); CHECK(acct_service_bootstrap(&acct_srv.service,bytes,n,ACCT_READY)==-EPERM);
     CHECK(acct_srv.service.available && acct_srv.service.db.count==3);
     k=&acct_srv.service.store.kernel;
     uint32_t lg=9,ag=9; CHECK(!k->role_generations(k->ctx,&lg,&ag) && lg==1 && ag==1);

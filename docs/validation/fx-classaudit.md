@@ -63,6 +63,10 @@ The six deferred format/interchange findings from Round 1 are recorded as
   do not change the NE loader assigned to `fx-is5boot`.
   The host census records the same warning, and the malformed-offset
   fixture still refuses because its PE signature is missing at that offset.
+  The shared PE mechanism (`sdk/pe/pe.c`, used by the Win32 user-mode loader
+  and the NDIS driver loader) had kept the refusal; it now records the
+  `pe-offset-unaligned-accepted` diagnostic instead (sec-wave3 integration),
+  so the kernel-loader corpus refuses that fixture with `pe-signature` too.
 * Wine's [MIDI_mciReadMThd](https://raw.githubusercontent.com/wine-mirror/wine/master/dlls/mciseq/mcimidi.c)
   normalizes a format-0 file's declared track count to one. Apply the same
   normalization with a diagnostic before the track-capacity check. The

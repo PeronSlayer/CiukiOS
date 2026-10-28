@@ -147,7 +147,7 @@ class DialogTests(unittest.TestCase):
                      '-I'+str(ROOT/'sdk/win32/include'),
                      '-idirafter', str(ROOT/'sdk/sysroot-overlay/include'), *freetype.includes()]
         gdi_exports = [ROOT/'sdk/win32/gdi32'/n for n in gdi32.SOURCES if n not in ('compiler.c', 'compiler.S')]
-        gdi_sources = [*gdi_exports, ROOT/'sdk/win32/gdi32/native_font.c', HERE/'gdi_host.c', HERE.parent/'gdi_support.c']
+        gdi_sources = [*gdi_exports, ROOT/'sdk/win32/gdi32/native_font.c', HERE/'gdi_host.c', HERE.parent/'gdi_support.c', HERE.parent/'no_environment.c']
         names = set()
         for i, source in enumerate(gdi_sources):
             obj = OUT/f'g{i}.o'

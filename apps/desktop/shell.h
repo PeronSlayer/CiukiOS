@@ -190,6 +190,10 @@ struct desk_shell {
      * of the current power source (consumed by G10's DPMS) and the drive
      * timer last sent to the kernel. */
     struct pp_config power_cfg;
+    /* sec-k08 (U4-6): a LOGON session's machine power buttons (power.cfg),
+     * applied over power_cfg whenever it is (re)loaded; set by desktop.c. */
+    struct pp_machine power_machine;
+    int power_machine_set;
     struct pp_summary power_summary;
     struct pp_alarm_state power_alarm;
     struct pp_broadcast_state power_broadcast;
@@ -268,6 +272,15 @@ void desk_logon_done(struct desktop *);
 int desk_logon_input(struct desktop *, const struct ciuki_input_event *);
 void desk_session_lock(struct desktop *);
 void desk_session_resume(struct desktop *);
+/* sec-user-03: a secure-menu action handed back by LOGON (logon_proto.h LGN_ACT_*). */
+void desk_session_action(struct desktop *, unsigned action);
+/* sec-user-04 (logon.inc): LOGON-session lock hooks. saver_lock: 0 when the
+ * protected saver may go (locked, or a password-less owner), -errno to keep
+ * it; arm_resume: 1 ready to sleep (locked or nothing to protect), 0 still
+ * arming, -errno refuse Stand by; password_set: LOGON's PASSWORD notice. */
+int desk_session_saver_lock(struct desktop *);
+int desk_session_arm_resume(struct desktop *);
+int desk_session_password_set(struct desktop *);
 void desk_shortcut_properties(struct desktop *, unsigned link, int repair);
 const char *desk_program_menu_label(const char *);
 void desk_shell_reset(struct desktop *);

@@ -23,6 +23,7 @@ extern void w32_services_desktop_died(uint32_t) __attribute__((weak));
 static const struct supervisor_io_ops *supervisor_io;
 extern void w32_service_delegate(struct process *,struct process *,const char *) __attribute__((weak));
 extern int px_security_cwd(struct process *, const char *) __attribute__((weak));
+#pragma weak secure_console_poll /* sec-k07 */
 static uint32_t desktop_pid, desktop_deaths;
 
 static bool bootstrap_attempted;
@@ -149,6 +150,18 @@ static int spawn_process(const char *path, const char *const argv[], const char 
         if (role==CIUKI_SECURITY_ROLE_LOGON_UI) err=security_trusted_prepare(p);
         else err = supervisor_io && supervisor_io->stdio ? supervisor_io->stdio(p) : -ENODEV;
     }
+    /* sec-k07: LOGON_UI learns its private console and trusted grant fds
+     * from kernel-generated labels (descriptive only; editing grants nothing). */
+    for (unsigned i = 0; !err && role==CIUKI_SECURITY_ROLE_LOGON_UI && i < CIUKI_OPEN_MAX; i++) {
+        struct desktop_description *d = desktop_fd(p, (int32_t)i);
+        if (!d || (d->kind != DESKTOP_DISPLAY && d->kind != DESKTOP_INPUT) || !d->grant_trusted) continue;
+        char label[32];
+        int length = ksnprintf(label, sizeof(label), "%s=%u",
+                               d->kind == DESKTOP_DISPLAY ? "CIUKI_DISPLAY_FD" : "CIUKI_INPUT_FD", i);
+        err = proc_strings_add(strings, label, (uint32_t)length + 1, true);
+        if (!err && d->kind == DESKTOP_DISPLAY)
+            err = proc_strings_add(strings, "CIUKI_CONSOLE_FD=3", sizeof("CIUKI_CONSOLE_FD=3"), true);
+    }
     if (!err && cwd) err = supervisor_io && supervisor_io->cwd ? supervisor_io->cwd(p, cwd) : -ENODEV;
     if (!err && (desktop || setup)) { int32_t grants[2]; err = grants_install(p, grants); }
     if (!err && desktop && audio_mixer_delegate) {
@@ -232,18 +245,15 @@ void supervisor_dosvm_delegate(struct process *parent, struct process *child, co
     bool authorized = parent == proc_supervisor() || (display && input);
     child->setup_capability = false; /* f9-01: never inherited or path-derived */
     child->dosvm_capability = authorized && !strncmp(path,"/Programs/dosbox",sizeof("/Programs/dosbox"));
-    child->dhcp_capability = authorized && !strncmp(path,"/Programs/terminal",sizeof("/Programs/terminal"));
-    child->network_capability = authorized &&
-        (!strncmp(path,"/Programs/desktop",sizeof("/Programs/desktop")) || !strncmp(path,"/Programs/control",sizeof("/Programs/control")));
+    /* sec-k04: compatibility flags describe actual rights, never image paths.
+     * Consumers authorize the actual issuer's credential on every operation. */
+    bool admin = security_process_live(child) && security_admin(child);
+    child->dhcp_capability = admin;
+    child->network_capability = admin;
     child->programs_capability = authorized &&
         (!strncmp(path,"/Programs/desktop",sizeof("/Programs/desktop")) || !strncmp(path,"/Programs/control",sizeof("/Programs/control")));
-    child->time_capability = authorized &&
-        (!strncmp(path,"/Programs/desktop",sizeof("/Programs/desktop")) || !strncmp(path,"/Programs/control",sizeof("/Programs/control")));
-    static const char *const recovery[] = { "/Programs/desktop", "/Programs/control", "/Programs/terminal",
-                                            "/Programs/scandisk", "/Programs/msconfig" };
-    child->recovery_capability = false;
-    for (unsigned i = 0; authorized && i < ARRAY_SIZE(recovery); i++)
-        if (!strncmp(path, recovery[i], strlen(recovery[i]) + 1)) child->recovery_capability = true;
+    child->time_capability = admin;
+    child->recovery_capability = admin;
 }
 
 int supervisor_spawn_gate(bool supplement, struct process **out)
@@ -295,6 +305,11 @@ void supervisor_bootstrap(void)
         if (pager_bootstrap_complete) pager_bootstrap_complete();
         return;
     }
+    /* sec-own: the system volume's OWNER store, policy and lease are bound
+     * before any service or desktop starts (fs/owner_system.c). */
+    extern void owner_system_boot(void) __attribute__((weak));
+    if (owner_system_boot) owner_system_boot();
+    /* end sec-own */
     /* sec-user-01 supplies this sealed image. Its absence during the k01
      * transition leaves the existing boot working; other failures are visible. */
     struct process *accounts = 0;
@@ -305,7 +320,13 @@ void supervisor_bootstrap(void)
     (void)supervisor_spawn_security_role(CIUKI_SECURITY_ROLE_REGISTRY,&trusted);
     (void)supervisor_spawn_security_role(CIUKI_SECURITY_ROLE_LOGON_UI,&trusted);
     int logon_result=supervisor_spawn_security_role(CIUKI_SECURITY_ROLE_LOGON,&trusted);
-    if (logon_result>0) return;
+    if (logon_result>0) {
+        /* sec-user-06: LOGON starts each session's desktop (security.c
+         * session_launch records it); this is the normal-boot milestone
+         * that replaces "spawning /Programs/desktop" on LOGON images. */
+        klog("[supervisor] bootstrap: trusted logon pid=%d",logon_result);
+        return;
+    }
     if (logon_result!=-ENOENT) {
         klog("[supervisor] trusted logon unavailable: %d",logon_result);
         return;
@@ -402,6 +423,7 @@ static void desktop_restart_step(void)
 void supervisor_poll(void)
 {
     security_poll();
+    if (secure_console_poll) secure_console_poll(); /* sec-k07: attention, neutral frame, drain */
     extern void owner_service_poll(void) __attribute__((weak));
     if(owner_service_poll) owner_service_poll();
     /* Restart only roles that this manifest actually started. Missing images

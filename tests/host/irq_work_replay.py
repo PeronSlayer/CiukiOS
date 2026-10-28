@@ -151,6 +151,11 @@ void biosvm_input_snapshot(struct biosvm_input_diag *d) { memset(d,0,sizeof(*d))
                 ('e1_interrupt', 'e1000', 50), ('rh_interrupt', 'rhine', 50),
                 ('xl_interrupt', '3c90x', 50), ('tu_interrupt', 'tulip', 50)], ['model_read', 'model_write'],
                ['src/kernel/lib/fmt.c'], text=f'''#include "{HOST / 'net/net_test.c'}"
+/* sec-k04: net_dev.c's Setup query asks the credential predicates. This IRQ
+ * replay issues no device control and links no credentials: fail closed. */
+bool security_process_live(const struct process *p) {{ (void)p;return false; }}
+bool security_system(const struct process *p) {{ (void)p;return false; }}
+uint32_t security_role(const struct process *p) {{ (void)p;return 0; }}
 void serial_write(const char *s,size_t n) {{ (void)s;(void)n;abort(); }}
 void bootlog_capture(const char *s,size_t n) {{ (void)s;(void)n;abort(); }}
 void console_write(const char *s,size_t n) {{ (void)s;(void)n;abort(); }}

@@ -12,6 +12,7 @@
 #include "virtual_vga_bios.h"
 #include "dosvm_audio_state.h"
 #include "dos_save_store.h"
+#include "dos_identity.h"
 #include "dosvm_floppy.h"
 #include "dosvm_uart.h"
 #include <ciuki/dos_video_modes.h>
@@ -23,7 +24,7 @@ int dosvm_game_program(unsigned game, bool remove, uint32_t *size);
 int dosvm_game_program_checked(unsigned game, bool remove, uint32_t *size,
                                const char **step, const char **detail);
 struct ciuki_dosvm_command;
-int dosvm_game_data(unsigned game,unsigned op,struct ciuki_dosvm_command *);
+int dosvm_game_data(unsigned game,unsigned op,struct ciuki_dosvm_command *,const struct dos_identity *);
 #define DOSVM_PAGES 272u
 #define DOSVM_SECTORS 262144u
 #define DOSVM_OVERLAY_SECTORS 1024u
@@ -226,6 +227,11 @@ struct dosvm {
     /* f3-61: why the last full-screen session ended (enum dosvm_fullscreen_cause),
      * kept until the next entry for STATUS/probe evidence. */
     uint8_t fullscreen_cause;
+    /* fx-dosfull: the last full-screen entry or return was the user's
+     * Alt+Enter (STATUS CIUKI_DOSVM_FULLSCREEN_HOTKEY). The DOS Box remembers
+     * that choice per program, as Windows 98 does; its own requests, a mode
+     * change, Alt+Tab and a watchdog return are not a choice. */
+    bool fullscreen_hotkey;
     /* f3-61: per-second frame evidence of the current session: seconds
      * sampled and seconds in which the guest stored to the scanout (aperture
      * PTE dirty bits, or a VBE frame flush). Reset at each entry. */
@@ -304,7 +310,11 @@ struct dosvm {
     } read_cache[DOSVM_READ_BLOCKS];
     uint32_t read_reclaimed, read_regrown;
     unsigned read_recent, read_oldest, read_capacity, read_pages;
-    char overlay_path[128];
+    char overlay_path[DOS_IDENTITY_PATH];
+    /* sec-k05: creator identity, fixed before guest boot (dos_identity.h);
+     * file_gate is the D:/E: host-view gate built from it. */
+    struct dos_identity identity;
+    struct dos_host_gate file_gate;
     bool persistent, save_discarding;
     struct dos_save save;
     struct dos_save_file save_file;

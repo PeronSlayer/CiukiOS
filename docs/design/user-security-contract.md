@@ -674,6 +674,20 @@ Durable state machine, with barriers after each transition:
 | DONE or success already acknowledged | Preserve G, owner receipt and password changes; clean only proven obsolete staging/backups. |
 | ABORTED | Old database remains authoritative, all reservations retired; STATUS stays ABORTED within the retained window, then CHECKPOINTED. Any visible G is contradictory and closes recovery. |
 
+**First-boot uid recovery (sec-sysvc amendment, lead decision 2026-10-27).**
+The watermarks still never decrease, but a uid whose **only** OWNER
+reservations were aborted before **any** batch committed may be reserved again:
+OWNER admits a CREATE below `uid_high` only while its complete history proves
+nothing was ever published (no committed owner generation or account batch, no
+checkpoint floor or candidate, no profile record, no batch in flight, every
+retained receipt ABORTED) and at least one aborted receipt named that uid. A
+power cut between OWNER's durable RESERVE and ACCOUNT's intent write on a first
+boot therefore no longer leaves a fresh installation closed: the next boot
+aborts the orphan as the first table row requires, and the ready/Setup recipe
+is published at the next generation with the same uid 1000. Every other
+retired uid (never reserved, or any uid once a batch committed) stays retired.
+Evidence: H15 (power cut at that write), H02 (`docs/validation/sec-sysvc.md`).
+
 Deletion/disable/type change of an active account returns EBUSY before reservation.
 The 18-account and 32-profile bounds are independent; retained deleted roots
 consume profile capacity. SESSION_CREATE accepts only committed owner descriptors,
@@ -806,6 +820,15 @@ body with frame status=0. No failure can be interpreted as verified identity.
 | OWNER (3) | PREPARE=1, COMMIT=2, ABORT=3, STATUS=4, CHECKPOINT=5, COMPACT=6, RESERVE=7; exact batch/checkpoint codecs in section 3.5. |
 | LOGON (5) | AUTH_OUTCOME=1 (304 bytes, ACCOUNT only); LOCK_EVENT=2, POWER_EVENT=3 (32 bytes, LOGON_UI only); BEGIN_AUTH=4 (64 bytes, LOGON_UI only); SESSION_LOCK=5 (32 bytes, same-session DESKTOP only); SUBMIT_AUTH=6 (208 bytes), ENROLL_PLAN=7 (32+40*N bytes), both LOGON_UI only. No role can substitute another operation by changing a frame selector. |
 
+(sec-user-03 implementation note, 2026-10-28, for lead review; details in
+[sec-user03](../validation/sec-user03.md): LOGON adds two private operations,
+UI_STATE=8 (LOGON_UI only: the trusted screen to show, the ATTENTION relay and
+the security-menu choices bound to the current session/console) and
+SESSION_EVENT=9 (same-session DESKTOP only: the pending menu choice and the
+desktop's end-of-session notice). Neither authenticates, unlocks or creates a
+session; the kernel frame limit of service 5 is 9. SESSION_LOCK's progress
+status is -EPERM for a password-less owner: set-password guidance, no lock.)
+
 The 208-byte UI SUBMIT_AUTH body retains these offsets: version u32@0=1,
 flags u32@4=0, attempt_id u64@8, session_id u32@16 (0 for fresh logon/enrollment),
 console_generation u32@20, name_bytes u32@24, secret_bytes u32@28,
@@ -834,7 +857,11 @@ operation-id retries retrieve the prior result before any new generation check.
 LIST/LOOKUP replies retain version u32@0=1, count u32@4 (<=18), generation u64@8,
 then count 144-byte public records (uid@0, group_bitmap@4, public enabled/type
 flags@8, reserved@12=0, name[32]@16, picture[96]@48). AUTH LIST hides ineligible
-accounts. Public records never include salts, verifiers or private paths.
+accounts. AUTH LIST additionally exposes flag bit 2 for the existing ready blank-logon
+exception: the Welcome tile submits the empty secret through the normal LOGON
+authentication exchange. This is a UI hint, never unlock or authorization proof.
+Management LIST/LOOKUP keep bits 0–1 only. Public records never include salts,
+verifiers or private paths. See [runtime conformance research](../validation/sec-runtime1.md).
 Successful management mutations return one u64 new database generation.
 
 #### Complete authentication exchange (A2-1)
@@ -1045,7 +1072,10 @@ an unchanged binding; section 3.5 compacts ownership-changing work too.
 PROFILE=8 uses LOOKUP's uid-or-name selector but is authorized separately:
 ordinary callers (including Guest) get only their own committed mapping;
 administrators may query other committed mappings, and retained LOGON/ACCOUNT
-roles may query during authenticated session preparation. Deny another user's
+roles may query during authenticated session preparation. The sealed REGISTRY
+role with uid 0 and session 0 may read committed mappings to select its
+authoritative private user hives (sec-k06); uid 0 alone grants no access.
+Deny another user's
 query EACCES before exposing paths; unknown authorized account ESRCH, inactive
 unpublished/retired owner binding EACCES, changed generation EAGAIN, corrupt store
 EIO. Reply is exactly 272 bytes: version u32@0=1, size u32@4=272, uid u32@8,
@@ -1471,6 +1501,73 @@ warn that formerly shared settings were not private. Copy per-user roots without
 carrying machine-authority fields. An upgrade cannot claim new isolation until
 old public secrets, writable machine roots and service startup paths are closed.
 
+#### G32 enrollment source and account controls (sec-user-04 amendment, 2026-10-28, for lead review)
+
+*Proposed by the sec-user-04 implementer; binding only after the lead's review.
+It closes the open item of sec-user-03: A2-1 requires the trusted enrollment UI
+to submit every protected G32 record exactly, but no interface gave LOGON_UI
+that list. Research and decisions: `docs/validation/sec-user04.md`.*
+
+1. **AUTH ENROLL_SOURCE=8** (service 1, registered LOGON role only, uid 0,
+   session 0; empty request). ACCOUNT answers ENOENT unless the installation
+   is waiting for enrollment (no published database and a protected
+   `enrollment.source`). The reply is a 32-byte header (version u32@0=1,
+   count u32@4 0..16, flags u32@8 bit0 = a confirmed plan is staged, staged
+   mask u32@12 by provisional-catalogue index, plan generation u64@16, zero
+   reserved[8]@24) and count 48-byte rows in ascending old-id order (old id
+   u32@0, flags u32@4 bit0 = a replacement label is required because the old
+   name is invalid, reserved or a duplicate, staged uid u32@8 or 0 without a
+   plan, zero u32@12, the G32 name[32]@16, zero padded). It never carries a
+   salt, verifier, path or role; it is not throttled by the failed-
+   authentication delay. The kernel route table admits AUTH op 8 for LOGON
+   only (`channel.c` service-1 limit 7 -> 8, `security.c`).
+2. **LOGON ENROLL_SOURCE=10** (service 5, LOGON_UI only, empty request, no
+   session): LOGON relays AUTH op 8 unchanged on its own AUTH link (as it
+   relays ENROLL_PLAN). LOGON itself probes op 8 when AUTH LIST answers ENOENT
+   or returns a provisional catalogue (no enabled account; a published
+   database always has an enabled administrator with a password) and then
+   shows the trusted enrollment screen (UI_STATE mode ENROLL=10) instead of
+   "Logon is not available". An upgraded installation never logs on
+   automatically.
+3. **Trusted workflow** (LOGON_UI): the operator chooses the first
+   administrator among the listed accounts (or names a new one when the G32
+   store is empty) and types a replacement label for every flagged row; LOGON_UI
+   sends ENROLL_PLAN with every row exactly. Then, for every provisional
+   catalogue record except Guest (501), BEGIN_AUTH ENROLL (action 4, UID
+   selector, allowed by LOGON only in mode ENROLL with no session) and
+   SUBMIT_AUTH with the old G32 password (imported records; empty when the
+   account had none) or an empty old secret (recovery 500, a fresh record) and
+   a new 8-63 byte password, confirmed locally. ENROLL_STAGED moves to the
+   next record; ENROLL_COMMITTED returns LOGON to LIST and Welcome with a
+   notice, and the next logon needs a fresh LOGON challenge (A2-1). LOGON_UI
+   offers no change of a staged plan (an exact retry returns the same map);
+   changing it after staging remains an ACCOUNT-level capability.
+4. **SESSION_EVENT notices SAVER=5 and STANDBY=6** (same-session DESKTOP):
+   LOGON enters SECURE_ENTER(SAVER) for a password-protected saver being
+   dismissed and SECURE_ENTER(RESUME) for password-on-resume, armed before
+   Stand by (the desktop waits, at most 3 s, for reply flag LOCKED=4 before
+   the STANDBY call; a gate that cannot be raised refuses Stand by) or at a
+   resume the desktop did not arm. A password-less owner gets reply flag
+   BLANK and no lock (no guidance either: the saver only conceals). Notice
+   PASSWORD=4 is now sent after the owner changes his own password in User
+   Accounts (Control Panel -> desktop DESK_SETTINGS_PASSWORD_SET=11 ->
+   LOGON); it only clears LOGON's blank state, so a forged notice can make a
+   later lock stricter, never weaker.
+5. **Administrator log-off of a locked session** (UI_STATE OVERRIDE=9 /
+   OVERRIDE_CANCEL=10, LOGON_UI on the LOCKED screen, bound to the current
+   session and console): while armed, BEGIN_AUTH LOGON (action 2, typed name,
+   session 0) authenticates against the locked console's current epochs; an
+   AUTHENTICATED outcome never creates a session there. When the outcome's
+   credential is in Administrators (544) LOGON ends the locked session forced
+   (Windows XP WlxWkstaLockedSAS FORCE_LOGOFF; LOGON_UI warned that unsaved
+   work is lost) and returns to Welcome, where the administrator logs on
+   afresh; otherwise the attempt fails EACCES and the session stays locked.
+   Attention, unlock or any console change disarms it.
+6. **Per-user lock preferences**: `secure_saver` and `secure_resume` lines of
+   the user's own settings file (absent = on), shown in Display > Screen Saver
+   ("On resume, password protect") and Power > Advanced in a LOGON session;
+   the G32 interim desktop keeps USERS_LOCK/power_password.
+
 ## 7. Control Panel and old authority mechanisms
 
 ### 7.1 User Accounts and machine settings
@@ -1491,7 +1588,7 @@ when opening a page. All unavailable actions have visible explanations.
 | Device Manager / drivers / hardware enable-disable | Public inventory, read-only; modification disabled. | Authorized machine changes; trusted driver-install/update path only. |
 | Network adapter/IP/DNS/DHCP configuration, global proxy/shares/lobby defaults | Status readable; machine edits and DHCP release/renew disabled. Per-user application networking continues. | Machine configuration and DHCP control; no new network-authentication provider. |
 | Date/time and system time zone/RTC | Read clock, personal formatting/locale editable; clock/time-zone writes disabled. | Change system time/time zone through checked service. No Power Users tier. |
-| Power | Battery/status and personal monitor/saver/resume preference controls usable; machine standby/disk timers, button/lid defaults disabled. | Change machine policy. Users/Guest may request local power actions via the session UI. |
+| Power | Battery/status and personal monitor/saver/resume preference controls usable; machine standby/disk timers, button/lid defaults disabled. | Change machine policy. Users/Guest may request local power actions via the session UI. sec-k08 (U4-6): the power-button and lid actions are the machine's sealed `power.cfg`, written through call 99 SETTING POWER and applied by every LOGON session's desktop. |
 | Display | Personal wallpaper/colors/theme/saver editable; read current mode. Supported session mode/refresh/DPMS and game leases allowed through the compositor; driver and machine-default changes disabled. | Change machine defaults/driver configuration through the trusted path. Session display choices persist only to that user. |
 | Add/Remove Programs | Own-profile install/uninstall and published program list; all-users actions disabled with reason. | All-users install/uninstall and bundled program management. |
 | Sounds, keyboard/mouse, regional, accessibility | Personal preferences editable; public device capability view. Machine driver/default-page changes disabled. | Machine defaults/device settings as applicable. |
@@ -1599,6 +1696,14 @@ service storage and never become a desktop stdio fd. Failure to obtain the
 private directory is an error, never a writable global Windows/TEMP or /tmp
 fallback. Clear stale per-session temp/console handles at logoff; private
 persistent crash reports remain bound to their owner.
+
+*sec-sysvc2 amendment (2026-10-28):* the one location of a session's own
+logs and crash reports is `<profile>\Local Settings\Application Data\CiukiOS\Logs`
+(the kernel LOG service's USER scope: NetSurf's `NETSURF.LOG`, `CRASHn.TXT`
+native and `WCRASHn.TXT` Win32 reports); every writer and reader (NetSurf,
+the desktop's crash writer, Log Viewer) uses it, and the profile-less
+bootstrap session keeps its logs with the system logs. Windows XP layout and
+research: `docs/validation/sec-sysvc2.md`.
 
 The kernel half's spawn allowlist includes generated LC_ALL=C, validated TZ
 (from the committed timezone parser, UTC0 if absent), canonical profile/settings
@@ -1913,6 +2018,37 @@ Round-1 additions to the same SU cases (not permission to run them here):
 | SU-05/07 | DOS C:\WORK/C:\TEMP remain private/short; D: filtered profile aliases read-only, E: provider permissions unchanged. INT25/26/7305 return exact unified errors without transfer; BIOS INT13 cannot escape private provider. |
 | SU-07/13 | Alice's interrupted personal restart queue stays suspended through Bob's logon; machine journal replay needs broker authorization. Demotion/deletion, unowned v1/.DEFAULT migration and uncertain program launch never execute as Bob or SYSTEM. Existing native applets use production libreg adapter with direct machine backing access denied. |
 | SU-02/13 | Bootstrap has three account/owner bindings; migration has all sixteen legacy profiles plus built-ins. Interrupt each PREPARE/COMMIT/DB/seed/SID state barrier; STATUS/key/digest/watermarks agree across adapters. Abort consumes generations, missing/contradictory consumed state never creates blank CiukiUser. |
+
+#### sec-user-06 wiring (2026-10-28, host evidence only)
+
+The proposed suite now exists as `tests/suites/sec-users.json` (acceptance kind, profile
+qemu-t23, menu boots driven like a user; the fw_cfg question is answered in
+[test architecture](test-architecture.md#security-runtime-cases-amendment-sec-user-06-2026-10-28)),
+run with `scripts/test/acceptance.sh --suite sec-users`. The owner's account trials are acc-t23
+items 10-18 (`acc-accounts`). H14 (`tests/host/security/test_runner_contract.py`) parses every case
+and matches every awaited pattern to the record its source writes; no QEMU result exists yet.
+
+| Case | Covers | Runtime state |
+| --- | --- | --- |
+| su-01-ready | SU-01, R1 SU-01/04/12 reboot, launch credentials | wired |
+| su-02-setup | SU-02, R1 SU-02/13 seed | pending: no CD installation path in the runner (H08) |
+| su-03-refusal | SU-03, A2-1 generic refusal | wired |
+| su-04-roles | SU-04..08, R1 SU-05/08 installer store and DLL, A1-9 machine libreg | wired; 256 roots, second volume, USB, HKCU/GetUserName and installer runs as a Standard user stay host (H02, H07, H11, H08) |
+| su-09-lock | SU-09, A2-2 | wired; DOS/Win32 full-screen dismissal stays host (H09) |
+| su-10-resume | SU-10 | pending: no qualified virtual standby provider |
+| su-11-logoff | SU-11 | wired; Win32/DOS teardown stays host (H09/H10) |
+| su-12-recovery | SU-12, M-Q1/M-Q2 | wired; Setup CD repair stays host (H08) |
+| su-13-crash | SU-13 (power cut during a creation) | wired; service kill, stale v1 lock and per-stage cuts stay host (H02/H03/H08) |
+| su-14-shutdown | SU-14 | wired |
+| su-r2-gate | A2-2/A2-3 lock, attention, epochs | wired; challenge relays and service restarts stay host (H01/H09/H10) |
+| su-r2-status | A2-4/A2-6 | pending (H03) |
+| su-r2-profile | A2-8 | pending: G32 upgrade fixture (H11) |
+| su-r1-dos | A1-7 | pending: DOS-side record probe (H06) |
+| su-r1-restart | A1-8 restart journals, role restarts | pending: no runtime fault selector (H07/H09) |
+| su-r1-console | A1-10 console backing | pending: Win32 console fixture (H11) |
+
+The planned `--profile qemu-desktop-1998` runs are not wired: acceptance cases fix their profile and
+the directive asks for qemu-t23.
 
 ### 10.2 Documentation and inventory migration
 

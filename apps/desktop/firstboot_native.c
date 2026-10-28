@@ -9,6 +9,7 @@
 #include <ciuki/surface.h>
 #include "../../sdk/sysroot-overlay/include/ciuki/entropy.h"
 #include "../../sdk/sysroot-overlay/include/ciuki/dosvm.h"
+#include "../../sdk/sysroot-overlay/include/ciuki/security.h"
 #include <errno.h>
 #include <fcntl.h>
 #include <stdio.h>
@@ -152,10 +153,19 @@ static void action(void *ctx,unsigned a)
     /* The button opens Display after Finish. Retry itself is an explicit
      * Control Panel action, with its restart explanation, not automatic. */
 }
+/* sec-user-02: the kernel's immutable session credential (call 101
+ * QUERY_SELF), never an environment variable or a user name. */
+static int administrator(void *ctx)
+{
+    (void)ctx;struct ciuki_credential c;
+    if(ciuki_security_self(&c))return -errno;
+    for(unsigned i=0;i<c.group_count && i<sizeof(c.groups)/sizeof(c.groups[0]);i++)if(c.groups[i]==544)return 1;
+    return 0;
+}
 int desk_firstboot(struct desktop *d)
 {
     struct native_fb native={.desktop=d,.audio=-1};
-    struct fb_host h={&native,state_read,append,service,cancel_service,record,action};
+    struct fb_host h={&native,state_read,append,service,cancel_service,record,action,administrator};
     struct firstboot f;int r=fb_begin(&f,&h);
     if(r<=0){if(r<0)record(NULL,"[firstboot] state=unreadable result=failed");return 0;}
     if(d->width<640 || d->height<480){record(NULL,"[firstboot] display=too_small result=failed");return 0;}

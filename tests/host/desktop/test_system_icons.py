@@ -48,7 +48,8 @@ class SystemIconTests(unittest.TestCase):
                     self.assertEqual((w, h), (size, size), row['object'])
                     if name in self.parsed:
                         self.assertEqual(rgba, self.parsed[name][size], row['object'])
-        self.assertEqual(len([r for r in self.rows if r['object'].startswith('applet:')]), 19)
+        # sec-user-04: Users and Passwords are one User Accounts applet.
+        self.assertEqual(len([r for r in self.rows if r['object'].startswith('applet:')]), 18)
         self.assertEqual(self.rows, self.system.inventory(self.system.sources()))
 
     def test_all_staged_icons_have_allowed_provenance(self):

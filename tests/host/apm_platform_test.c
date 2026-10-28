@@ -88,6 +88,9 @@ void biosvm_last_failure(struct biosvm_failure *out) { *out = (struct biosvm_fai
 static uint64_t now_us(void *ctx) { (void)ctx; return ticks * 1000; }
 #include "../../src/kernel/core/power_source.c"
 bool power_devices_resume_ready(void) { return true; }
+/* sec-k08 (U4-3): the kernel's firmware-resume lock (power_source.c). */
+static unsigned resume_locks;
+void security_attention_resume(void) { resume_locks++; }
 #include "../../src/kernel/core/apm_platform.c"
 void task_sleep_ms(uint32_t ms) { ticks += ms; service_once(); }
 int main(void)
@@ -148,6 +151,12 @@ int main(void)
     CHECK(power_source_standby_reason()==CIUKI_POWER_STANDBY_AVAILABLE);
     CHECK(!power_source_standby() && standby_calls==1 && device_sleeps==1 && device_resumes==1);
     CHECK(!sleep_pending && !off_running && !stopped);
+    /* sec-k08 (U4-3): the BIOS's resume notification of a call-73 Stand by
+     * (armed by the desktop) does not lock; an unsolicited one does. */
+    next_event = 11; ticks += 1000; service_once(); CHECK(!resume_locks);
+    next_event = 3; ticks += 1000; service_once(); CHECK(resume_locks == 1);
+    next_event = 4; ticks += 1000; service_once(); CHECK(resume_locks == 2);
+    next_event = 6; ticks += 1000; service_once(); CHECK(resume_locks == 2);
     backend.sleep_request=1;CHECK(!power_source_cancel_standby() && !backend.sleep_request && cancel_calls==1);
     flush_error=-VFS_ETIMEOUT;
     CHECK(power_source_standby()==-ETIMEDOUT && device_sleeps==1 && standby_calls==1);
@@ -170,6 +179,7 @@ int main(void)
 
     CHECK(!discover()); next_event = 8; ticks += 1000; flush_error = -EAGAIN;
     service_once(); CHECK(backend.emergency && !acks);
+    CHECK(resume_locks == 3);   /* sec-k08: locked at the Critical Suspend notification, before the acknowledgment */
     ticks = backend.emergency_start + APM_FLUSH_MS; flush_error = -VFS_ETIMEOUT;
     service_once(); stop_error = -EIO; service_once();
     CHECK(acks == 1 && !backend.emergency && backend.emergency_error == -VFS_ETIMEOUT);

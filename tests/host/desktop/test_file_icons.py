@@ -295,6 +295,10 @@ class FileIconTests(unittest.TestCase):
         other = [fx.Image(32, 32, checker(0, 0, 200), bpp=8)]
         files = {
             'Q3Ademo/quake3.exe': fx.pe([(1, images), (2, other)]),
+            'Q3Ademo/noicon.exe': fx.pe([]),
+            'GAMES/DOOM/DOOM.COM': b'\xb4\x4c\xcd\x21',
+            'Programs/calc': b'\x7fELF native calc fixture',
+            'Programs/unknown-native': b'\x7fELF native fixture without a Start menu mapping',
             'Q3Ademo/readme.txt': b'readme',
             'Windows/Start Menu/Programs/Quake 3 Arena Demo/quake3.lnk': fx.ciuki_link('Quake III', 'C:\\Q3Ademo\\quake3.exe'),
             'Windows/Start Menu/Programs/Quake 3 Arena Demo/second.lnk': fx.ciuki_link('Second', 'C:\\Q3Ademo\\quake3.exe', 'C:\\Q3Ademo\\quake3.exe', -2),
@@ -342,6 +346,10 @@ class FileIconTests(unittest.TestCase):
                 elif own == 0:
                     self.assertEqual(r['loaded'], '0', path)
             check('/Q3Ademo/quake3.exe', 1, 'application-x-executable', red32, '/Q3Ademo/quake3.exe')
+            check('/Q3Ademo/noicon.exe', 1, 'application-x-executable')
+            check('/GAMES/DOOM/DOOM.COM', 1, 'application-x-executable')
+            check('/Programs/calc', 0, 'program:calc')
+            check('/Programs/unknown-native', 0, 'program:unknown-native')
             menu = '/Windows/Start Menu/Programs/Quake 3 Arena Demo/'
             check(menu + 'quake3.lnk', 1, 'application-x-executable', red32, '/Q3Ademo/quake3.exe')
             check(menu + 'second.lnk', 1, 'application-x-executable', blue32, index=-2)
@@ -371,7 +379,8 @@ class FileIconTests(unittest.TestCase):
             env = {'FILE_ICONS_ROOT': str(root)}
             red16, red32 = fx.fnv(images[0].expected()), fx.fnv(images[1].expected())
             readme = '/Windows/Start Menu/Programs/Quake 3 Arena Demo/readme.lnk'
-            keys = ['/Q3Ademo/quake3.exe', '/Q3Ademo/quake3.exe|1', '/Documents/notes.txt', '/missing.exe', readme]
+            keys = ['/Q3Ademo/quake3.exe', '/Q3Ademo/quake3.exe|1', '/Documents/notes.txt', '/missing.exe', readme,
+                    '/Programs/calc', '/Programs/unknown-native', '/Q3Ademo/noicon.exe', '/GAMES/DOOM/DOOM.COM']
             for mode in ('sync', 'worker'):
                 out = self.run_tool('cache', mode, *keys, 'link:/Windows/Start Menu/Programs/Quake 3 Arena Demo/quake3.lnk', env=env)
                 lines = {line.split(' key=', 1)[1]: parse(line.split(' key=', 1)[0]) for line in out.splitlines() if ' key=' in line}
@@ -380,10 +389,19 @@ class FileIconTests(unittest.TestCase):
                 self.assertEqual(lines['/Q3Ademo/quake3.exe|1']['fnv32'], f'{fx.fnv(other[0].expected()):08x}')
                 if mode == 'sync':   # the 48 px image the group lacks: the 32 px one scaled up, in line
                     self.assertEqual(lines['/Q3Ademo/quake3.exe']['fnv48'], f'{fx.fnv(fx.area(images[1].expected(), 32, 32, 48)):08x}')
-                self.assertEqual([lines[k]['shortcut'] for k in keys], ['0', '0', '0', '0', '1'])
+                self.assertEqual([lines[k]['shortcut'] for k in keys], ['0', '0', '0', '0', '1', '0', '0', '0', '0'])
                 # Not read (no own icon to find, or missing): the caller draws its default.
                 self.assertEqual((lines['/Documents/notes.txt']['own'], lines['/Documents/notes.txt']['fnv32']), ('0', '00000000'))
                 self.assertEqual((lines['/missing.exe']['own'], lines['/missing.exe']['fnv32']), ('0', '00000000'))
+                # Native programs use the existing Start menu program map via
+                # the file-icon cache; unknown native names use its wildcard.
+                self.assertEqual(lines['/Programs/calc']['fallback'], 'program:calc')
+                self.assertNotEqual(lines['/Programs/calc']['fnv32'], '00000000')
+                self.assertEqual(lines['/Programs/unknown-native']['fallback'], 'program:unknown-native')
+                self.assertNotEqual(lines['/Programs/unknown-native']['fnv32'], '00000000')
+                for path in ('/Q3Ademo/noicon.exe', '/GAMES/DOOM/DOOM.COM'):
+                    self.assertEqual(lines[path]['fallback'], 'application-x-executable')
+                    self.assertNotEqual(lines[path]['fnv32'], '00000000')
                 # A shortcut read whose target has no icon: the target's type (text-x-generic).
                 self.assertEqual((lines[readme]['own'], lines[readme]['fallback']), ('0', 'text-x-generic'))
                 self.assertNotEqual(lines[readme]['fnv32'], '00000000')

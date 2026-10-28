@@ -16,3 +16,39 @@
 - K-Q6: exact Windows XP default parity is not required; differences are documented CiukiOS choices. Zero persistent lockout with the bounded 1 s retry backoff of the model part.
 - K-Q7: answered by model Q2/Q5: ready images leave 500 unset; custom accounts and Guest need 8-63 byte passwords; if every administrator verifier is lost or corrupt, recovery is the Setup CD repair path (physical access is outside the threat model); no implicit empty-password recovery.
 - K-Q8: shutdown/restart allowed to every interactive session including Guest and from the logon screen (physical access is outside the threat model, XP workstation default allows it at the Welcome screen); mixer/display/input preferences are per session, machine defaults are administrator-only; audit INPUT_KEYBOARD_SET forwarding and CIUKI_SETUP_NET_QUERY routing in sec-k04 and refuse unsupported paths until fixed.
+
+## Lead decisions on the sec-sysvc2 and integration questions (2026-10-28 10:29)
+- S2-1 approved: one per-user log location, `<profile>\Local Settings\Application Data\CiukiOS\Logs` (Windows XP keeps non-roaming per-user data and crash reports under Local Settings\Application Data); it supersedes sec-user-05's separate NetSurf and Crash folders. Profile-less sessions keep the machine folders.
+- S2-2 approved: the startup ScanDisk report is a kernel SYSTEM job (call-99 JOB) and the daily registry backup a job of the SYSTEM registry broker; both run as SYSTEM, which is the requirement. No common job queue for now.
+- S2-3 approved: Registry Checker restore and damaged-hive repair apply at the broker's next start, before anything loads the registry, like Windows 98 SCANREG /RESTORE (restart) and XP System Restore.
+- S2-4: backups hold the machine registry, BOOT.CFG, HWPROF.CFG and the settings files; per-user hives stay out for this step. Including them (XP restore points snapshot user hives too) goes to sec-k08's audit with the 4 MiB archive limit.
+- S2-5: `clock.cfg` is read at boot and must be sealed like the other boot settings; sec-k08 adds it behind call-99 SETTING.
+- S2-6: the synchronous backup against the desktop's 5 s request timeout is measured on the Pentium III in the self-test boot.
+- I-1 (integration): the Setup CD carries the machine registry hives that sec-k06 keeps under /System/Security/Registry/Machine (machine configuration Setup installs, like the default hives of a Windows Setup medium); the account seed and bootstrap.state stay excluded (sec-user-02).
+- I-2 (integration, sec-integfix): an owned drive letter without media reports ERROR_NOT_READY (ENXIO) before the sec-k03 subject-aware walk; unknown letters remain ENOENT.
+
+## Lead decisions on the sec-user-04 questions (2026-10-28 10:41)
+- U4-1 approved: the G32 upgrade enrollment amendment before section 7 of `user-security-contract.md`, with its private LOGON/ACCOUNT operation numbers and settings request 11.
+- U4-2 approved: an administrator's log-off of another user's locked session is forced, as Windows XP's "Log Off" of a disconnected user (unsaved data is lost and the dialog says so).
+- U4-3 approved for this step: the desktop raises the lock before Stand by; a firmware-initiated suspend locks when the desktop sees the resume. sec-k08 checks whether a kernel resume hook is needed for the APM/ACPI paths the hardware baseline uses.
+- U4-4: account pictures. Images ship only the default Ciuki portrait for now; a picture set derived from the approved portrait and Tango is a later UI item, never a substitute portrait.
+- U4-5: a Standard user cannot rename their own account (Windows XP limited accounts: change password and picture only); the ACCOUNT service must refuse it, not only the page. sec-k08 fixes it.
+- U4-6: machine-wide power settings (hibernation, the power button action) belong to the machine and are written through the SYSTEM service; per-user schemes stay per user. sec-k08 moves them.
+- U4-7 approved: per-user Desktop and Start Menu in a LOGON session, merged with All Users (the XP union already decided for sec-user-05), superseding sec-user-03's decision 6.
+
+## Lead decisions on the sec-k08 questions (2026-10-28 15:20)
+- K8-1 (S2-4): per-user hives stay out of Registry Checker backups, as in Windows 98, where SCANREG backs up the machine registry and the system INI files.
+- K8-2 (U4-6): the standby and hard-disk timers are per-user scheme settings again, editable by every user, as Windows XP power schemes are. The sealed machine `power.cfg` keeps only the power-button and lid actions.
+- K8-3 (U4-3): confirmed. A firmware-initiated suspend locks every session whose owner has a password, whatever the per-user resume preference. The 2 s window after a resume, in which Ctrl+Alt+Delete may lock instead of opening the menu, is accepted.
+- K8-4: `security.kdf` reports min/median/max and prints WARN above a 1,000 ms median; it never fails the self-test, because the figure depends on the CPU.
+- K8-5: images ship without `power.cfg`; the defaults (button: Shut down, lid: nothing) apply.
+- K8-6: every future directive that adds a syscall, call-99 action, channel operation, device command or policy kind adds its census row in `tests/host/security/policy_census.py`. The census test enforces it.
+- K8-7 (sec-k08b, 2026-10-28 18:15): the kernel programs the hard-disk timer of the live desktop session's user. In Windows 2000/XP the spindown timeout belongs to the per-user power policy ([USER_POWER_POLICY](https://learn.microsoft.com/en-us/windows/win32/api/powrprof/ns-powrprof-user_power_policy) `SpindownTimeoutAc/Dc`); the machine policy stays administrator-only. Call-73 POLICY for the disk timer admits `security_device_desktop(proc_current())` beside the administrator gate; missing or revoked identities are refused, and `power_authorized` (which admits SYSTEM logon roles) is not used.
+
+## Lead decisions on the sec-user-06 questions (2026-10-28 15:21)
+- U6-1 approved: the security acceptance cases are ordinary menu boots chosen by the runner, because a fw_cfg test item replaces the normal boot and LOGON never starts.
+- U6-2 approved: each self-test boot writes one real registry backup to measure it against the desktop's 5 s request limit.
+- U6-3 approved: the input driver's self-test attention entry, refused outside a self-test boot and unreachable from any syscall or SDK path, with its own census row.
+- U6-4: `/Programs/sectest` stays in the image but is hidden from the Start menu and from Add/Remove Programs.
+- U6-5: the pending cases stay pending until their runtime paths exist; `qemu-t23` is the only profile; acc-quake3's title follows the protected installer store path.
+- U6-6 (overlap with sec-k08): one `security.kdf` self-test row, sec-k08's library with an 8 s bound; the self-test budget stays within 600 s.

@@ -822,18 +822,6 @@
     "status": "retained"
   },
   {
-    "icon": "system-lock-screen",
-    "label": "Passwords",
-    "object": "applet:passwords",
-    "previous": "system-lock-screen",
-    "previous_derived_sizes": [
-      48
-    ],
-    "previous_missing_runtime_sizes": [],
-    "source": "apps/desktop/settings_catalog.h",
-    "status": "retained"
-  },
-  {
     "icon": "system-shutdown",
     "label": "Power",
     "object": "applet:power",
@@ -917,7 +905,7 @@
   },
   {
     "icon": "system-users",
-    "label": "Users",
+    "label": "User Accounts",
     "object": "applet:users",
     "previous": "system-users",
     "previous_derived_sizes": [
@@ -1608,17 +1596,6 @@
     "status": "retained"
   },
   {
-    "icon": "system-lock-screen",
-    "object": "apps/desktop/settings_catalog.h:system-lock-screen",
-    "previous": "system-lock-screen",
-    "previous_derived_sizes": [
-      48
-    ],
-    "previous_missing_runtime_sizes": [],
-    "source": "apps/desktop/settings_catalog.h",
-    "status": "retained"
-  },
-  {
     "icon": "system-shutdown",
     "object": "apps/desktop/settings_catalog.h:system-shutdown",
     "previous": "system-shutdown",
@@ -1981,6 +1958,17 @@
     "icon": "emblem-favorite",
     "object": "apps/desktop/shell.c:emblem-favorite",
     "previous": "emblem-favorite",
+    "previous_derived_sizes": [
+      48
+    ],
+    "previous_missing_runtime_sizes": [],
+    "source": "apps/desktop/shell.c",
+    "status": "retained"
+  },
+  {
+    "icon": "emblem-readonly",
+    "object": "apps/desktop/shell.c:emblem-readonly",
+    "previous": "emblem-readonly",
     "previous_derived_sizes": [
       48
     ],
@@ -4157,6 +4145,17 @@
     "icon": "x-office-calendar",
     "object": "program:schedtask",
     "previous": "x-office-calendar",
+    "previous_derived_sizes": [
+      48
+    ],
+    "previous_missing_runtime_sizes": [],
+    "source": "apps/libdeskui/icon_map.c",
+    "status": "retained"
+  },
+  {
+    "icon": "emblem-readonly",
+    "object": "program:sectest",
+    "previous": "emblem-readonly",
     "previous_derived_sizes": [
       48
     ],

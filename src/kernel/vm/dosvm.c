@@ -1162,13 +1162,16 @@ static void idle_poll_return(struct dosvm *v, const struct v86_frame *f)
         return;
     }
 }
+#pragma weak input_read_domain /* sec-k07 */
 void dosvm_input_poll(struct dosvm *v)
 {
     if (v->owner_pid || v->window_input || !dosvm_valid(v->info.key) || input_focus.id != v->info.key.id ||
         !gen_matches(input_focus.generation, v->info.key.generation)) return;
     struct input_event event;
     unsigned budget = 32;
-    while (budget-- && v->key_count < ARRAY_SIZE(v->keyboard) && input_read(&event)) {
+    /* sec-k07: an owner-less VM never reads the trusted logon domain. */
+    while (budget-- && v->key_count < ARRAY_SIZE(v->keyboard) &&
+           (input_read_domain ? input_read_domain(&event, false) : input_read(&event))) {
         if (event.tick - v->input_since >= (1ull << 63)) continue;
         if (event.type == INPUT_TEXT && event.code && event.code < 128)
             dosvm_keyboard(v->info.key, event.code);
@@ -1819,6 +1822,8 @@ int dosvm_destroy(struct dosvm_key key, bool forced)
     /* A failed unlink retains the generation/table for retry, never reuses
      * a slot while its private scratch file still exists. */
     v->info.state = v->overlay_created ? DOSVM_STOPPING : DOSVM_DEAD;
+    /* A retained scratch overlay is unlinked later as the same identity. */
+    if (v->info.state == DOSVM_DEAD) dos_identity_release(&v->identity);
     klog("[dosvm] lifecycle stage=cleanup vm=%u generation=%u result=%d data_loss=%u retained=%u",
          key.id,key.generation,e,v->info.data_loss,v->overlay_created);
     if (rec_active()) rec_emit(dosvm_probe(v), "DATA", "group=vm_cleanup vm=%u generation=%u data_loss=%u error=%d",
@@ -1956,6 +1961,19 @@ static int game_create(const struct dosvm_config *config, struct dosvm **out, st
     }
     v->info.key = (struct dosvm_key){slot + 1, generation};
     v->info.state = DOSVM_CREATING;
+    /* sec-k05: the credential is fixed before any storage, device or guest
+     * work and is never replaced; destroy releases it once DEAD. */
+    if (config && config->identity) {
+        int identity_error = dos_identity_copy(&v->identity, config->identity);
+        if (identity_error) {
+            v->info.key = (struct dosvm_key){0, 0}; v->info.state = DOSVM_DEAD;
+            initializing[slot] = 0;
+            if (ledger_promise) ledger_promise(MM_VM_PRIVATE,-(int32_t)(commitment/PAGE_SIZE),-(int32_t)(commitment/PAGE_SIZE));
+            trace->stage = "identity";
+            return identity_error;
+        }
+    } else dos_identity_internal(&v->identity);
+    dos_identity_gate(&v->identity, &v->file_gate);
     if (config) {
         v->disable_file_bridge=config->disable_file_bridge || config->kernel!=0;
         v->game=config->game; v->kernel=config->kernel;

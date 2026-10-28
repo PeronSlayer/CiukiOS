@@ -23,7 +23,7 @@ static struct proc_thread *object_process(struct process *parent, struct process
 static uint32_t object_create(struct proc_thread *t, uint32_t type, uint32_t value, uint32_t maximum)
 {
     struct ciuki_w32_object_args a
-        = { .action = W32_OBJ_CREATE, .type = type, .value = value, .maximum = maximum };
+        = { .action = W32_OBJ_CREATE, .type = type, .value = value, .maximum = maximum, .access=0x1f0003 };
     CHECK(!w32_object_call(t, &a) && !a.error && a.result && !(a.result & 3));
     return a.result;
 }
@@ -451,7 +451,7 @@ static void test_objects_sections(void)
     CHECK(w32_wait_try(t, &event, 1, false, 0) == W32_WAIT_PENDING);
     uint32_t mutex = object_create(t, W32_OBJ_MUTEX, 0, 0), mh;
     struct w32_object *mo = w32_lookup(t, mutex, 0);
-    CHECK(!w32_handle_install(other, mo, 123, false, &mh));
+    CHECK(!w32_handle_install(other, mo, 0x100001, false, &mh));
     CHECK(w32_wait_try(t, &mutex, 1, false, 0) == 0 && w32_wait_try(t, &mutex, 1, false, 0) == 0
         && mo->u.mutex.recursion == 2);
     struct ciuki_w32_object_args a = { .action = W32_OBJ_RELEASE, .handle = mh };

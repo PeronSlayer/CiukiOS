@@ -21,6 +21,33 @@ static bool hive_backing(const char *name)
     for(unsigned i=0;i<sizeof(names)/sizeof(*names);i++) if(path_equal(name,names[i])) return true;
     return false;
 }
+/* ---- sec-sysvc2: boot inputs among the machine settings (rule table,
+ * "files consumed as privileged configuration during the next boot"): the
+ * loader's and kernel's HWPROF.CFG in C:\SYSTEM, and in C:\SYSTEM\SETTINGS
+ * performance.cfg, its hwprofiles.cfg fallback and the display attempt
+ * files (accel*.cfg: the DM8 keyed markers, the shared accel.cfg and the
+ * retry request, plus each registered driver's declared attempt files).
+ * Sealed by name like the hive slots, without spending the bounded trie;
+ * administrators change them through the SYSTEM SETTING service. */
+extern bool display_attempt_file(const char *) __attribute__((weak));
+static bool node_named(const struct policy_volume *v,uint16_t trie,const char *component,const char *parent)
+{
+    if (trie>=v->count || !trie || !path_equal(v->rules[trie].component,component)) return false;
+    uint16_t up=v->rules[trie].parent;
+    if (!parent) return up==0;
+    return up && up<v->count && v->rules[up].parent==0 && path_equal(v->rules[up].component,parent);
+}
+static bool boot_input(const struct policy_volume *v,const struct policy_label *p,const char *name)
+{
+    if (node_named(v,p->trie,"System",0)) return path_equal(name,"HWPROF.CFG");
+    if (!node_named(v,p->trie,"Settings","System")) return false;
+    return path_equal(name,"performance.cfg") || path_equal(name,"hwprofiles.cfg") ||
+           path_wildcard("accel*.cfg",name) || (display_attempt_file && display_attempt_file(name)) ||
+           /* sec-k08: clock.cfg, the time zone store read at boot (S2-5), and
+            * power.cfg, the machine power buttons every desktop reads (U4-6). */
+           path_equal(name,"clock.cfg") || path_equal(name,"power.cfg");
+}
+/* ---- end sec-sysvc2 ---- */
 uint64_t policy_epoch(const struct policy_volume *v)
 {
     if(!v) return 0;
@@ -81,7 +108,14 @@ int policy_init(struct policy_volume *v,uint64_t id,uint64_t mount,bool system,
         {"/Program Files",POLICY_PROGRAM},{"/Documents",POLICY_SHARED},
         {"/Documents/Desktop",POLICY_SHARED},
         {"/Documents/Desktop/Quake III Arena Demo",POLICY_PROGRAM},{"/CIUKILDR",POLICY_SEALED},
-        {"/BOOT.CFG",POLICY_SEALED}
+        {"/BOOT.CFG",POLICY_SEALED},
+        /* sec-sysvc: System File Checker's baseline, the trust input of the
+         * SYSTEM restore service; only the image builder writes it. */
+        {"/System/SFC.LST",POLICY_SEALED},
+        /* sec-sysvc2: Registry Checker's backups, the trust input of the
+         * registry broker's restore (XP keeps System Restore's data in the
+         * SYSTEM-only System Volume Information). */
+        {"/System/SysBckup",POLICY_SECRET}
     };
     if (system) for (unsigned i=0;i<sizeof(defaults)/sizeof(*defaults);i++) {
         int e=policy_rule_add(v,defaults[i].path,defaults[i].kind); if (e) return e;
@@ -135,8 +169,11 @@ int policy_child(const struct policy_volume *v,const struct policy_label *p,
             if (v->rules[i].kind!=POLICY_PUBLIC) l.kind=v->rules[i].kind;
             break;
         }
+    /* sec-own: a transaction in flight (owners->busy) is not unavailable
+     * metadata. Its in-flight names stay fenced by pending/root intents; the
+     * non-preemptible kernel mutates the in-memory map between yields only. */
     if(p->kind==POLICY_ROOT && l.kind==POLICY_PUBLIC && !v->removable &&
-        (!v->owners || !v->owners->ready || v->owners->busy)) l.kind=POLICY_DENY;
+        (!v->owners || !v->owners->ready)) l.kind=POLICY_DENY;
     if (locator) {
         if(p->kind!=POLICY_ROOT && p->kind!=POLICY_PROFILES) return -EIO;
         struct owner_record record;
@@ -161,6 +198,7 @@ int policy_child(const struct policy_volume *v,const struct policy_label *p,
     if((windows || (p->kind==POLICY_PROFILE && p->anchor)) && hive_backing(name)) {
         l.kind=POLICY_SECRET; l.anchor=1;
     }
+    if (l.trie==UINT16_MAX && boot_input(v,p,name)) { l.kind=POLICY_SEALED; l.anchor=1; } /* sec-sysvc2 */
     /* Ownership never overrides a more specific service-only subtree. */
     if (p->kind==POLICY_PROFILE && p->anchor && p->trie!=POLICY_RULES && path_equal(name,"Settings")) { l.trie=POLICY_RULES; l.anchor=1; }
     if (p->trie==POLICY_RULES && (path_equal(name,"Registry") || path_equal(name,"Restart"))) {
@@ -174,10 +212,13 @@ int policy_check(const struct policy_volume *v,const struct policy_label *l,
     if (!s || !access || (access&~POLICY_ALL)) return -EACCES;
     if (!security_subject_live(s)) return -ESRCH;
     if (!v || !l || !v->ready || !l->object || l->mount!=v->mount || l->epoch!=policy_epoch(v)) return -EACCES;
+    /* sec-k08 (coverage audit): a label kind outside the table is corrupt
+     * metadata, never a public object; it denies every subject. */
+    if (l->kind>POLICY_DENY) return -EACCES;
     const struct ciuki_credential *c=security_subject_credential(s);
     if (!c || c->group_count>8) return -EACCES;
     if ((l->kind==POLICY_PROFILE || l->kind==POLICY_CREATOR || l->kind==POLICY_PUBLIC) &&
-        (!v->owners || !v->owners->ready || v->owners->busy)) return -EIO;
+        (!v->owners || !v->owners->ready)) return -EIO; /* sec-own: busy is not unavailable (policy_child) */
     if ((v->readonly || l->kind==POLICY_READONLY) && (access&POLICY_MUTATE)) return -EROFS;
     if (l->kind==POLICY_DENY) return -EACCES;
     if (!c->uid) return 0;

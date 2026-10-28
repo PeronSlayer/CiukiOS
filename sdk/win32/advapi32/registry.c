@@ -39,23 +39,41 @@ uint32_t w32r_registry_access(uint32_t a)
     for(unsigned i=0;i<5;i++)if(a&map[i][0])a=(a&~map[i][0])|map[i][1];
     return a&~0x300u;
 }
+/* sec-user-05 (Windows XP): MAXIMUM_ALLOWED asks for every right the key's
+ * security grants the caller (Microsoft, "Requesting Access Rights to an
+ * Object"), and RegOpenKey, RegCreateKey and RegConnectRegistry use it as
+ * their default mask (Wine advapi32). w32srv admits or refuses a whole mask
+ * under the sec-k06 policy, so the full mask is asked first and, when it is
+ * refused (5), KEY_READ: a Standard user's HKLM key opens for reading.
+ * Rights named next to MAXIMUM_ALLOWED stay in both masks, so an explicit
+ * write request is still refused with 5. A create refused that way opens an
+ * existing key for reading (NtCreateKey opens an existing key with the
+ * requested access); a key that does not exist stays refused with 5. */
+#define REG_MAXIMUM_ALLOWED 0x02000000u
 static LONG open_key(uint32_t key,const void *path,uint32_t options,uint32_t access,uint32_t *out,int create,int wide,uint32_t *disp)
 {
-    access=w32r_registry_access(access);
+    int maximum=!!(access&REG_MAXIMUM_ALLOWED);
+    access=w32r_registry_access(access&~REG_MAXIMUM_ALLOWED);
     if(!out||options)return 87;*out=0;
-    uint32_t e=call(create?W32R_CREATE:W32R_OPEN,key,path,NULL,wide,0,0,access,options,NULL,0);
-    if(!e){*out=reply->key;if(disp)*disp=reply->disposition;}return end(e);
+    unsigned op=create?W32R_CREATE:W32R_OPEN;
+    uint32_t e=call(op,key,path,NULL,wide,0,0,maximum?access|0xf003fu:access,options,NULL,0);
+    int opened=0;
+    if(e==5&&maximum&&(access|0x20019u)!=(access|0xf003fu)){
+        end(e);e=call(W32R_OPEN,key,path,NULL,wide,0,0,access|0x20019u,options,NULL,0);
+        if(create&&e==2)e=5;opened=create;
+    }
+    if(!e){*out=reply->key;if(disp)*disp=opened?2:reply->disposition;}return end(e);
 }
 LONG W32API RegOpenKeyExA(uint32_t k,const char *p,uint32_t o,uint32_t a,uint32_t *h){return open_key(k,p,o,a,h,0,0,NULL);}
 LONG W32API RegOpenKeyExW(uint32_t k,const WCHAR *p,uint32_t o,uint32_t a,uint32_t *h){return open_key(k,p,o,a,h,0,1,NULL);}
-LONG W32API RegOpenKeyA(uint32_t k,const char *p,uint32_t *h){return open_key(k,p,0,0xf003f,h,0,0,NULL);}
-LONG W32API RegOpenKeyW(uint32_t k,const WCHAR *p,uint32_t *h){return open_key(k,p,0,0xf003f,h,0,1,NULL);}
+LONG W32API RegOpenKeyA(uint32_t k,const char *p,uint32_t *h){return open_key(k,p,0,REG_MAXIMUM_ALLOWED,h,0,0,NULL);}
+LONG W32API RegOpenKeyW(uint32_t k,const WCHAR *p,uint32_t *h){return open_key(k,p,0,REG_MAXIMUM_ALLOWED,h,0,1,NULL);}
 LONG W32API RegCreateKeyExA(uint32_t k,const char *p,uint32_t reserved,char *cls,uint32_t options,uint32_t access,void *security,uint32_t *h,uint32_t *disp)
 {(void)cls;(void)security;if(reserved)return 87;return open_key(k,p,options,access,h,1,0,disp);}
 LONG W32API RegCreateKeyExW(uint32_t k,const WCHAR *p,uint32_t reserved,WCHAR *cls,uint32_t options,uint32_t access,void *security,uint32_t *h,uint32_t *disp)
 {(void)cls;(void)security;if(reserved)return 87;return open_key(k,p,options,access,h,1,1,disp);}
-LONG W32API RegCreateKeyA(uint32_t k,const char *p,uint32_t *h){return open_key(k,p,0,0xf003f,h,1,0,NULL);}
-LONG W32API RegCreateKeyW(uint32_t k,const WCHAR *p,uint32_t *h){return open_key(k,p,0,0xf003f,h,1,1,NULL);}
+LONG W32API RegCreateKeyA(uint32_t k,const char *p,uint32_t *h){return open_key(k,p,0,REG_MAXIMUM_ALLOWED,h,1,0,NULL);}
+LONG W32API RegCreateKeyW(uint32_t k,const WCHAR *p,uint32_t *h){return open_key(k,p,0,REG_MAXIMUM_ALLOWED,h,1,1,NULL);}
 void w32_registry_forget(uint32_t);
 /* Keys from NtOpenKey/NtCreateKey may be closed here; ntdll forgets them. */
 LONG W32API RegCloseKey(uint32_t key){LONG e=end(call(W32R_CLOSE,key,NULL,NULL,0,0,0,0,0,NULL,0));if(!e)w32_registry_forget(key);return e;}
@@ -138,18 +156,9 @@ static LONG legacy_set(uint32_t k,const void *p,uint32_t type,const void *d,uint
 }
 LONG W32API RegSetValueA(uint32_t k,const char *p,uint32_t t,const char *d,uint32_t n){return legacy_set(k,p,t,d,n,0);}
 LONG W32API RegSetValueW(uint32_t k,const WCHAR *p,uint32_t t,const WCHAR *d,uint32_t n){return legacy_set(k,p,t,d,n,1);}
-static int username(void *name,uint32_t *count,int wide)
-{
-    if(!count){w32r_last_error(87);return 0;}
-    uint32_t e=call(W32R_USERNAME,0,NULL,NULL,0,0,0,0,0,NULL,0);
-    if(!e){uint32_t n=reply->data_bytes;
-        if(!n || n>32 || tail[n-1])e=13;
-        else if(!name||*count<n){*count=n;e=122;}
-        else{if(wide){for(unsigned i=0;i<n;i++)((WCHAR *)name)[i]=tail[i];}else w32_copy(name,tail,n);*count=n;}}
-    end(e);if(e)w32r_last_error(e);return !e;
-}
-int W32API GetUserNameA(char *n,uint32_t *c){return username(n,c,0);}
-int W32API GetUserNameW(WCHAR *n,uint32_t *c){return username(n,c,1);}
+/* sec-user-05: GetUserNameA/W moved to identity.c (authenticated account
+ * name from the kernel credential and ACCOUNTS LOOKUP, not w32srv's
+ * desktop-selected profile label). */
 int W32API RevertToSelf(void){return 1;}
 int W32API ImpersonateSelf(uint32_t level){if(level>3){w32r_last_error(87);return 0;}return 1;}
 int W32API AccessCheck(void *sd,uint32_t token,uint32_t desired,void *mapping,void *privileges,uint32_t *length,uint32_t *granted,int *status)

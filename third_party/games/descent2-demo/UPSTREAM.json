@@ -1,0 +1,16 @@
+{
+  "project": "Descent II demo (original DOS demo)",
+  "authors": "Parallax Software / Interplay",
+  "archive": "d2demo10.zip",
+  "sources": [
+    "https://image.dosgamesarchive.com/games/d2demo10.zip"
+  ],
+  "sha256": "lead-pins",
+  "size": null,
+  "status": "lead-pins",
+  "license": "Original demo package only. Exact package terms and licence member hashes await lead download/read-back; no bundling grant asserted.",
+  "license_files": [],
+  "redistribution": "test-media only; package review pending",
+  "game_data": "No retail, registered or abandonware payload. Never commit game bytes.",
+  "qualification": "Pin the download, inspect original installer and manual, record exact licence clauses and installed tree before running."
+}

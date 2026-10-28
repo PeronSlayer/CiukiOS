@@ -137,7 +137,8 @@ class AccessoriesTests(unittest.TestCase):
         self.assertEqual(self.run_native("calc"), self.run_native("calc"))
 
     def test_catalog_registration(self):
-        """Every catalog entry is built, installed in /Programs and has a Tango icon in the theme archive."""
+        """Every catalog entry is built, installed in /Programs and has a system icon: a Tango icon in the theme
+        archive or one of the selected Haiku supplements (assets/icons/README.md) in the pinned Haiku archive."""
         catalog = (ROOT / "apps/desktop/catalog.h").read_text()
         entries = re.findall(r'\{"([a-z]+)", "([^"]+)", "([a-z-]+)", ([01]),', catalog)
         names = [e[0] for e in entries]
@@ -153,8 +154,15 @@ class AccessoriesTests(unittest.TestCase):
         self.assertEqual(licenses["/system/licenses/stb_image.txt"], ROOT / "third_party/stb/LICENSE")
         listing = subprocess.run(["tar", "tzf", str(ROOT / "assets/icons/upstream/tango-icon-theme-0.8.90.tar.gz")],
                                  check=True, capture_output=True, text=True).stdout
+        haiku = load("acc_system_icons", ROOT / "apps/desktop/system_icons.py").SELECTED
+        haiku_listing = set(subprocess.run(["tar", "tzf", str(ROOT / "assets/icons/upstream/haiku-icons.tar.gz")],
+                                           check=True, capture_output=True, text=True).stdout.split())
         for _, _, icon, _ in entries:
-            self.assertRegex(listing, rf"/32x32/[a-z]+/{re.escape(icon)}\.png")
+            if icon in haiku:   # the store's Haiku supplement: native 16/32 and the 64 px source of 22/48
+                for size in (16, 32, 64):
+                    self.assertIn(f"haiku-icons-master/png/{size}x{size}/{haiku[icon]}.png", haiku_listing, icon)
+            else:
+                self.assertRegex(listing, rf"/32x32/[a-z]+/{re.escape(icon)}\.png")
         # File-taking accessories are exactly the ones the desktop passes LAUNCH arguments to.
         # G14: ScanDisk takes a drive root (Check Now on the drive's Tools tab).
         self.assertEqual({e[0] for e in entries if e[3] == "1"}, {"clipbrd", "help", "music", "paint", "scandisk", "viewer", "wordpad"})

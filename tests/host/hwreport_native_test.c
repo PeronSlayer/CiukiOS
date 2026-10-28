@@ -35,6 +35,21 @@ static int report_rename(const char *a,const char *b)
 { char x[4096],y[4096]; path(x,a); path(y,b); return rename(x,y); }
 static int report_unlink(const char *a)
 { char x[4096]; path(x,a); return unlink(x); }
+/* sec-sysvc: the SYSTEM log service. 0: ENOSYS (an older kernel, the files
+ * are read directly), 1: serves the folder's logs, 2: EPERM. */
+static int log_service; static unsigned service_reads;
+int ciuki_system_log_read(unsigned scope,const char *name,uint32_t offset,void *buffer,size_t capacity,size_t *got,uint32_t *total)
+{
+    assert(scope==CIUKI_SYSTEM_LOG_MACHINE && capacity<=CIUKI_SYSTEM_LOG_DATA_MAX && got && total);
+    if (!log_service) { errno=ENOSYS; return -1; }
+    if (log_service==2) { errno=EPERM; return -1; }
+    char p[4096],in[64]; snprintf(in,sizeof(in),"/%s",name); path(p,in);
+    FILE *f=fopen(p,"rb"); if (!f) { errno=ENOENT; return -1; }
+    assert(!fseek(f,0,SEEK_END)); long size=ftell(f); assert(size>=0);
+    *total=(uint32_t)size; *got=0;
+    if (offset<(uint32_t)size && capacity) { assert(!fseek(f,(long)offset,SEEK_SET)); *got=fread(buffer,1,capacity,f); }
+    fclose(f); service_reads++; return 0;
+}
 int ciuki_devctl(int fd,uint32_t op,void *out,uint32_t size)
 {
     (void)fd; assert(op==MEDIA_GET_STATE && size==sizeof(struct ciuki_media_state)); media_queries++;
@@ -70,6 +85,15 @@ int main(int argc,char **argv)
     recent[recent_length]=0;
     assert(strstr(recent,"count=41")<strstr(recent,"count=42"));
     assert(!memcmp(recent+recent_length-32,"[ata] count=42\n",15));
+    /* sec-sysvc: the same reads through the SYSTEM log service, which an
+     * administrator uses on a managed system volume; EPERM otherwise. */
+    {
+        log_service=1; char through[HR_LOG_MAX+1]; size_t again=0;
+        assert(!read_log(through,&again,1,&h) && again==recent_length && !memcmp(through,recent,again));
+        assert(!hr_native_prepare_logs(n) && strstr(n->full_logs,"count=42") && strstr(n->full_logs,"[cpu] pages=123") && service_reads>=4);
+        log_service=2; assert(read_log(through,&again,0,&h)==-EPERM && hr_native_prepare_logs(n)==-EPERM);
+        log_service=0;
+    }
     h.log_position=2048; assert(read_log(recent,&recent_length,1,&h)==-EIO);
     h.log_active=0; assert(read_log(recent,&recent_length,1,&h)==-EAGAIN);
     path(p,"/BOOT.LOG"); assert(!unlink(p)); assert(hr_native_prepare_logs(n)==-ENOENT);
@@ -100,5 +124,5 @@ int main(int argc,char **argv)
         assert(!unlink(p));
     }
     hr_native_free(n); free(n);
-    puts("PASS native report: complete sanitized log archive, absent rotated log, actual atomic files, USB generation/rescue checks, existing temp, hardware names, bounded BUILD.TXT read");
+    puts("PASS native report: complete sanitized log archive, absent rotated log, actual atomic files, USB generation/rescue checks, existing temp, hardware names, bounded BUILD.TXT read; SYSTEM log service reads");
 }

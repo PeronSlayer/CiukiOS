@@ -3,6 +3,14 @@
 Contract 4 of 7 required by decision D11. Author: Claude (lead). Reviewer:
 Codex. Status: approved after the Claude–Codex cross-review, 2026-10-09.
 
+> **Superseded in part by user security** (sec-user-06 reconciliation, 2026-10-28). Access on the managed system volume and on
+> additional fixed and removable volumes is decided by the kernel's per-subject path policy, not by
+> this contract's single-user namespace: [rule table, owner metadata and enforcement points](user-security-kernel.md#filesystem-path-policy)
+> and [paths and permissions consumed by the services](user-security-contract.md#61-paths-and-permissions-consumed-from-the-kernel-half);
+> raw whole-disk access on the managed system disk is refused to every user (K-Q4,
+> [devices and administration](user-security-kernel.md#devices-administration-and-authority-migration)). Runtime cases:
+> `tests/suites/sec-users.json` su-04-roles (sectest through the production calls) and su-13-crash.
+
 ## Decision
 
 Storage is layered: block devices, an MBR partition layer, one block cache,

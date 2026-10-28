@@ -627,6 +627,26 @@ struct desktop {
     int (*power_state)(void); /* query capabilities and irreversible progress */
     void (*power_prepare)(struct desktop *);
     void (*logoff)(struct desktop *); /* G32: called after G3 has closed the session */
+    /* --- sec-user-03 (begin): desktop of a session the trusted LOGON service
+     * launched (SESSION_LAUNCH labels present). No desktop-owned logon gate:
+     * Lock goes to LOGON (SESSION_LOCK), Log Off/Shut Down end the session
+     * after G3's query/veto and LOGON collects it; a secure-menu choice made
+     * on the Ctrl+Alt+Del screen is fetched (SESSION_EVENT) after the
+     * activation's RESYNC. session_lock: 0 locking, LGN_STATUS_NO_PASSWORD
+     * (set-password guidance), other -errno. */
+    int logon_session, logon_query;
+    int (*session_lock)(struct desktop *);
+    /* --- sec-user-03 (end) --- */
+    /* --- sec-user-04: SESSION_EVENT notices to LOGON (logon_proto.h
+     * LGN_NOTICE_*): PASSWORD (own password set), SAVER (protected saver
+     * dismissal) and STANDBY (password-on-resume armed before Stand by or at
+     * an unarmed resume); *flags gets LGN_EVENT_* (BLANK: no lock possible,
+     * LOCKED: the trusted gate is up). 0 or -errno. resume_arming/until:
+     * the Stand by sequence waits (bounded) for the gate before sleeping. */
+    int (*session_secure)(struct desktop *, unsigned notice, unsigned *flags);
+    int resume_arming;
+    uint64_t resume_arm_until;
+    /* --- end sec-user-04 --- */
     int (*power_alive)(struct desktop *, uint32_t pid);
     /* T23 c42f556e: the live Win32 processes (w32srv's authenticated
      * clients), including those whose desktop connection ended or that have
@@ -863,6 +883,11 @@ void desk_flush(struct desktop *, int index);
 void desk_heartbeat(struct desktop *, uint64_t now_ns);
 void desk_focus(struct desktop *, int index);
 int desk_modal_target(const struct desktop *, int index);
+/* fx-acc1: "[desktop] window pid= window= owner= modal= state= title=" once
+ * per title or visibility change of a program window (v3), also in quiet
+ * boots (input.c). state: shown, minimized, hidden or closed. */
+void desk_window_record(const struct desktop *, int index, const char *state);
+const char *desk_window_state(const struct desktop *, int index);
 int desk_next_window(const struct desktop *, int excluded, uint32_t pid, const char *application);
 void desk_preferences_changed(struct desktop *);
 void desk_preferences_persistent(const struct desktop *, struct ciuki_settings *);

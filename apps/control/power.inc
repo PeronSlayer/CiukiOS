@@ -38,11 +38,42 @@ static int pw_refresh(struct cp_app *a)
                       a->pw_events.version == CIUKI_POWER_EVENTS_VERSION;
     return (before.bays != 0) != (a->pw_summary.bays != 0) || standby != pw_standby(a);
 }
+/* --- sec-k08 (lead decision U4-6): in a LOGON session the power-button
+ * and lid actions are the machine's, read from power.cfg and saved through
+ * the SYSTEM setting service; the page shows the machine's values to
+ * everyone and the service refuses Standard users and Guest. */
+static void pw_machine_load(struct cp_app *a)
+{
+    if (!a->host.power_machine_load) return;
+    char buf[PP_MACHINE_MAX + 1]; size_t n = 0; struct pp_machine m;
+    if (a->host.power_machine_load(a->host.ctx, buf, sizeof(buf), &n) || pp_machine_parse(&m, buf, n)) pp_machine_defaults(&m);
+    pp_machine_apply(&a->pw_cfg, &m);
+}
+static void pw_machine_save(struct cp_app *a)
+{
+    struct pp_machine m; pp_machine_take(&m, &a->pw_cfg);
+    char buf[PP_MACHINE_MAX + 1]; size_t n = pp_machine_format(&m, buf, sizeof(buf));
+    int e = n ? a->host.power_machine_save(a->host.ctx, buf, n) : -E2BIG;
+    if (e) {
+        pw_machine_load(a);   /* show what the machine keeps */
+        text(a, C_STATUS, e == -EPERM ? "You must be an administrator to change the power buttons." :
+                          "The power settings could not be saved.");
+        return;
+    }
+    int r = a->host.apply ? a->host.apply(a->host.ctx, DESK_SETTINGS_RELOAD, 0, 0) : -1;
+    text(a, C_STATUS, r ? "Saved. The desktop applies it at its next start." : "Saved and applied.");
+}
+/* --- end sec-k08 --- */
 static void pw_open(struct cp_app *a)
 {
     static struct ciuki_settings now;
     if (load(a,&now)) now=a->cfg;
     (void)pp_load(&a->pw_cfg, now.extra);
+    /* sec-user-04: the session's own resume preference, and the machine
+     * policy fields a Standard user or Guest sees but cannot change. */
+    a->secure_resume = desk_secure_pref(now.extra, DESK_SECURE_RESUME);
+    a->machine_locked = a->host.self_admin && !a->host.self_admin(a->host.ctx);
+    pw_machine_load(a);   /* sec-k08 (U4-6) */
     a->pw_tab = power_meter_requested ? 2 : 0; a->pw_details = 1;
     power_meter_requested = 0;
     (void)pw_refresh(a);
@@ -124,10 +155,11 @@ static void pw_build(struct cp_app *a)
             for (int src = 0; src < 1 + battery; src++) {
                 pw_choice_text(a->pw_cells[src][t], sizeof(a->pw_cells[src][t]), c->schemes[scheme].timer[src][t]);
                 w = add(a, DU_BUTTON, PW_CELL + src * PP_TIMERS + t, 224 + src * 160, 142 + t * 32, 150, 24, a->pw_cells[src][t]);
-                w->disabled = t == PP_STANDBY && !standby;
+                w->disabled = (t == PP_STANDBY && !standby) || (a->machine_locked && t != PP_MONITOR);   /* sec-user-04 */
             }
         }
-        add(a, DU_LABEL, PW_NOTE, 32, 244, CP_WIDTH - 64, 16, standby ? "" : pw_standby_text(a));
+        add(a, DU_LABEL, PW_NOTE, 32, 244, CP_WIDTH - 64, 16, a->machine_locked ? "You must be an administrator to change this setting." :
+                                                               standby ? "" : pw_standby_text(a));   /* sec-user-04 */
         add(a, DU_LABEL, PW_SOURCE, 24, 284, CP_WIDTH - 48, 16, a->pw_text[2]);
     } else if (a->pw_tab == 1) {
         pw_alarm_widgets(a, &c->low, PW_LOW_GROUP, 40, "Low battery alarm", "Set off &low battery alarm when power level reaches:");
@@ -142,18 +174,20 @@ static void pw_build(struct cp_app *a)
     } else {
         w = add(a, DU_CHECKBOX, PW_SHOW_METER, 24, 44, 400, 22, "Show &power meter on taskbar"); w->value = c->show_meter;
         w = add(a, DU_CHECKBOX, PW_PASSWORD, 24, 70, 500, 22, "Prompt for pass&word when computer goes off stand by");
-        w->value = c->password;
-        add(a, DU_LABEL, PW_PASSWORD_NOTE, 48, 94, 480, 16, "Uses the logged-on profile password. FAT files remain shared.");
+        w->value = accounts_mode(a) ? a->secure_resume : c->password;   /* sec-user-04: per-user in a LOGON session */
+        add(a, DU_LABEL, PW_PASSWORD_NOTE, 48, 94, 480, 16, accounts_mode(a) ? "Uses your account password; locked before the computer stands by." :
+                                                                   "Uses the logged-on profile password. FAT files remain shared.");
         w = add(a, DU_GROUP, PW_BUTTONS_GROUP, 16, 116, CP_WIDTH - 32, 124, "Power buttons"); w->anchors = DU_ANCHOR_GROW_X;
         add(a, DU_LABEL, PW_BUTTON_L, 32, 136, 480, 16, "When I press the power &button on my computer:");
         add(a, DU_BUTTON, PW_BUTTON, 32, 156, 200, 24,
-            c->power_button == PP_BUTTON_STANDBY && standby ? "Stand by" : "Shut down");
+            c->power_button == PP_BUTTON_STANDBY && standby ? "Stand by" : "Shut down")->disabled = a->machine_locked;   /* sec-user-04 */
         if (battery || a->pw_lid_known) {
             add(a, DU_LABEL, PW_LID_L, 32, 188, 480, 16, "When I close the &lid of my portable computer:");
             int lid = c->lid == PP_LID_STANDBY && !standby ? PP_LID_SHUTDOWN : c->lid;
-            add(a, DU_BUTTON, PW_LID, 32, 208, 200, 24, lid == PP_LID_STANDBY ? "Stand by" : lid == PP_LID_SHUTDOWN ? "Shut down" : "None");
+            add(a, DU_BUTTON, PW_LID, 32, 208, 200, 24, lid == PP_LID_STANDBY ? "Stand by" : lid == PP_LID_SHUTDOWN ? "Shut down" : "None")->disabled = a->machine_locked;
         }
-        add(a, DU_LABEL, PW_ADV_NOTE, 24, 250, CP_WIDTH - 48, 16, pw_standby_text(a));
+        add(a, DU_LABEL, PW_ADV_NOTE, 24, 250, CP_WIDTH - 48, 16, a->machine_locked ? "You must be an administrator to change the power buttons." :
+                                                                   pw_standby_text(a));   /* sec-user-04 */
         add(a, DU_BUTTON, CP_POWER_ACTION, 24, 300, 160, 24, "Shut Down...")->disabled = !a->host.power;
     }
 }
@@ -213,7 +247,9 @@ static void pw_chosen(struct cp_app *a, int owner, int value)
     else if (owner == PW_BUTTON) c->power_button = value;
     else if (owner == PW_LID) c->lid = value;
     else return;
-    pw_save(a); build(a);
+    if ((owner == PW_BUTTON || owner == PW_LID) && a->host.power_machine_save) pw_machine_save(a);   /* sec-k08 */
+    else pw_save(a);
+    build(a);
 }
 static int pw_event(struct cp_app *a, const struct du_event *e)
 {
@@ -233,7 +269,7 @@ static int pw_event(struct cp_app *a, const struct du_event *e)
         }
         return 1;
     case PW_SCHEME: case PW_LOW_ACTION: case PW_CRIT_ACTION: case PW_BUTTON: case PW_LID:
-        if (e->type == DU_EV_ACTIVATE) pw_open_menu(a, e->id);
+        if (e->type == DU_EV_ACTIVATE && !(a->machine_locked && (e->id == PW_BUTTON || e->id == PW_LID))) pw_open_menu(a, e->id);
         return 1;
     case PW_SAVE_AS:
         if (e->type == DU_EV_ACTIVATE) du_input_box(u, PW_SAVE_NAME, "Save Scheme", "Save this power scheme as:", "");
@@ -260,7 +296,10 @@ static int pw_event(struct cp_app *a, const struct du_event *e)
         if (e->type == DU_EV_CHANGE) { a->pw_details = e->index != 0; build(a); }
         return 1;
     case PW_PASSWORD:
-        if (e->type == DU_EV_CHANGE) { c->password = e->index != 0; pw_save(a); }
+        if (e->type == DU_EV_CHANGE && accounts_mode(a)) {   /* sec-user-04 */
+            if (secure_pref_save(a, DESK_SECURE_RESUME, e->index != 0)) text(a, C_STATUS, "The power settings could not be saved.");
+            else { a->secure_resume = e->index != 0; text(a, C_STATUS, "Saved and applied."); }
+        } else if (e->type == DU_EV_CHANGE) { c->password = e->index != 0; pw_save(a); }
         return 1;
     case PW_SHOW_METER:
         if (e->type == DU_EV_CHANGE) { c->show_meter = e->index != 0; pw_save(a); }
@@ -268,7 +307,7 @@ static int pw_event(struct cp_app *a, const struct du_event *e)
     default: break;
     }
     if (e->id >= PW_CELL && e->id < PW_CELL + PP_SOURCES * PP_TIMERS) {
-        if (e->type == DU_EV_ACTIVATE) pw_open_menu(a, e->id);
+        if (e->type == DU_EV_ACTIVATE && !(a->machine_locked && (e->id - PW_CELL) % PP_TIMERS != PP_MONITOR)) pw_open_menu(a, e->id);
         return 1;
     }
     if (!alarm) return 0;

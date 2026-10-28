@@ -1,0 +1,4132 @@
+{
+ "schema_version": 1,
+ "image": "full",
+ "acceptance": true,
+ "directive": "sec-user-06: the security runtime cases (user-security-contract.md 10.1, SU-01..14 and the round-1/round-2 additions) on qemu-t23, selected by the runner (scripts/test/acceptance.sh --suite sec-users), never by a build variant. Pending cases name the host evidence that covers them meanwhile.",
+ "cases": [
+  {
+   "kind": "acceptance",
+   "probe": "acceptance",
+   "profile": "qemu-t23",
+   "expected": {
+    "evidence_kind": "acceptance"
+   },
+   "id": "su-01-ready",
+   "item": 1,
+   "timeout": 3600,
+   "title": "SU-01 ready image: automatic logon of the sole blank CiukiUser (544+545, never SYSTEM), Guest and CiukiAdministrator off, Log Off stays at Welcome for the boot, the next boot logs on again; administrator raw disk, account store and backups refused",
+   "resets": 1,
+   "items": {
+    "1": [
+     "ready",
+     "logoff",
+     "reboot"
+    ]
+   },
+   "steps": [
+    {
+     "template": "boot",
+     "prefix": "b1",
+     "check": "ready",
+     "settle": 15
+    },
+    {
+     "name": "stadmin-run",
+     "check": "ready",
+     "actions": [
+      {
+       "keys": "meta_l+r"
+      }
+     ],
+     "screen_settle": {
+      "changed": true,
+      "stable": 1.5,
+      "timeout": 30
+     },
+     "note": "Win+R opens Run"
+    },
+    {
+     "name": "stadmin-type",
+     "check": "ready",
+     "actions": [
+      {
+       "text": "sectest --expect=admin"
+      },
+      {
+       "keys": "ret"
+      }
+     ]
+    },
+    {
+     "name": "stadmin-done",
+     "check": "ready",
+     "timeout": 240,
+     "wait": [
+      "^\\[user \\d+\\] \\[desktop\\] launch name=sectest pid=(?P<stadmin_pid>[1-9]\\d*) error=0 ",
+      "^\\[console\\] sectest begin version=1 uid=1000 gid=\\d+ session=\\d+ groups=544,545 role=admin expect=admin profile=\\S+ result=0 verdict=pass$",
+      "^\\[console\\] sectest end role=admin checks=\\d+ passed=\\d+ failed=0 skipped=\\d+$"
+     ],
+     "fail": [
+      "^\\[console\\] sectest usage",
+      "^\\[console\\] sectest begin .* verdict=fail$",
+      "^\\[console\\] sectest check=\\S+ .* verdict=fail",
+      "^\\[user \\d+\\] \\[desktop\\] launch name=sectest pid=0 "
+     ],
+     "note": "sectest --expect=admin: one record per check (apps/systools/sectest_model.c)"
+    },
+    {
+     "name": "lo1",
+     "check": "logoff",
+     "settle": 2,
+     "actions": [
+      {
+       "keys": [
+        "esc",
+        "esc",
+        "ctrl+esc"
+       ],
+       "pause": 1.0
+      },
+      {
+       "keys": "l",
+       "pause": 0.8
+      },
+      {
+       "keys": "ret"
+      }
+     ],
+     "note": "Start > Log Off"
+    },
+    {
+     "name": "lo1-done",
+     "check": "logoff",
+     "timeout": 240,
+     "wait": [
+      "^\\[user \\d+\\] \\[logon\\] session (?P<lo1_session>\\d+) ending reason=1$",
+      "^\\[user \\d+\\] \\[logon\\] session <<lo1_session>> ended reason=1$",
+      "^\\[user \\d+\\] \\[logon\\] screen welcome$"
+     ],
+     "fail": [
+      "^\\[user \\d+\\] \\[logon\\] automatic logon requested$"
+     ]
+    },
+    {
+     "name": "welcome-list",
+     "check": "ready",
+     "timeout": 60,
+     "wait": "^\\[user \\d+\\] \\[logon-ui\\] view mode=welcome view=list items=\\d+ accounts=1 status=\\w+$",
+     "note": "Welcome lists only the enabled CiukiUser: Guest and CiukiAdministrator stay off"
+    },
+    {
+     "template": "logon",
+     "prefix": "again",
+     "check": "logoff",
+     "user": "CiukiUser",
+     "password": "",
+     "settle": 8
+    },
+    {
+     "name": "lo2",
+     "check": "logoff",
+     "settle": 2,
+     "actions": [
+      {
+       "keys": [
+        "esc",
+        "esc",
+        "ctrl+esc"
+       ],
+       "pause": 1.0
+      },
+      {
+       "keys": "l",
+       "pause": 0.8
+      },
+      {
+       "keys": "ret"
+      }
+     ],
+     "note": "Start > Log Off"
+    },
+    {
+     "name": "lo2-done",
+     "check": "logoff",
+     "timeout": 240,
+     "wait": [
+      "^\\[user \\d+\\] \\[logon\\] session (?P<lo2_session>\\d+) ending reason=1$",
+      "^\\[user \\d+\\] \\[logon\\] session <<lo2_session>> ended reason=1$",
+      "^\\[user \\d+\\] \\[logon\\] screen welcome$"
+     ],
+     "fail": [
+      "^\\[user \\d+\\] \\[logon\\] automatic logon requested$"
+     ]
+    },
+    {
+     "name": "wprestart",
+     "check": "reboot",
+     "arm": "reset",
+     "settle": 1,
+     "wait": "^\\[user \\d+\\] \\[logon-ui\\] view mode=welcome view=list items=\\d+ accounts=[1-9]\\d* status=\\w+$",
+     "actions": [
+      {
+       "keys": "up",
+       "pause": 0.6
+      },
+      {
+       "keys": "ret",
+       "pause": 1.0
+      }
+     ],
+     "note": "Welcome: Turn Off Computer"
+    },
+    {
+     "name": "wprestart-confirm",
+     "check": "reboot",
+     "settle": 0.5,
+     "timeout": 60,
+     "wait": "^\\[user \\d+\\] \\[logon-ui\\] view mode=welcome view=confirm-power items=3 ",
+     "actions": [
+      {
+       "keys": "down",
+       "pause": 0.5
+      },
+      {
+       "keys": "ret"
+      }
+     ],
+     "note": "Restart"
+    },
+    {
+     "name": "wprestart-power",
+     "check": "reboot",
+     "timeout": 240,
+     "wait": [
+      "^\\[user \\d+\\] \\[logon\\] restart requested at the logon screen$",
+      "^\\[power\\] reboot requested by pid \\d+ attempt=\\d+ progress=\\d+ storage=\\w+$",
+      "^\\[storage\\] completion drive=C kind=durable result=0 ",
+      "^\\[power\\] stage=reset fallback=8042-triple-fault$"
+     ],
+     "fail": [
+      "^\\[user \\d+\\] \\[logon\\] power request refused: ",
+      "^\\[storage\\] shutdown (?:busy|refused) "
+     ]
+    },
+    {
+     "name": "wprestart-reset",
+     "check": "reboot",
+     "wait_event": "RESET",
+     "timeout": 120
+    },
+    {
+     "template": "boot",
+     "prefix": "b2",
+     "check": "reboot",
+     "settle": 10
+    }
+   ],
+   "assertions": [
+    {
+     "name": "autologon-requested",
+     "check": "ready",
+     "from": "b1-loader",
+     "to": "b1-display",
+     "min": 1,
+     "pattern": "^\\[user \\d+\\] \\[logon\\] automatic logon requested$"
+    },
+    {
+     "name": "desktop-credential",
+     "check": "ready",
+     "from": "b1-loader",
+     "to": "b1-display",
+     "min": 1,
+     "pattern": "^\\[security\\] session \\d+ desktop pid=\\d+ pgid=\\d+ uid=1000 gid=545 groups=544,545$"
+    },
+    {
+     "name": "w32srv-credential",
+     "check": "ready",
+     "from": "b1-loader",
+     "to": "b1-display",
+     "min": 1,
+     "pattern": "^\\[security\\] session \\d+ w32srv pid=\\d+ pgid=\\d+ uid=1000 gid=545 groups=544,545$"
+    },
+    {
+     "name": "no-system-session-program",
+     "check": "ready",
+     "from": "start",
+     "to": "end",
+     "max": 0,
+     "pattern": "^\\[security\\] session \\d+ (?:desktop|w32srv) pid=\\d+ pgid=\\d+ uid=0 "
+    },
+    {
+     "name": "admin-raw-disk-refused",
+     "check": "ready",
+     "from": "stadmin-run",
+     "to": "stadmin-done",
+     "min": 1,
+     "max": 1,
+     "pattern": "^\\[console\\] sectest check=raw-disk expect=deny result=-(?:1|13|30) verdict=pass$"
+    },
+    {
+     "name": "admin-account-store-refused",
+     "check": "ready",
+     "from": "stadmin-run",
+     "to": "stadmin-done",
+     "min": 1,
+     "max": 1,
+     "pattern": "^\\[console\\] sectest check=account-store expect=deny result=-(?:1|13|30) verdict=pass$"
+    },
+    {
+     "name": "admin-backups-refused",
+     "check": "ready",
+     "from": "stadmin-run",
+     "to": "stadmin-done",
+     "min": 1,
+     "max": 1,
+     "pattern": "^\\[console\\] sectest check=backups expect=deny result=-(?:1|13|30) verdict=pass$"
+    },
+    {
+     "name": "logoff-stays-at-welcome",
+     "check": "logoff",
+     "from": "lo1",
+     "to": "again-auth",
+     "max": 0,
+     "pattern": "^\\[user \\d+\\] \\[logon\\] automatic logon requested$"
+    },
+    {
+     "name": "autologon-after-reboot",
+     "check": "reboot",
+     "from": "b2-loader",
+     "to": "b2-display",
+     "min": 1,
+     "pattern": "^\\[user \\d+\\] \\[logon\\] automatic logon requested$"
+    }
+   ],
+   "figures": [
+    {
+     "name": "logon-records",
+     "check": "records",
+     "reducer": "lines",
+     "page": false,
+     "pattern": "^\\[user \\d+\\] \\[logon\\] "
+    },
+    {
+     "name": "security-records",
+     "check": "records",
+     "reducer": "lines",
+     "page": false,
+     "pattern": "^\\[security\\] "
+    },
+    {
+     "name": "account-records",
+     "check": "records",
+     "reducer": "lines",
+     "pattern": "^\\[user \\d+\\] \\[accounts\\] manage "
+    },
+    {
+     "name": "sectest-records",
+     "check": "records",
+     "reducer": "lines",
+     "page": false,
+     "pattern": "^\\[console\\] sectest "
+    },
+    {
+     "name": "gate-latency",
+     "check": "records",
+     "reducer": "lines",
+     "pattern": "^\\[security\\] console (?:concealed|restored) "
+    }
+   ]
+  },
+  {
+   "kind": "acceptance",
+   "probe": "acceptance",
+   "profile": "qemu-t23",
+   "expected": {
+    "evidence_kind": "acceptance"
+   },
+   "id": "su-02-setup",
+   "item": 2,
+   "timeout": 3600,
+   "title": "SU-02 Setup: interactive installation of a custom administrator with a recovery password, no CiukiUser, no ATA write before Install",
+   "pending": {
+    "directive": "sec-user-02 (host H08/RSET evidence); runtime needs the runner's CD installation path",
+    "reason": "acceptance cases boot only the canonical HDD image (run.py load_suite: image \"full\"); a Setup run needs the canonical CD and a blank destination disk fixture"
+   },
+   "steps": []
+  },
+  {
+   "kind": "acceptance",
+   "probe": "acceptance",
+   "profile": "qemu-t23",
+   "expected": {
+    "evidence_kind": "acceptance"
+   },
+   "id": "su-03-refusal",
+   "item": 3,
+   "timeout": 3600,
+   "title": "SU-03 logon refusal at Welcome: Esc, blank name, unknown name, wrong password, disabled Guest and disabled CiukiAdministrator in a normal boot give the same refusal and no session; the right logon then works",
+   "items": {
+    "3": [
+     "setup",
+     "refusal",
+     "secrets"
+    ]
+   },
+   "steps": [
+    {
+     "template": "boot",
+     "prefix": "b1",
+     "check": "setup",
+     "settle": 15
+    },
+    {
+     "name": "lo1",
+     "check": "setup",
+     "settle": 2,
+     "actions": [
+      {
+       "keys": [
+        "esc",
+        "esc",
+        "ctrl+esc"
+       ],
+       "pause": 1.0
+      },
+      {
+       "keys": "l",
+       "pause": 0.8
+      },
+      {
+       "keys": "ret"
+      }
+     ],
+     "note": "Start > Log Off"
+    },
+    {
+     "name": "lo1-done",
+     "check": "setup",
+     "timeout": 240,
+     "wait": [
+      "^\\[user \\d+\\] \\[logon\\] session (?P<lo1_session>\\d+) ending reason=1$",
+      "^\\[user \\d+\\] \\[logon\\] session <<lo1_session>> ended reason=1$",
+      "^\\[user \\d+\\] \\[logon\\] screen welcome$"
+     ],
+     "fail": [
+      "^\\[user \\d+\\] \\[logon\\] automatic logon requested$"
+     ]
+    },
+    {
+     "name": "escape",
+     "check": "refusal",
+     "timeout": 60,
+     "settle": 1,
+     "wait": "^\\[user \\d+\\] \\[logon-ui\\] view mode=welcome view=list items=\\d+ accounts=[1-9]\\d* status=\\w+$",
+     "actions": [
+      {
+       "keys": "esc",
+       "pause": 1.0
+      },
+      {
+       "keys": [
+        "up",
+        "up",
+        "ret"
+       ],
+       "pause": 0.5
+      }
+     ],
+     "note": "Esc on the list does nothing; then \"Type a user name\""
+    },
+    {
+     "name": "blank-name",
+     "check": "refusal",
+     "timeout": 60,
+     "settle": 0.5,
+     "wait": "^\\[user \\d+\\] \\[logon-ui\\] view mode=welcome view=typed ",
+     "actions": [
+      {
+       "keys": "ret",
+       "pause": 0.5
+      },
+      {
+       "keys": "ret"
+      }
+     ],
+     "note": "an empty name is refused by the screen itself, before any request"
+    },
+    {
+     "name": "blank-name-refused",
+     "check": "refusal",
+     "timeout": 60,
+     "settle": 1,
+     "wait": "^\\[user \\d+\\] \\[logon-ui\\] view mode=welcome view=typed items=\\d+ accounts=\\d+ status=other$",
+     "actions": [
+      {
+       "keys": "esc"
+      }
+     ]
+    },
+    {
+     "name": "unknown",
+     "check": "refusal",
+     "timeout": 120,
+     "settle": 1,
+     "wait": "^\\[user \\d+\\] \\[logon-ui\\] view mode=welcome view=list items=\\d+ accounts=[1-9]\\d* status=\\w+$",
+     "actions": [
+      {
+       "keys": [
+        "up",
+        "up",
+        "ret"
+       ],
+       "pause": 0.5
+      }
+     ]
+    },
+    {
+     "name": "unknown-typed",
+     "check": "refusal",
+     "timeout": 60,
+     "settle": 0.5,
+     "wait": "^\\[user \\d+\\] \\[logon-ui\\] view mode=welcome view=typed ",
+     "actions": [
+      {
+       "text": "Nobody"
+      },
+      {
+       "keys": "ret",
+       "pause": 0.5
+      },
+      {
+       "text": "Nobody-pass-01"
+      },
+      {
+       "keys": "ret"
+      }
+     ]
+    },
+    {
+     "name": "unknown-refused",
+     "check": "refusal",
+     "timeout": 120,
+     "settle": 2,
+     "wait": [
+      "^\\[user \\d+\\] \\[logon\\] authentication refused action=2 status=-13$",
+      "^\\[user \\d+\\] \\[logon-ui\\] view mode=welcome view=typed items=\\d+ accounts=\\d+ status=incorrect$"
+     ],
+     "fail": [
+      "^\\[user \\d+\\] \\[logon\\] authenticated uid="
+     ],
+     "actions": [
+      {
+       "keys": "esc"
+      }
+     ],
+     "note": "the same public refusal; Esc returns to the list"
+    },
+    {
+     "name": "wrongpw",
+     "check": "refusal",
+     "timeout": 120,
+     "settle": 1,
+     "wait": "^\\[user \\d+\\] \\[logon-ui\\] view mode=welcome view=list items=\\d+ accounts=[1-9]\\d* status=\\w+$",
+     "actions": [
+      {
+       "keys": [
+        "up",
+        "up",
+        "ret"
+       ],
+       "pause": 0.5
+      }
+     ]
+    },
+    {
+     "name": "wrongpw-typed",
+     "check": "refusal",
+     "timeout": 60,
+     "settle": 0.5,
+     "wait": "^\\[user \\d+\\] \\[logon-ui\\] view mode=welcome view=typed ",
+     "actions": [
+      {
+       "text": "CiukiUser"
+      },
+      {
+       "keys": "ret",
+       "pause": 0.5
+      },
+      {
+       "text": "Wrong-pass-02"
+      },
+      {
+       "keys": "ret"
+      }
+     ]
+    },
+    {
+     "name": "wrongpw-refused",
+     "check": "refusal",
+     "timeout": 120,
+     "settle": 2,
+     "wait": [
+      "^\\[user \\d+\\] \\[logon\\] authentication refused action=2 status=-13$",
+      "^\\[user \\d+\\] \\[logon-ui\\] view mode=welcome view=typed items=\\d+ accounts=\\d+ status=incorrect$"
+     ],
+     "fail": [
+      "^\\[user \\d+\\] \\[logon\\] authenticated uid="
+     ],
+     "actions": [
+      {
+       "keys": "esc"
+      }
+     ],
+     "note": "the same public refusal; Esc returns to the list"
+    },
+    {
+     "name": "guest",
+     "check": "refusal",
+     "timeout": 120,
+     "settle": 1,
+     "wait": "^\\[user \\d+\\] \\[logon-ui\\] view mode=welcome view=list items=\\d+ accounts=[1-9]\\d* status=\\w+$",
+     "actions": [
+      {
+       "keys": [
+        "up",
+        "up",
+        "ret"
+       ],
+       "pause": 0.5
+      }
+     ]
+    },
+    {
+     "name": "guest-typed",
+     "check": "refusal",
+     "timeout": 60,
+     "settle": 0.5,
+     "wait": "^\\[user \\d+\\] \\[logon-ui\\] view mode=welcome view=typed ",
+     "actions": [
+      {
+       "text": "Guest"
+      },
+      {
+       "keys": "ret",
+       "pause": 0.5
+      },
+      {
+       "text": "Guest-pass-03"
+      },
+      {
+       "keys": "ret"
+      }
+     ]
+    },
+    {
+     "name": "guest-refused",
+     "check": "refusal",
+     "timeout": 120,
+     "settle": 2,
+     "wait": [
+      "^\\[user \\d+\\] \\[logon\\] authentication refused action=2 status=-13$",
+      "^\\[user \\d+\\] \\[logon-ui\\] view mode=welcome view=typed items=\\d+ accounts=\\d+ status=incorrect$"
+     ],
+     "fail": [
+      "^\\[user \\d+\\] \\[logon\\] authenticated uid="
+     ],
+     "actions": [
+      {
+       "keys": "esc"
+      }
+     ],
+     "note": "the same public refusal; Esc returns to the list"
+    },
+    {
+     "name": "admin500",
+     "check": "refusal",
+     "timeout": 120,
+     "settle": 1,
+     "wait": "^\\[user \\d+\\] \\[logon-ui\\] view mode=welcome view=list items=\\d+ accounts=[1-9]\\d* status=\\w+$",
+     "actions": [
+      {
+       "keys": [
+        "up",
+        "up",
+        "ret"
+       ],
+       "pause": 0.5
+      }
+     ]
+    },
+    {
+     "name": "admin500-typed",
+     "check": "refusal",
+     "timeout": 60,
+     "settle": 0.5,
+     "wait": "^\\[user \\d+\\] \\[logon-ui\\] view mode=welcome view=typed ",
+     "actions": [
+      {
+       "text": "CiukiAdministrator"
+      },
+      {
+       "keys": "ret",
+       "pause": 0.5
+      },
+      {
+       "text": "Admin-pass-04"
+      },
+      {
+       "keys": "ret"
+      }
+     ]
+    },
+    {
+     "name": "admin500-refused",
+     "check": "refusal",
+     "timeout": 120,
+     "settle": 2,
+     "wait": [
+      "^\\[user \\d+\\] \\[logon\\] authentication refused action=2 status=-13$",
+      "^\\[user \\d+\\] \\[logon-ui\\] view mode=welcome view=typed items=\\d+ accounts=\\d+ status=incorrect$"
+     ],
+     "fail": [
+      "^\\[user \\d+\\] \\[logon\\] authenticated uid="
+     ],
+     "actions": [
+      {
+       "keys": "esc"
+      }
+     ],
+     "note": "the same public refusal; Esc returns to the list"
+    },
+    {
+     "template": "logon",
+     "prefix": "final",
+     "check": "refusal",
+     "user": "CiukiUser",
+     "password": "",
+     "settle": 8
+    }
+   ],
+   "assertions": [
+    {
+     "name": "four-generic-refusals",
+     "check": "refusal",
+     "from": "lo1",
+     "to": "final-welcome",
+     "min": 4,
+     "max": 4,
+     "pattern": "^\\[user \\d+\\] \\[logon\\] authentication refused action=2 status=-13$"
+    },
+    {
+     "name": "no-session-before-final",
+     "check": "refusal",
+     "from": "lo1-done",
+     "to": "final-typed",
+     "max": 0,
+     "pattern": "^\\[user \\d+\\] \\[logon\\] (?:authenticated uid=|session \\d+ created )"
+    },
+    {
+     "name": "no-other-refusal-status",
+     "check": "refusal",
+     "from": "lo1",
+     "to": "final-welcome",
+     "max": 0,
+     "pattern": "^\\[user \\d+\\] \\[logon\\] authentication refused action=\\d+ status=(?!-13$)"
+    },
+    {
+     "name": "no-secret-on-serial",
+     "check": "secrets",
+     "from": "start",
+     "to": "end",
+     "max": 0,
+     "pattern": "^.*(?:Nobody-pass-01|Wrong-pass-02|Guest-pass-03|Admin-pass-04)",
+     "note": "contract 4.3: no typed password (right or wrong) appears in a serial record"
+    }
+   ],
+   "figures": [
+    {
+     "name": "logon-records",
+     "check": "records",
+     "reducer": "lines",
+     "page": false,
+     "pattern": "^\\[user \\d+\\] \\[logon\\] "
+    },
+    {
+     "name": "security-records",
+     "check": "records",
+     "reducer": "lines",
+     "page": false,
+     "pattern": "^\\[security\\] "
+    },
+    {
+     "name": "account-records",
+     "check": "records",
+     "reducer": "lines",
+     "pattern": "^\\[user \\d+\\] \\[accounts\\] manage "
+    },
+    {
+     "name": "sectest-records",
+     "check": "records",
+     "reducer": "lines",
+     "page": false,
+     "pattern": "^\\[console\\] sectest "
+    },
+    {
+     "name": "gate-latency",
+     "check": "records",
+     "reducer": "lines",
+     "pattern": "^\\[security\\] console (?:concealed|restored) "
+    }
+   ]
+  },
+  {
+   "kind": "acceptance",
+   "probe": "acceptance",
+   "profile": "qemu-t23",
+   "expected": {
+    "evidence_kind": "acceptance"
+   },
+   "id": "su-04-roles",
+   "item": 4,
+   "timeout": 7200,
+   "title": "SU-04..SU-08 roles, objects, applets, profiles and the protected installer: an administrator gives CiukiUser a password, creates Standard Bob and turns Guest on; sectest as each role through the production calls (544 / 545 / 546, never SYSTEM; protected trees, creator-owned C:\\GAME, machine registry and settings, other profiles, the installer store and its shortcuts)",
+   "items": {
+    "4": [
+     "roles",
+     "secrets"
+    ],
+    "5": [
+     "objects"
+    ],
+    "6": [
+     "applets"
+    ],
+    "7": [
+     "profile"
+    ],
+    "8": [
+     "installer"
+    ]
+   },
+   "steps": [
+    {
+     "template": "boot",
+     "prefix": "b1",
+     "check": "roles",
+     "settle": 15
+    },
+    {
+     "name": "cp1-run",
+     "check": "roles",
+     "actions": [
+      {
+       "keys": "meta_l+r"
+      }
+     ],
+     "screen_settle": {
+      "changed": true,
+      "stable": 1.5,
+      "timeout": 30
+     },
+     "note": "Win+R opens Run"
+    },
+    {
+     "name": "cp1-type",
+     "check": "roles",
+     "actions": [
+      {
+       "text": "control --panel=users"
+      },
+      {
+       "keys": "ret"
+      }
+     ]
+    },
+    {
+     "name": "cp1-window",
+     "check": "roles",
+     "timeout": 120,
+     "settle": 8,
+     "wait": [
+      "^\\[user \\d+\\] \\[desktop\\] launch name=control pid=(?P<cp1>[1-9]\\d*) error=0 ",
+      "^\\[user \\d+\\] \\[desktop\\] focus pid=<<cp1>> window=\\d+ titled=\\d internal=0 app=control$"
+     ],
+     "fail": [
+      "^\\[user \\d+\\] \\[desktop\\] launch name=control pid=0 "
+     ]
+    },
+    {
+     "name": "cp1-pw",
+     "check": "roles",
+     "actions": [
+      {
+       "keys": [
+        "tab",
+        "tab",
+        "tab",
+        "tab",
+        "tab"
+       ],
+       "pause": 0.4
+      },
+      {
+       "keys": "ret",
+       "pause": 2.5
+      },
+      {
+       "keys": "tab",
+       "pause": 0.4
+      },
+      {
+       "text": "Ciuki-pass-2026"
+      },
+      {
+       "keys": "tab",
+       "pause": 0.4
+      },
+      {
+       "text": "Ciuki-pass-2026"
+      },
+      {
+       "keys": "ret"
+      }
+     ],
+     "note": "User Accounts: Change the password (current, new, confirm)"
+    },
+    {
+     "name": "cp1-pw-done",
+     "check": "roles",
+     "timeout": 120,
+     "wait": "^\\[user \\d+\\] \\[accounts\\] manage op=password caller=1000 target=1000 type=admin result=0$",
+     "fail": "^\\[user \\d+\\] \\[accounts\\] manage op=password caller=\\d+ target=\\d+ type=\\w+ result=-\\d+$"
+    },
+    {
+     "name": "newbob",
+     "check": "roles",
+     "settle": 3,
+     "actions": [
+      {
+       "keys": [
+        "tab",
+        "tab",
+        "tab"
+       ],
+       "pause": 0.4
+      },
+      {
+       "keys": "ret",
+       "pause": 2.5
+      },
+      {
+       "text": "Bob"
+      },
+      {
+       "keys": "tab",
+       "pause": 0.4
+      },
+      {
+       "keys": "tab",
+       "pause": 0.4
+      },
+      {
+       "text": "Bob-pass-2026"
+      },
+      {
+       "keys": "tab",
+       "pause": 0.4
+      },
+      {
+       "text": "Bob-pass-2026"
+      },
+      {
+       "keys": "ret"
+      }
+     ],
+     "note": "User Accounts: Create a new account Bob (standard user)"
+    },
+    {
+     "name": "newbob-done",
+     "check": "roles",
+     "timeout": 120,
+     "wait": "^\\[user \\d+\\] \\[accounts\\] manage op=create caller=1000 target=(?P<newbob_uid>\\d+) type=standard result=0$",
+     "fail": "^\\[user \\d+\\] \\[accounts\\] manage op=create caller=\\d+ target=\\d+ type=\\w+ result=-\\d+$"
+    },
+    {
+     "name": "guest-select",
+     "check": "roles",
+     "settle": 3,
+     "actions": [
+      {
+       "keys": [
+        "tab",
+        "tab"
+       ],
+       "pause": 0.4
+      },
+      {
+       "keys": [
+        "down"
+       ],
+       "pause": 2.5
+      }
+     ],
+     "note": "the list cursor starts at item 0 (CiukiAdministrator); Down selects Guest"
+    },
+    {
+     "name": "guest-pw",
+     "check": "roles",
+     "settle": 2,
+     "actions": [
+      {
+       "keys": [
+        "tab",
+        "tab",
+        "tab",
+        "tab"
+       ],
+       "pause": 0.4
+      },
+      {
+       "keys": "ret",
+       "pause": 2.5
+      },
+      {
+       "text": "Guest-pass-2026"
+      },
+      {
+       "keys": "tab",
+       "pause": 0.4
+      },
+      {
+       "text": "Guest-pass-2026"
+      },
+      {
+       "keys": "ret"
+      }
+     ],
+     "note": "User Accounts: Reset the password"
+    },
+    {
+     "name": "guest-pw-done",
+     "check": "roles",
+     "timeout": 120,
+     "wait": "^\\[user \\d+\\] \\[accounts\\] manage op=password caller=1000 target=501 type=guest result=0$",
+     "fail": "^\\[user \\d+\\] \\[accounts\\] manage op=password caller=\\d+ target=\\d+ type=\\w+ result=-\\d+$"
+    },
+    {
+     "name": "guest-on",
+     "check": "roles",
+     "settle": 3,
+     "actions": [
+      {
+       "keys": [
+        "tab",
+        "tab",
+        "tab",
+        "tab",
+        "tab",
+        "tab"
+       ],
+       "pause": 0.4
+      },
+      {
+       "keys": "ret",
+       "pause": 2.5
+      },
+      {
+       "keys": "ret"
+      }
+     ],
+     "note": "User Accounts: Turn on the account"
+    },
+    {
+     "name": "guest-on-done",
+     "check": "roles",
+     "timeout": 120,
+     "wait": "^\\[user \\d+\\] \\[accounts\\] manage op=enable caller=1000 target=501 type=guest result=0$",
+     "fail": "^\\[user \\d+\\] \\[accounts\\] manage op=enable caller=\\d+ target=\\d+ type=\\w+ result=-\\d+$"
+    },
+    {
+     "name": "cp1-close",
+     "check": "roles",
+     "settle": 1,
+     "actions": [
+      {
+       "keys": "alt+f4",
+       "pause": 1.5
+      }
+     ],
+     "note": "Alt+F4 closes the Control Panel"
+    },
+    {
+     "name": "stadmin-run",
+     "check": "objects",
+     "actions": [
+      {
+       "keys": "meta_l+r"
+      }
+     ],
+     "screen_settle": {
+      "changed": true,
+      "stable": 1.5,
+      "timeout": 30
+     },
+     "note": "Win+R opens Run"
+    },
+    {
+     "name": "stadmin-type",
+     "check": "objects",
+     "actions": [
+      {
+       "text": "sectest --expect=admin"
+      },
+      {
+       "keys": "ret"
+      }
+     ]
+    },
+    {
+     "name": "stadmin-done",
+     "check": "objects",
+     "timeout": 240,
+     "wait": [
+      "^\\[user \\d+\\] \\[desktop\\] launch name=sectest pid=(?P<stadmin_pid>[1-9]\\d*) error=0 ",
+      "^\\[console\\] sectest begin version=1 uid=1000 gid=\\d+ session=\\d+ groups=544,545 role=admin expect=admin profile=\\S+ result=0 verdict=pass$",
+      "^\\[console\\] sectest end role=admin checks=\\d+ passed=\\d+ failed=0 skipped=\\d+$"
+     ],
+     "fail": [
+      "^\\[console\\] sectest usage",
+      "^\\[console\\] sectest begin .* verdict=fail$",
+      "^\\[console\\] sectest check=\\S+ .* verdict=fail",
+      "^\\[user \\d+\\] \\[desktop\\] launch name=sectest pid=0 "
+     ],
+     "note": "sectest --expect=admin: one record per check (apps/systools/sectest_model.c)"
+    },
+    {
+     "name": "lo1",
+     "check": "roles",
+     "settle": 2,
+     "actions": [
+      {
+       "keys": [
+        "esc",
+        "esc",
+        "ctrl+esc"
+       ],
+       "pause": 1.0
+      },
+      {
+       "keys": "l",
+       "pause": 0.8
+      },
+      {
+       "keys": "ret"
+      }
+     ],
+     "note": "Start > Log Off"
+    },
+    {
+     "name": "lo1-done",
+     "check": "roles",
+     "timeout": 240,
+     "wait": [
+      "^\\[user \\d+\\] \\[logon\\] session (?P<lo1_session>\\d+) ending reason=1$",
+      "^\\[user \\d+\\] \\[logon\\] session <<lo1_session>> ended reason=1$",
+      "^\\[user \\d+\\] \\[logon\\] screen welcome$"
+     ],
+     "fail": [
+      "^\\[user \\d+\\] \\[logon\\] automatic logon requested$"
+     ]
+    },
+    {
+     "template": "logon",
+     "prefix": "bob",
+     "check": "roles",
+     "user": "Bob",
+     "password": "Bob-pass-2026",
+     "settle": 8
+    },
+    {
+     "name": "stbob-run",
+     "check": "objects",
+     "actions": [
+      {
+       "keys": "meta_l+r"
+      }
+     ],
+     "screen_settle": {
+      "changed": true,
+      "stable": 1.5,
+      "timeout": 30
+     },
+     "note": "Win+R opens Run"
+    },
+    {
+     "name": "stbob-type",
+     "check": "objects",
+     "actions": [
+      {
+       "text": "sectest --expect=standard --keep"
+      },
+      {
+       "keys": "ret"
+      }
+     ]
+    },
+    {
+     "name": "stbob-done",
+     "check": "objects",
+     "timeout": 240,
+     "wait": [
+      "^\\[user \\d+\\] \\[desktop\\] launch name=sectest pid=(?P<stbob_pid>[1-9]\\d*) error=0 ",
+      "^\\[console\\] sectest begin version=1 uid=<<newbob_uid>> gid=\\d+ session=\\d+ groups=545 role=standard expect=standard profile=(?P<stbob_profile>u[0-9a-f]{8}) result=0 verdict=pass$",
+      "^\\[console\\] sectest end role=standard checks=\\d+ passed=\\d+ failed=0 skipped=\\d+$"
+     ],
+     "fail": [
+      "^\\[console\\] sectest usage",
+      "^\\[console\\] sectest begin .* verdict=fail$",
+      "^\\[console\\] sectest check=\\S+ .* verdict=fail",
+      "^\\[user \\d+\\] \\[desktop\\] launch name=sectest pid=0 "
+     ],
+     "note": "sectest --expect=standard --keep: one record per check (apps/systools/sectest_model.c)"
+    },
+    {
+     "name": "lo2",
+     "check": "roles",
+     "settle": 2,
+     "actions": [
+      {
+       "keys": [
+        "esc",
+        "esc",
+        "ctrl+esc"
+       ],
+       "pause": 1.0
+      },
+      {
+       "keys": "l",
+       "pause": 0.8
+      },
+      {
+       "keys": "ret"
+      }
+     ],
+     "note": "Start > Log Off"
+    },
+    {
+     "name": "lo2-done",
+     "check": "roles",
+     "timeout": 240,
+     "wait": [
+      "^\\[user \\d+\\] \\[logon\\] session (?P<lo2_session>\\d+) ending reason=1$",
+      "^\\[user \\d+\\] \\[logon\\] session <<lo2_session>> ended reason=1$",
+      "^\\[user \\d+\\] \\[logon\\] screen welcome$"
+     ],
+     "fail": [
+      "^\\[user \\d+\\] \\[logon\\] automatic logon requested$"
+     ]
+    },
+    {
+     "template": "logon",
+     "prefix": "guest",
+     "check": "roles",
+     "user": "Guest",
+     "password": "Guest-pass-2026",
+     "settle": 8
+    },
+    {
+     "name": "stguest-run",
+     "check": "objects",
+     "actions": [
+      {
+       "keys": "meta_l+r"
+      }
+     ],
+     "screen_settle": {
+      "changed": true,
+      "stable": 1.5,
+      "timeout": 30
+     },
+     "note": "Win+R opens Run"
+    },
+    {
+     "name": "stguest-type",
+     "check": "objects",
+     "actions": [
+      {
+       "text": "sectest --expect=guest --foreign=GAME"
+      },
+      {
+       "keys": "ret"
+      }
+     ]
+    },
+    {
+     "name": "stguest-done",
+     "check": "objects",
+     "timeout": 240,
+     "wait": [
+      "^\\[user \\d+\\] \\[desktop\\] launch name=sectest pid=(?P<stguest_pid>[1-9]\\d*) error=0 ",
+      "^\\[console\\] sectest begin version=1 uid=501 gid=\\d+ session=\\d+ groups=546 role=guest expect=guest profile=\\S+ result=0 verdict=pass$",
+      "^\\[console\\] sectest end role=guest checks=\\d+ passed=\\d+ failed=0 skipped=\\d+$"
+     ],
+     "fail": [
+      "^\\[console\\] sectest usage",
+      "^\\[console\\] sectest begin .* verdict=fail$",
+      "^\\[console\\] sectest check=\\S+ .* verdict=fail",
+      "^\\[user \\d+\\] \\[desktop\\] launch name=sectest pid=0 "
+     ],
+     "note": "sectest --expect=guest --foreign=GAME: one record per check (apps/systools/sectest_model.c)"
+    },
+    {
+     "name": "lo3",
+     "check": "roles",
+     "settle": 2,
+     "actions": [
+      {
+       "keys": [
+        "esc",
+        "esc",
+        "ctrl+esc"
+       ],
+       "pause": 1.0
+      },
+      {
+       "keys": "l",
+       "pause": 0.8
+      },
+      {
+       "keys": "ret"
+      }
+     ],
+     "note": "Start > Log Off"
+    },
+    {
+     "name": "lo3-done",
+     "check": "roles",
+     "timeout": 240,
+     "wait": [
+      "^\\[user \\d+\\] \\[logon\\] session (?P<lo3_session>\\d+) ending reason=1$",
+      "^\\[user \\d+\\] \\[logon\\] session <<lo3_session>> ended reason=1$",
+      "^\\[user \\d+\\] \\[logon\\] screen welcome$"
+     ],
+     "fail": [
+      "^\\[user \\d+\\] \\[logon\\] automatic logon requested$"
+     ]
+    },
+    {
+     "template": "logon",
+     "prefix": "ciuki",
+     "check": "roles",
+     "user": "CiukiUser",
+     "password": "Ciuki-pass-2026",
+     "settle": 8
+    },
+    {
+     "name": "stadmin2-run",
+     "check": "objects",
+     "actions": [
+      {
+       "keys": "meta_l+r"
+      }
+     ],
+     "screen_settle": {
+      "changed": true,
+      "stable": 1.5,
+      "timeout": 30
+     },
+     "note": "Win+R opens Run"
+    },
+    {
+     "name": "stadmin2-type",
+     "check": "objects",
+     "actions": [
+      {
+       "text": "sectest --expect=admin --foreign=GAME --folder=GAME2"
+      },
+      {
+       "keys": "ret"
+      }
+     ]
+    },
+    {
+     "name": "stadmin2-done",
+     "check": "objects",
+     "timeout": 240,
+     "wait": [
+      "^\\[user \\d+\\] \\[desktop\\] launch name=sectest pid=(?P<stadmin2_pid>[1-9]\\d*) error=0 ",
+      "^\\[console\\] sectest begin version=1 uid=1000 gid=\\d+ session=\\d+ groups=544,545 role=admin expect=admin profile=\\S+ result=0 verdict=pass$",
+      "^\\[console\\] sectest end role=admin checks=\\d+ passed=\\d+ failed=0 skipped=\\d+$"
+     ],
+     "fail": [
+      "^\\[console\\] sectest usage",
+      "^\\[console\\] sectest begin .* verdict=fail$",
+      "^\\[console\\] sectest check=\\S+ .* verdict=fail",
+      "^\\[user \\d+\\] \\[desktop\\] launch name=sectest pid=0 "
+     ],
+     "note": "sectest --expect=admin --foreign=GAME --folder=GAME2: one record per check (apps/systools/sectest_model.c)"
+    }
+   ],
+   "assertions": [
+    {
+     "name": "admin-desktop",
+     "check": "roles",
+     "from": "b1-loader",
+     "to": "b1-display",
+     "min": 1,
+     "pattern": "^\\[security\\] session \\d+ desktop pid=\\d+ pgid=\\d+ uid=1000 gid=545 groups=544,545$"
+    },
+    {
+     "name": "bob-desktop",
+     "check": "roles",
+     "from": "bob-auth",
+     "to": "bob-display",
+     "min": 1,
+     "pattern": "^\\[security\\] session \\d+ desktop pid=\\d+ pgid=\\d+ uid=<<newbob_uid>> gid=545 groups=545$"
+    },
+    {
+     "name": "guest-desktop",
+     "check": "roles",
+     "from": "guest-auth",
+     "to": "guest-display",
+     "min": 1,
+     "pattern": "^\\[security\\] session \\d+ desktop pid=\\d+ pgid=\\d+ uid=501 gid=546 groups=546$"
+    },
+    {
+     "name": "bob-w32srv",
+     "check": "roles",
+     "from": "bob-auth",
+     "to": "bob-display",
+     "min": 1,
+     "pattern": "^\\[security\\] session \\d+ w32srv pid=\\d+ pgid=\\d+ uid=<<newbob_uid>> gid=545 groups=545$"
+    },
+    {
+     "name": "guest-w32srv",
+     "check": "roles",
+     "from": "guest-auth",
+     "to": "guest-display",
+     "min": 1,
+     "pattern": "^\\[security\\] session \\d+ w32srv pid=\\d+ pgid=\\d+ uid=501 gid=546 groups=546$"
+    },
+    {
+     "name": "stbob-programs",
+     "check": "objects",
+     "from": "stbob-run",
+     "to": "stbob-done",
+     "min": 1,
+     "max": 1,
+     "pattern": "^\\[console\\] sectest check=programs expect=deny result=-(?:1|13|30) verdict=pass$"
+    },
+    {
+     "name": "stbob-root-folder",
+     "check": "objects",
+     "from": "stbob-run",
+     "to": "stbob-done",
+     "min": 1,
+     "max": 1,
+     "pattern": "^\\[console\\] sectest check=root-folder expect=allow result=0 verdict=pass$"
+    },
+    {
+     "name": "stbob-other-profile",
+     "check": "objects",
+     "from": "stbob-run",
+     "to": "stbob-done",
+     "min": 1,
+     "max": 1,
+     "pattern": "^\\[console\\] sectest check=other-profile expect=deny result=-(?:1|13|30) verdict=pass$"
+    },
+    {
+     "name": "stbob-installer-store",
+     "check": "installer",
+     "from": "stbob-run",
+     "to": "stbob-done",
+     "min": 1,
+     "max": 1,
+     "pattern": "^\\[console\\] sectest check=installer-store expect=deny result=-(?:1|13|30) verdict=pass$"
+    },
+    {
+     "name": "stbob-installer-shortcuts",
+     "check": "installer",
+     "from": "stbob-run",
+     "to": "stbob-done",
+     "min": 1,
+     "max": 1,
+     "pattern": "^\\[console\\] sectest check=installer-shortcuts expect=deny result=-(?:1|13|30) verdict=pass$"
+    },
+    {
+     "name": "stbob-machine-setting",
+     "check": "applets",
+     "from": "stbob-run",
+     "to": "stbob-done",
+     "min": 1,
+     "max": 1,
+     "pattern": "^\\[console\\] sectest check=machine-setting expect=deny result=-(?:1|13|30) verdict=pass$"
+    },
+    {
+     "name": "stbob-machine-registry",
+     "check": "applets",
+     "from": "stbob-run",
+     "to": "stbob-done",
+     "min": 1,
+     "max": 1,
+     "pattern": "^\\[console\\] sectest check=machine-registry expect=deny result=-(?:1|13|30) verdict=pass$"
+    },
+    {
+     "name": "stbob-environment",
+     "check": "profile",
+     "from": "stbob-run",
+     "to": "stbob-done",
+     "min": 1,
+     "max": 1,
+     "pattern": "^\\[console\\] sectest check=environment expect=allow result=0 verdict=pass$"
+    },
+    {
+     "name": "stguest-programs",
+     "check": "objects",
+     "from": "stguest-run",
+     "to": "stguest-done",
+     "min": 1,
+     "max": 1,
+     "pattern": "^\\[console\\] sectest check=programs expect=deny result=-(?:1|13|30) verdict=pass$"
+    },
+    {
+     "name": "stguest-root-folder",
+     "check": "objects",
+     "from": "stguest-run",
+     "to": "stguest-done",
+     "min": 1,
+     "max": 1,
+     "pattern": "^\\[console\\] sectest check=root-folder expect=deny result=-(?:1|13|30) verdict=pass$"
+    },
+    {
+     "name": "stguest-foreign-folder",
+     "check": "objects",
+     "from": "stguest-run",
+     "to": "stguest-done",
+     "min": 1,
+     "max": 1,
+     "pattern": "^\\[console\\] sectest check=foreign-folder expect=deny result=-(?:1|13|30) verdict=pass$"
+    },
+    {
+     "name": "stguest-other-profile",
+     "check": "objects",
+     "from": "stguest-run",
+     "to": "stguest-done",
+     "min": 1,
+     "max": 1,
+     "pattern": "^\\[console\\] sectest check=other-profile expect=deny result=-(?:1|13|30) verdict=pass$"
+    },
+    {
+     "name": "stguest-installer-store",
+     "check": "installer",
+     "from": "stguest-run",
+     "to": "stguest-done",
+     "min": 1,
+     "max": 1,
+     "pattern": "^\\[console\\] sectest check=installer-store expect=deny result=-(?:1|13|30) verdict=pass$"
+    },
+    {
+     "name": "stguest-machine-setting",
+     "check": "applets",
+     "from": "stguest-run",
+     "to": "stguest-done",
+     "min": 1,
+     "max": 1,
+     "pattern": "^\\[console\\] sectest check=machine-setting expect=deny result=-(?:1|13|30) verdict=pass$"
+    },
+    {
+     "name": "stguest-machine-registry",
+     "check": "applets",
+     "from": "stguest-run",
+     "to": "stguest-done",
+     "min": 1,
+     "max": 1,
+     "pattern": "^\\[console\\] sectest check=machine-registry expect=deny result=-(?:1|13|30) verdict=pass$"
+    },
+    {
+     "name": "stguest-environment",
+     "check": "profile",
+     "from": "stguest-run",
+     "to": "stguest-done",
+     "min": 1,
+     "max": 1,
+     "pattern": "^\\[console\\] sectest check=environment expect=allow result=0 verdict=pass$"
+    },
+    {
+     "name": "stadmin2-foreign-folder",
+     "check": "objects",
+     "from": "stadmin2-run",
+     "to": "stadmin2-done",
+     "min": 1,
+     "max": 1,
+     "pattern": "^\\[console\\] sectest check=foreign-folder expect=allow result=0 verdict=pass$"
+    },
+    {
+     "name": "stadmin2-installer-store",
+     "check": "installer",
+     "from": "stadmin2-run",
+     "to": "stadmin2-done",
+     "min": 1,
+     "max": 1,
+     "pattern": "^\\[console\\] sectest check=installer-store expect=allow result=0 verdict=pass$"
+    },
+    {
+     "name": "stadmin2-other-profile",
+     "check": "objects",
+     "from": "stadmin2-run",
+     "to": "stadmin2-done",
+     "min": 1,
+     "max": 1,
+     "pattern": "^\\[console\\] sectest check=other-profile expect=allow result=0 verdict=pass$"
+    },
+    {
+     "name": "stadmin2-raw-disk",
+     "check": "objects",
+     "from": "stadmin2-run",
+     "to": "stadmin2-done",
+     "min": 1,
+     "max": 1,
+     "pattern": "^\\[console\\] sectest check=raw-disk expect=deny result=-(?:1|13|30) verdict=pass$"
+    },
+    {
+     "name": "stadmin2-account-store",
+     "check": "objects",
+     "from": "stadmin2-run",
+     "to": "stadmin2-done",
+     "min": 1,
+     "max": 1,
+     "pattern": "^\\[console\\] sectest check=account-store expect=deny result=-(?:1|13|30) verdict=pass$"
+    },
+    {
+     "name": "stadmin2-environment",
+     "check": "profile",
+     "from": "stadmin2-run",
+     "to": "stadmin2-done",
+     "min": 1,
+     "max": 1,
+     "pattern": "^\\[console\\] sectest check=environment expect=allow result=0 verdict=pass$"
+    },
+    {
+     "name": "profiles-differ",
+     "check": "profile",
+     "from": "stguest-run",
+     "to": "stguest-done",
+     "max": 0,
+     "pattern": "^\\[console\\] sectest begin .* profile=<<stbob_profile>> "
+    },
+    {
+     "name": "no-secret-on-serial",
+     "check": "secrets",
+     "from": "start",
+     "to": "end",
+     "max": 0,
+     "pattern": "^.*(?:Ciuki-pass-2026|Bob-pass-2026|Guest-pass-2026)",
+     "note": "contract 4.3: no typed password (right or wrong) appears in a serial record"
+    }
+   ],
+   "figures": [
+    {
+     "name": "logon-records",
+     "check": "records",
+     "reducer": "lines",
+     "page": false,
+     "pattern": "^\\[user \\d+\\] \\[logon\\] "
+    },
+    {
+     "name": "security-records",
+     "check": "records",
+     "reducer": "lines",
+     "page": false,
+     "pattern": "^\\[security\\] "
+    },
+    {
+     "name": "account-records",
+     "check": "records",
+     "reducer": "lines",
+     "pattern": "^\\[user \\d+\\] \\[accounts\\] manage "
+    },
+    {
+     "name": "sectest-records",
+     "check": "records",
+     "reducer": "lines",
+     "page": false,
+     "pattern": "^\\[console\\] sectest "
+    },
+    {
+     "name": "gate-latency",
+     "check": "records",
+     "reducer": "lines",
+     "pattern": "^\\[security\\] console (?:concealed|restored) "
+    }
+   ],
+   "note": "SU-05's 256-entry bound, owner-record crash/rename, a second fixed volume and USB, SU-06's per-page controls, SU-07's HKCU/GetUserName and SU-08's VISE/InstallShield/NSIS runs as a Standard user stay host evidence (H02, H12, H07/H11, H08) until runtime fixtures exist."
+  },
+  {
+   "kind": "acceptance",
+   "probe": "acceptance",
+   "profile": "qemu-t23",
+   "expected": {
+    "evidence_kind": "acceptance"
+   },
+   "id": "su-09-lock",
+   "item": 9,
+   "timeout": 3600,
+   "title": "SU-09 lock and saver: a blank CiukiUser gets the set-password guidance, never a lock; with a password, Start > Lock, Ctrl+Alt+Del > Lock Computer and the dismissed screen saver lock through LOGON; a wrong password and Esc keep the lock; the right password restores the same session; no password on the serial port",
+   "items": {
+    "9": [
+     "blank",
+     "lock",
+     "saver",
+     "secrets"
+    ]
+   },
+   "steps": [
+    {
+     "template": "boot",
+     "prefix": "b1",
+     "check": "blank",
+     "settle": 15
+    },
+    {
+     "name": "blank-cad",
+     "check": "blank",
+     "settle": 2,
+     "actions": [
+      {
+       "keys": "ctrl+alt+delete"
+      }
+     ]
+    },
+    {
+     "name": "blank-menu",
+     "check": "blank",
+     "timeout": 60,
+     "settle": 1,
+     "wait": "^\\[user \\d+\\] \\[logon-ui\\] view mode=security view=menu items=5 accounts=\\d+ status=\\w+$",
+     "actions": [
+      {
+       "keys": "ret"
+      }
+     ],
+     "note": "Lock Computer (the first item)"
+    },
+    {
+     "name": "blank-guidance",
+     "check": "blank",
+     "timeout": 60,
+     "settle": 1,
+     "wait": "^\\[user \\d+\\] \\[logon-ui\\] view mode=security view=blank-lock items=2 ",
+     "fail": [
+      "^\\[user \\d+\\] \\[logon\\] session \\d+ locked by "
+     ],
+     "actions": [
+      {
+       "keys": "esc",
+       "pause": 1.0
+      },
+      {
+       "keys": "esc"
+      }
+     ],
+     "note": "a blank CiukiUser is told to set a password, never shown a false lock"
+    },
+    {
+     "name": "blank-return",
+     "check": "blank",
+     "timeout": 60,
+     "wait": "^\\[user \\d+\\] \\[logon\\] screen hidden$"
+    },
+    {
+     "name": "cp1-run",
+     "check": "lock",
+     "actions": [
+      {
+       "keys": "meta_l+r"
+      }
+     ],
+     "screen_settle": {
+      "changed": true,
+      "stable": 1.5,
+      "timeout": 30
+     },
+     "note": "Win+R opens Run"
+    },
+    {
+     "name": "cp1-type",
+     "check": "lock",
+     "actions": [
+      {
+       "text": "control --panel=users"
+      },
+      {
+       "keys": "ret"
+      }
+     ]
+    },
+    {
+     "name": "cp1-window",
+     "check": "lock",
+     "timeout": 120,
+     "settle": 8,
+     "wait": [
+      "^\\[user \\d+\\] \\[desktop\\] launch name=control pid=(?P<cp1>[1-9]\\d*) error=0 ",
+      "^\\[user \\d+\\] \\[desktop\\] focus pid=<<cp1>> window=\\d+ titled=\\d internal=0 app=control$"
+     ],
+     "fail": [
+      "^\\[user \\d+\\] \\[desktop\\] launch name=control pid=0 "
+     ]
+    },
+    {
+     "name": "cp1-pw",
+     "check": "lock",
+     "actions": [
+      {
+       "keys": [
+        "tab",
+        "tab",
+        "tab",
+        "tab",
+        "tab"
+       ],
+       "pause": 0.4
+      },
+      {
+       "keys": "ret",
+       "pause": 2.5
+      },
+      {
+       "keys": "tab",
+       "pause": 0.4
+      },
+      {
+       "text": "Ciuki-pass-2026"
+      },
+      {
+       "keys": "tab",
+       "pause": 0.4
+      },
+      {
+       "text": "Ciuki-pass-2026"
+      },
+      {
+       "keys": "ret"
+      }
+     ],
+     "note": "User Accounts: Change the password (current, new, confirm)"
+    },
+    {
+     "name": "cp1-pw-done",
+     "check": "lock",
+     "timeout": 120,
+     "wait": "^\\[user \\d+\\] \\[accounts\\] manage op=password caller=1000 target=1000 type=admin result=0$",
+     "fail": "^\\[user \\d+\\] \\[accounts\\] manage op=password caller=\\d+ target=\\d+ type=\\w+ result=-\\d+$"
+    },
+    {
+     "name": "cp1-close",
+     "check": "lock",
+     "settle": 1,
+     "actions": [
+      {
+       "keys": "alt+f4",
+       "pause": 1.5
+      }
+     ],
+     "note": "Alt+F4 closes the Control Panel"
+    },
+    {
+     "name": "menu-lock",
+     "check": "lock",
+     "settle": 2,
+     "actions": [
+      {
+       "keys": [
+        "esc",
+        "esc",
+        "ctrl+esc"
+       ],
+       "pause": 1.0
+      },
+      {
+       "keys": [
+        "l",
+        "l"
+       ],
+       "pause": 0.8
+      },
+      {
+       "keys": "ret"
+      }
+     ],
+     "note": "Start > Lock (the second entry starting with L)"
+    },
+    {
+     "name": "menu-locked",
+     "check": "lock",
+     "timeout": 120,
+     "settle": 2,
+     "wait": [
+      "^\\[user \\d+\\] \\[logon\\] session <<b1_session>> locked by the desktop$",
+      "^\\[user \\d+\\] \\[logon-ui\\] view mode=locked view=password items=\\d+ accounts=\\d+ status=\\w+$"
+     ],
+     "actions": [
+      {
+       "text": "Wrong-pass-0000"
+      },
+      {
+       "keys": "ret"
+      }
+     ]
+    },
+    {
+     "name": "menu-refused",
+     "check": "lock",
+     "timeout": 60,
+     "settle": 2,
+     "wait": [
+      "^\\[user \\d+\\] \\[logon\\] authentication refused action=3 status=-13$",
+      "^\\[user \\d+\\] \\[logon-ui\\] view mode=locked view=password items=\\d+ accounts=\\d+ status=incorrect$"
+     ],
+     "actions": [
+      {
+       "keys": "esc",
+       "pause": 1.0
+      },
+      {
+       "text": "Ciuki-pass-2026"
+      },
+      {
+       "keys": "ret"
+      }
+     ],
+     "note": "Esc clears the attempt and stays locked"
+    },
+    {
+     "name": "menu-unlocked",
+     "check": "lock",
+     "timeout": 120,
+     "wait": [
+      "^\\[security\\] console leave session=<<b1_session>>$",
+      "^\\[user \\d+\\] \\[logon\\] session <<b1_session>> unlocked$"
+     ]
+    },
+    {
+     "name": "cad-lock",
+     "check": "lock",
+     "settle": 2,
+     "actions": [
+      {
+       "keys": "ctrl+alt+delete"
+      }
+     ]
+    },
+    {
+     "name": "cad-menu",
+     "check": "lock",
+     "timeout": 60,
+     "settle": 1,
+     "wait": "^\\[user \\d+\\] \\[logon-ui\\] view mode=security view=menu items=5 ",
+     "actions": [
+      {
+       "keys": "ret"
+      }
+     ]
+    },
+    {
+     "name": "cad-locked",
+     "check": "lock",
+     "timeout": 120,
+     "settle": 2,
+     "wait": [
+      "^\\[user \\d+\\] \\[logon\\] session <<b1_session>> locked by the security menu$",
+      "^\\[user \\d+\\] \\[logon-ui\\] view mode=locked view=password "
+     ],
+     "actions": [
+      {
+       "text": "Ciuki-pass-2026"
+      },
+      {
+       "keys": "ret"
+      }
+     ]
+    },
+    {
+     "name": "cad-unlocked",
+     "check": "lock",
+     "timeout": 120,
+     "wait": [
+      "^\\[security\\] console leave session=<<b1_session>>$",
+      "^\\[user \\d+\\] \\[logon\\] session <<b1_session>> unlocked$"
+     ]
+    },
+    {
+     "name": "saver-run",
+     "check": "saver",
+     "actions": [
+      {
+       "keys": "meta_l+r"
+      }
+     ],
+     "screen_settle": {
+      "changed": true,
+      "stable": 1.5,
+      "timeout": 30
+     },
+     "note": "Win+R opens Run"
+    },
+    {
+     "name": "saver-type",
+     "check": "saver",
+     "actions": [
+      {
+       "text": "sectest saver"
+      },
+      {
+       "keys": "ret"
+      }
+     ]
+    },
+    {
+     "name": "saver-start",
+     "check": "saver",
+     "timeout": 120,
+     "settle": 3,
+     "wait": [
+      "^\\[console\\] sectest saver result=0$",
+      "^\\[user \\d+\\] \\[desktop\\] saver start kind=\\d+ source=command$"
+     ],
+     "actions": [
+      {
+       "keys": "shift"
+      }
+     ],
+     "note": "a key dismisses the saver"
+    },
+    {
+     "name": "saver-locked",
+     "check": "saver",
+     "timeout": 120,
+     "settle": 2,
+     "wait": [
+      "^\\[user \\d+\\] \\[logon\\] session <<b1_session>> locked by the screen saver$",
+      "^\\[user \\d+\\] \\[logon-ui\\] view mode=locked view=password items=\\d+ accounts=\\d+ status=\\w+$"
+     ],
+     "actions": [
+      {
+       "text": "Ciuki-pass-2026"
+      },
+      {
+       "keys": "ret"
+      }
+     ]
+    },
+    {
+     "name": "saver-unlocked",
+     "check": "saver",
+     "timeout": 120,
+     "wait": [
+      "^\\[security\\] console leave session=<<b1_session>>$",
+      "^\\[user \\d+\\] \\[logon\\] session <<b1_session>> unlocked$"
+     ]
+    }
+   ],
+   "assertions": [
+    {
+     "name": "no-blank-lock",
+     "check": "blank",
+     "from": "blank-cad",
+     "to": "blank-return",
+     "max": 0,
+     "pattern": "^\\[user \\d+\\] \\[logon\\] session \\d+ locked by "
+    },
+    {
+     "name": "lock-gate-desktop",
+     "check": "lock",
+     "from": "menu-lock",
+     "to": "menu-unlocked",
+     "min": 1,
+     "pattern": "^\\[security\\] console enter session=<<b1_session>> reason=lock authentication=1$"
+    },
+    {
+     "name": "refusal-keeps-lock",
+     "check": "lock",
+     "from": "menu-locked",
+     "to": "menu-refused",
+     "max": 0,
+     "pattern": "^\\[security\\] console leave "
+    },
+    {
+     "name": "lock-gate-menu",
+     "check": "lock",
+     "from": "cad-lock",
+     "to": "cad-unlocked",
+     "min": 1,
+     "pattern": "^\\[security\\] console enter session=<<b1_session>> reason=lock authentication=1$"
+    },
+    {
+     "name": "saver-gate",
+     "check": "saver",
+     "from": "saver-start",
+     "to": "saver-unlocked",
+     "min": 1,
+     "pattern": "^\\[security\\] console enter session=<<b1_session>> reason=saver authentication=1$"
+    },
+    {
+     "name": "no-secret-on-serial",
+     "check": "secrets",
+     "from": "start",
+     "to": "end",
+     "max": 0,
+     "pattern": "^.*(?:Ciuki-pass-2026|Wrong-pass-0000)",
+     "note": "contract 4.3: no typed password (right or wrong) appears in a serial record"
+    }
+   ],
+   "figures": [
+    {
+     "name": "logon-records",
+     "check": "records",
+     "reducer": "lines",
+     "page": false,
+     "pattern": "^\\[user \\d+\\] \\[logon\\] "
+    },
+    {
+     "name": "security-records",
+     "check": "records",
+     "reducer": "lines",
+     "page": false,
+     "pattern": "^\\[security\\] "
+    },
+    {
+     "name": "account-records",
+     "check": "records",
+     "reducer": "lines",
+     "pattern": "^\\[user \\d+\\] \\[accounts\\] manage "
+    },
+    {
+     "name": "sectest-records",
+     "check": "records",
+     "reducer": "lines",
+     "page": false,
+     "pattern": "^\\[console\\] sectest "
+    },
+    {
+     "name": "gate-latency",
+     "check": "records",
+     "reducer": "lines",
+     "pattern": "^\\[security\\] console (?:concealed|restored) "
+    }
+   ],
+   "note": "DOS/Win32 full-screen saver dismissal stays host evidence (H09) while QEMU refuses DOS full screen (f3-29)."
+  },
+  {
+   "kind": "acceptance",
+   "probe": "acceptance",
+   "profile": "qemu-t23",
+   "expected": {
+    "evidence_kind": "acceptance"
+   },
+   "id": "su-10-resume",
+   "item": 10,
+   "timeout": 3600,
+   "title": "SU-10 password on resume",
+   "pending": {
+    "directive": "sec-user-04 (H12) and sec-k08 (U4-3 kernel resume hook); hardware confirmation",
+    "reason": "qemu-t23 offers no qualified standby provider (no ACPI S3, no APM standby in SeaBIOS); an unsupported provider is not run and never counted as a pass (contract SU-10)"
+   },
+   "steps": []
+  },
+  {
+   "kind": "acceptance",
+   "probe": "acceptance",
+   "profile": "qemu-t23",
+   "expected": {
+    "evidence_kind": "acceptance"
+   },
+   "id": "su-11-logoff",
+   "item": 11,
+   "timeout": 3600,
+   "title": "SU-11 Log Off: an unsaved CiukNote document vetoes and keeps the same session; consent closes everything, the kernel drains the old session, the next logon is a new session",
+   "items": {
+    "11": [
+     "setup",
+     "logoff",
+     "secrets"
+    ]
+   },
+   "steps": [
+    {
+     "template": "boot",
+     "prefix": "b1",
+     "check": "setup",
+     "settle": 15
+    },
+    {
+     "name": "cp1-run",
+     "check": "setup",
+     "actions": [
+      {
+       "keys": "meta_l+r"
+      }
+     ],
+     "screen_settle": {
+      "changed": true,
+      "stable": 1.5,
+      "timeout": 30
+     },
+     "note": "Win+R opens Run"
+    },
+    {
+     "name": "cp1-type",
+     "check": "setup",
+     "actions": [
+      {
+       "text": "control --panel=users"
+      },
+      {
+       "keys": "ret"
+      }
+     ]
+    },
+    {
+     "name": "cp1-window",
+     "check": "setup",
+     "timeout": 120,
+     "settle": 8,
+     "wait": [
+      "^\\[user \\d+\\] \\[desktop\\] launch name=control pid=(?P<cp1>[1-9]\\d*) error=0 ",
+      "^\\[user \\d+\\] \\[desktop\\] focus pid=<<cp1>> window=\\d+ titled=\\d internal=0 app=control$"
+     ],
+     "fail": [
+      "^\\[user \\d+\\] \\[desktop\\] launch name=control pid=0 "
+     ]
+    },
+    {
+     "name": "cp1-pw",
+     "check": "setup",
+     "actions": [
+      {
+       "keys": [
+        "tab",
+        "tab",
+        "tab",
+        "tab",
+        "tab"
+       ],
+       "pause": 0.4
+      },
+      {
+       "keys": "ret",
+       "pause": 2.5
+      },
+      {
+       "keys": "tab",
+       "pause": 0.4
+      },
+      {
+       "text": "Ciuki-pass-2026"
+      },
+      {
+       "keys": "tab",
+       "pause": 0.4
+      },
+      {
+       "text": "Ciuki-pass-2026"
+      },
+      {
+       "keys": "ret"
+      }
+     ],
+     "note": "User Accounts: Change the password (current, new, confirm)"
+    },
+    {
+     "name": "cp1-pw-done",
+     "check": "setup",
+     "timeout": 120,
+     "wait": "^\\[user \\d+\\] \\[accounts\\] manage op=password caller=1000 target=1000 type=admin result=0$",
+     "fail": "^\\[user \\d+\\] \\[accounts\\] manage op=password caller=\\d+ target=\\d+ type=\\w+ result=-\\d+$"
+    },
+    {
+     "name": "newbob",
+     "check": "setup",
+     "settle": 3,
+     "actions": [
+      {
+       "keys": [
+        "tab",
+        "tab",
+        "tab"
+       ],
+       "pause": 0.4
+      },
+      {
+       "keys": "ret",
+       "pause": 2.5
+      },
+      {
+       "text": "Bob"
+      },
+      {
+       "keys": "tab",
+       "pause": 0.4
+      },
+      {
+       "keys": "tab",
+       "pause": 0.4
+      },
+      {
+       "text": "Bob-pass-2026"
+      },
+      {
+       "keys": "tab",
+       "pause": 0.4
+      },
+      {
+       "text": "Bob-pass-2026"
+      },
+      {
+       "keys": "ret"
+      }
+     ],
+     "note": "User Accounts: Create a new account Bob (standard user)"
+    },
+    {
+     "name": "newbob-done",
+     "check": "setup",
+     "timeout": 120,
+     "wait": "^\\[user \\d+\\] \\[accounts\\] manage op=create caller=1000 target=(?P<newbob_uid>\\d+) type=standard result=0$",
+     "fail": "^\\[user \\d+\\] \\[accounts\\] manage op=create caller=\\d+ target=\\d+ type=\\w+ result=-\\d+$"
+    },
+    {
+     "name": "cp1-close",
+     "check": "setup",
+     "settle": 1,
+     "actions": [
+      {
+       "keys": "alt+f4",
+       "pause": 1.5
+      }
+     ],
+     "note": "Alt+F4 closes the Control Panel"
+    },
+    {
+     "name": "lo1",
+     "check": "setup",
+     "settle": 2,
+     "actions": [
+      {
+       "keys": [
+        "esc",
+        "esc",
+        "ctrl+esc"
+       ],
+       "pause": 1.0
+      },
+      {
+       "keys": "l",
+       "pause": 0.8
+      },
+      {
+       "keys": "ret"
+      }
+     ],
+     "note": "Start > Log Off"
+    },
+    {
+     "name": "lo1-done",
+     "check": "setup",
+     "timeout": 240,
+     "wait": [
+      "^\\[user \\d+\\] \\[logon\\] session (?P<lo1_session>\\d+) ending reason=1$",
+      "^\\[user \\d+\\] \\[logon\\] session <<lo1_session>> ended reason=1$",
+      "^\\[user \\d+\\] \\[logon\\] screen welcome$"
+     ],
+     "fail": [
+      "^\\[user \\d+\\] \\[logon\\] automatic logon requested$"
+     ]
+    },
+    {
+     "template": "logon",
+     "prefix": "bob",
+     "check": "logoff",
+     "user": "Bob",
+     "password": "Bob-pass-2026",
+     "settle": 8
+    },
+    {
+     "name": "note-run",
+     "check": "logoff",
+     "actions": [
+      {
+       "keys": "meta_l+r"
+      }
+     ],
+     "screen_settle": {
+      "changed": true,
+      "stable": 1.5,
+      "timeout": 30
+     },
+     "note": "Win+R opens Run"
+    },
+    {
+     "name": "note-type",
+     "check": "logoff",
+     "actions": [
+      {
+       "text": "ciuknote"
+      },
+      {
+       "keys": "ret"
+      }
+     ]
+    },
+    {
+     "name": "note-window",
+     "check": "logoff",
+     "timeout": 120,
+     "settle": 3,
+     "wait": [
+      "^\\[user \\d+\\] \\[desktop\\] launch name=ciuknote pid=(?P<note>[1-9]\\d*) error=0 ",
+      "^\\[user \\d+\\] \\[desktop\\] focus pid=<<note>> window=\\d+ titled=\\d internal=0 app=ciuknote$"
+     ],
+     "actions": [
+      {
+       "text": "unsaved text"
+      }
+     ]
+    },
+    {
+     "name": "veto-logoff",
+     "check": "logoff",
+     "settle": 2,
+     "actions": [
+      {
+       "keys": [
+        "ctrl+esc"
+       ],
+       "pause": 1.0
+      },
+      {
+       "keys": "l",
+       "pause": 0.8
+      },
+      {
+       "keys": "ret"
+      }
+     ]
+    },
+    {
+     "name": "veto-asked",
+     "check": "logoff",
+     "timeout": 60,
+     "settle": 3,
+     "wait": "^\\[console\\] \\[desktop\\] end-session begin action=3 programs=[1-9]\\d*$",
+     "actions": [
+      {
+       "keys": "esc"
+      }
+     ],
+     "note": "CiukNote asks to save; Esc (Cancel) vetoes"
+    },
+    {
+     "name": "veto-kept",
+     "check": "logoff",
+     "timeout": 60,
+     "settle": 10,
+     "wait": "^\\[console\\] \\[desktop\\] end-session (?:veto pid=<<note>>|cancelled action=3 )"
+    },
+    {
+     "name": "consent-logoff",
+     "check": "logoff",
+     "settle": 1,
+     "actions": [
+      {
+       "keys": [
+        "ctrl+esc"
+       ],
+       "pause": 1.0
+      },
+      {
+       "keys": "l",
+       "pause": 0.8
+      },
+      {
+       "keys": "ret"
+      }
+     ]
+    },
+    {
+     "name": "consent-asked",
+     "check": "logoff",
+     "timeout": 60,
+     "settle": 3,
+     "wait": "^\\[console\\] \\[desktop\\] end-session begin action=3 programs=[1-9]\\d*$",
+     "actions": [
+      {
+       "keys": "tab",
+       "pause": 0.5
+      },
+      {
+       "keys": "ret"
+      }
+     ],
+     "note": "No: close without saving"
+    },
+    {
+     "name": "consent-done",
+     "check": "logoff",
+     "timeout": 240,
+     "wait": [
+      "^\\[console\\] \\[desktop\\] end-session agreed action=3 ",
+      "^\\[user \\d+\\] \\[logon\\] session <<bob_session>> ending reason=1$",
+      "^\\[user \\d+\\] \\[logon\\] session <<bob_session>> ended reason=1$",
+      "^\\[user \\d+\\] \\[logon\\] screen welcome$"
+     ]
+    },
+    {
+     "template": "logon",
+     "prefix": "bobtwo",
+     "check": "logoff",
+     "user": "Bob",
+     "password": "Bob-pass-2026",
+     "settle": 8
+    }
+   ],
+   "assertions": [
+    {
+     "name": "veto-keeps-session",
+     "check": "logoff",
+     "from": "veto-logoff",
+     "to": "veto-kept",
+     "max": 0,
+     "pattern": "^\\[user \\d+\\] \\[logon\\] session <<bob_session>> ending "
+    },
+    {
+     "name": "old-session-drained",
+     "check": "logoff",
+     "from": "consent-done",
+     "to": "bobtwo-display",
+     "min": 1,
+     "pattern": "^\\[security\\] session drained session=<<bob_session>> passes=\\d+$"
+    },
+    {
+     "name": "new-session",
+     "check": "logoff",
+     "from": "bobtwo-auth",
+     "to": "bobtwo-display",
+     "max": 0,
+     "pattern": "^\\[security\\] session <<bob_session>> desktop "
+    },
+    {
+     "name": "no-secret-on-serial",
+     "check": "secrets",
+     "from": "start",
+     "to": "end",
+     "max": 0,
+     "pattern": "^.*(?:Ciuki-pass-2026|Bob-pass-2026)",
+     "note": "contract 4.3: no typed password (right or wrong) appears in a serial record"
+    }
+   ],
+   "figures": [
+    {
+     "name": "logon-records",
+     "check": "records",
+     "reducer": "lines",
+     "page": false,
+     "pattern": "^\\[user \\d+\\] \\[logon\\] "
+    },
+    {
+     "name": "security-records",
+     "check": "records",
+     "reducer": "lines",
+     "page": false,
+     "pattern": "^\\[security\\] "
+    },
+    {
+     "name": "account-records",
+     "check": "records",
+     "reducer": "lines",
+     "pattern": "^\\[user \\d+\\] \\[accounts\\] manage "
+    },
+    {
+     "name": "sectest-records",
+     "check": "records",
+     "reducer": "lines",
+     "page": false,
+     "pattern": "^\\[console\\] sectest "
+    },
+    {
+     "name": "gate-latency",
+     "check": "records",
+     "reducer": "lines",
+     "pattern": "^\\[security\\] console (?:concealed|restored) "
+    }
+   ],
+   "note": "Win32 WM_QUERYENDSESSION and DOS VM teardown on log-off stay host evidence (H09/H10); Switch User is absent from the Start menu (H10)."
+  },
+  {
+   "kind": "acceptance",
+   "probe": "acceptance",
+   "profile": "qemu-t23",
+   "expected": {
+    "evidence_kind": "acceptance"
+   },
+   "id": "su-12-recovery",
+   "item": 12,
+   "timeout": 5400,
+   "title": "SU-12 recovery account: an administrator sets CiukiAdministrator's password; it is refused in a normal boot and logs on in Safe Mode (M-Q1); the normal Welcome does not list it",
+   "resets": 2,
+   "items": {
+    "12": [
+     "setup",
+     "normal",
+     "safe",
+     "secrets"
+    ]
+   },
+   "steps": [
+    {
+     "template": "boot",
+     "prefix": "b1",
+     "check": "setup",
+     "settle": 15
+    },
+    {
+     "name": "cp1-run",
+     "check": "setup",
+     "actions": [
+      {
+       "keys": "meta_l+r"
+      }
+     ],
+     "screen_settle": {
+      "changed": true,
+      "stable": 1.5,
+      "timeout": 30
+     },
+     "note": "Win+R opens Run"
+    },
+    {
+     "name": "cp1-type",
+     "check": "setup",
+     "actions": [
+      {
+       "text": "control --panel=users"
+      },
+      {
+       "keys": "ret"
+      }
+     ]
+    },
+    {
+     "name": "cp1-window",
+     "check": "setup",
+     "timeout": 120,
+     "settle": 8,
+     "wait": [
+      "^\\[user \\d+\\] \\[desktop\\] launch name=control pid=(?P<cp1>[1-9]\\d*) error=0 ",
+      "^\\[user \\d+\\] \\[desktop\\] focus pid=<<cp1>> window=\\d+ titled=\\d internal=0 app=control$"
+     ],
+     "fail": [
+      "^\\[user \\d+\\] \\[desktop\\] launch name=control pid=0 "
+     ]
+    },
+    {
+     "name": "cp1-pw",
+     "check": "setup",
+     "actions": [
+      {
+       "keys": [
+        "tab",
+        "tab",
+        "tab",
+        "tab",
+        "tab"
+       ],
+       "pause": 0.4
+      },
+      {
+       "keys": "ret",
+       "pause": 2.5
+      },
+      {
+       "keys": "tab",
+       "pause": 0.4
+      },
+      {
+       "text": "Ciuki-pass-2026"
+      },
+      {
+       "keys": "tab",
+       "pause": 0.4
+      },
+      {
+       "text": "Ciuki-pass-2026"
+      },
+      {
+       "keys": "ret"
+      }
+     ],
+     "note": "User Accounts: Change the password (current, new, confirm)"
+    },
+    {
+     "name": "cp1-pw-done",
+     "check": "setup",
+     "timeout": 120,
+     "wait": "^\\[user \\d+\\] \\[accounts\\] manage op=password caller=1000 target=1000 type=admin result=0$",
+     "fail": "^\\[user \\d+\\] \\[accounts\\] manage op=password caller=\\d+ target=\\d+ type=\\w+ result=-\\d+$"
+    },
+    {
+     "name": "admin-select",
+     "check": "setup",
+     "settle": 3,
+     "actions": [
+      {
+       "keys": [
+        "tab",
+        "tab"
+       ],
+       "pause": 0.4
+      },
+      {
+       "keys": [
+        "home"
+       ],
+       "pause": 2.5
+      }
+     ],
+     "note": "Home keeps item 0, CiukiAdministrator (uid 500)"
+    },
+    {
+     "name": "admin-pw",
+     "check": "setup",
+     "settle": 2,
+     "actions": [
+      {
+       "keys": [
+        "tab",
+        "tab",
+        "tab",
+        "tab"
+       ],
+       "pause": 0.4
+      },
+      {
+       "keys": "ret",
+       "pause": 2.5
+      },
+      {
+       "text": "Admin-pass-2026"
+      },
+      {
+       "keys": "tab",
+       "pause": 0.4
+      },
+      {
+       "text": "Admin-pass-2026"
+      },
+      {
+       "keys": "ret"
+      }
+     ],
+     "note": "User Accounts: Reset the password"
+    },
+    {
+     "name": "admin-pw-done",
+     "check": "setup",
+     "timeout": 120,
+     "wait": "^\\[user \\d+\\] \\[accounts\\] manage op=password caller=1000 target=500 type=admin result=0$",
+     "fail": "^\\[user \\d+\\] \\[accounts\\] manage op=password caller=\\d+ target=\\d+ type=\\w+ result=-\\d+$"
+    },
+    {
+     "name": "cp1-close",
+     "check": "setup",
+     "settle": 1,
+     "actions": [
+      {
+       "keys": "alt+f4",
+       "pause": 1.5
+      }
+     ],
+     "note": "Alt+F4 closes the Control Panel"
+    },
+    {
+     "name": "lo1",
+     "check": "normal",
+     "settle": 2,
+     "actions": [
+      {
+       "keys": [
+        "esc",
+        "esc",
+        "ctrl+esc"
+       ],
+       "pause": 1.0
+      },
+      {
+       "keys": "l",
+       "pause": 0.8
+      },
+      {
+       "keys": "ret"
+      }
+     ],
+     "note": "Start > Log Off"
+    },
+    {
+     "name": "lo1-done",
+     "check": "normal",
+     "timeout": 240,
+     "wait": [
+      "^\\[user \\d+\\] \\[logon\\] session (?P<lo1_session>\\d+) ending reason=1$",
+      "^\\[user \\d+\\] \\[logon\\] session <<lo1_session>> ended reason=1$",
+      "^\\[user \\d+\\] \\[logon\\] screen welcome$"
+     ],
+     "fail": [
+      "^\\[user \\d+\\] \\[logon\\] automatic logon requested$"
+     ]
+    },
+    {
+     "name": "admin500",
+     "check": "normal",
+     "timeout": 120,
+     "settle": 1,
+     "wait": "^\\[user \\d+\\] \\[logon-ui\\] view mode=welcome view=list items=\\d+ accounts=[1-9]\\d* status=\\w+$",
+     "actions": [
+      {
+       "keys": [
+        "up",
+        "up",
+        "ret"
+       ],
+       "pause": 0.5
+      }
+     ]
+    },
+    {
+     "name": "admin500-typed",
+     "check": "normal",
+     "timeout": 60,
+     "settle": 0.5,
+     "wait": "^\\[user \\d+\\] \\[logon-ui\\] view mode=welcome view=typed ",
+     "actions": [
+      {
+       "text": "CiukiAdministrator"
+      },
+      {
+       "keys": "ret",
+       "pause": 0.5
+      },
+      {
+       "text": "Admin-pass-2026"
+      },
+      {
+       "keys": "ret"
+      }
+     ]
+    },
+    {
+     "name": "admin500-refused",
+     "check": "normal",
+     "timeout": 120,
+     "settle": 2,
+     "wait": [
+      "^\\[user \\d+\\] \\[logon\\] authentication refused action=2 status=-13$",
+      "^\\[user \\d+\\] \\[logon-ui\\] view mode=welcome view=typed items=\\d+ accounts=\\d+ status=incorrect$"
+     ],
+     "fail": [
+      "^\\[user \\d+\\] \\[logon\\] authenticated uid="
+     ],
+     "actions": [
+      {
+       "keys": "esc"
+      }
+     ],
+     "note": "the same public refusal; Esc returns to the list"
+    },
+    {
+     "name": "wprestart",
+     "check": "normal",
+     "arm": "reset",
+     "settle": 1,
+     "wait": "^\\[user \\d+\\] \\[logon-ui\\] view mode=welcome view=list items=\\d+ accounts=[1-9]\\d* status=\\w+$",
+     "actions": [
+      {
+       "keys": "up",
+       "pause": 0.6
+      },
+      {
+       "keys": "ret",
+       "pause": 1.0
+      }
+     ],
+     "note": "Welcome: Turn Off Computer"
+    },
+    {
+     "name": "wprestart-confirm",
+     "check": "normal",
+     "settle": 0.5,
+     "timeout": 60,
+     "wait": "^\\[user \\d+\\] \\[logon-ui\\] view mode=welcome view=confirm-power items=3 ",
+     "actions": [
+      {
+       "keys": "down",
+       "pause": 0.5
+      },
+      {
+       "keys": "ret"
+      }
+     ],
+     "note": "Restart"
+    },
+    {
+     "name": "wprestart-power",
+     "check": "normal",
+     "timeout": 240,
+     "wait": [
+      "^\\[user \\d+\\] \\[logon\\] restart requested at the logon screen$",
+      "^\\[power\\] reboot requested by pid \\d+ attempt=\\d+ progress=\\d+ storage=\\w+$",
+      "^\\[storage\\] completion drive=C kind=durable result=0 ",
+      "^\\[power\\] stage=reset fallback=8042-triple-fault$"
+     ],
+     "fail": [
+      "^\\[user \\d+\\] \\[logon\\] power request refused: ",
+      "^\\[storage\\] shutdown (?:busy|refused) "
+     ]
+    },
+    {
+     "name": "wprestart-reset",
+     "check": "normal",
+     "wait_event": "RESET",
+     "timeout": 120
+    },
+    {
+     "template": "boot-safe-logon",
+     "prefix": "s1",
+     "check": "safe",
+     "user": "CiukiAdministrator",
+     "password": "Admin-pass-2026",
+     "settle": 10
+    },
+    {
+     "name": "lo2",
+     "check": "safe",
+     "settle": 2,
+     "actions": [
+      {
+       "keys": [
+        "esc",
+        "esc",
+        "ctrl+esc"
+       ],
+       "pause": 1.0
+      },
+      {
+       "keys": "l",
+       "pause": 0.8
+      },
+      {
+       "keys": "ret"
+      }
+     ],
+     "note": "Start > Log Off"
+    },
+    {
+     "name": "lo2-done",
+     "check": "safe",
+     "timeout": 240,
+     "wait": [
+      "^\\[user \\d+\\] \\[logon\\] session (?P<lo2_session>\\d+) ending reason=1$",
+      "^\\[user \\d+\\] \\[logon\\] session <<lo2_session>> ended reason=1$",
+      "^\\[user \\d+\\] \\[logon\\] screen welcome$"
+     ],
+     "fail": [
+      "^\\[user \\d+\\] \\[logon\\] automatic logon requested$"
+     ]
+    },
+    {
+     "name": "wprestart2",
+     "check": "safe",
+     "arm": "reset",
+     "settle": 1,
+     "wait": "^\\[user \\d+\\] \\[logon-ui\\] view mode=welcome view=list items=\\d+ accounts=[1-9]\\d* status=\\w+$",
+     "actions": [
+      {
+       "keys": "up",
+       "pause": 0.6
+      },
+      {
+       "keys": "ret",
+       "pause": 1.0
+      }
+     ],
+     "note": "Welcome: Turn Off Computer"
+    },
+    {
+     "name": "wprestart2-confirm",
+     "check": "safe",
+     "settle": 0.5,
+     "timeout": 60,
+     "wait": "^\\[user \\d+\\] \\[logon-ui\\] view mode=welcome view=confirm-power items=3 ",
+     "actions": [
+      {
+       "keys": "down",
+       "pause": 0.5
+      },
+      {
+       "keys": "ret"
+      }
+     ],
+     "note": "Restart"
+    },
+    {
+     "name": "wprestart2-power",
+     "check": "safe",
+     "timeout": 240,
+     "wait": [
+      "^\\[user \\d+\\] \\[logon\\] restart requested at the logon screen$",
+      "^\\[power\\] reboot requested by pid \\d+ attempt=\\d+ progress=\\d+ storage=\\w+$",
+      "^\\[storage\\] completion drive=C kind=durable result=0 ",
+      "^\\[power\\] stage=reset fallback=8042-triple-fault$"
+     ],
+     "fail": [
+      "^\\[user \\d+\\] \\[logon\\] power request refused: ",
+      "^\\[storage\\] shutdown (?:busy|refused) "
+     ]
+    },
+    {
+     "name": "wprestart2-reset",
+     "check": "safe",
+     "wait_event": "RESET",
+     "timeout": 120
+    },
+    {
+     "name": "b3-loader",
+     "check": "normal",
+     "wait": "^SELECT_READY$",
+     "timeout": 900,
+     "actions": [
+      {
+       "keys": "n"
+      }
+     ],
+     "note": "loader menu: N, Normal"
+    },
+    {
+     "name": "b3-kernel",
+     "check": "normal",
+     "timeout": 600,
+     "wait": [
+      "^L:SELECT_SOURCE=menu$",
+      "^Ciuki VMM F0 build (?P<b3_build>[!-~]+) - CiukiOS$"
+     ],
+     "fail": [
+      "^L:SAFE=1$",
+      "^L:STARTUP="
+     ]
+    },
+    {
+     "name": "b3-welcome",
+     "check": "normal",
+     "timeout": 900,
+     "wait": [
+      "^\\[supervisor\\] bootstrap: trusted logon pid=\\d+$",
+      "^\\[user \\d+\\] \\[logon\\] screen welcome$"
+     ],
+     "fail": [
+      "^\\[user \\d+\\] \\[logon\\] authenticated uid=",
+      "^\\[user \\d+\\] \\[logon\\] automatic logon requested$"
+     ]
+    },
+    {
+     "name": "b3-list",
+     "check": "normal",
+     "timeout": 60,
+     "wait": "^\\[user \\d+\\] \\[logon-ui\\] view mode=welcome view=list items=\\d+ accounts=1 status=\\w+$",
+     "note": "normal boot: CiukiAdministrator is not listed (disabled outside Safe Mode)"
+    }
+   ],
+   "assertions": [
+    {
+     "name": "recovery-desktop",
+     "check": "safe",
+     "from": "s1-auth",
+     "to": "s1-display",
+     "min": 1,
+     "pattern": "^\\[security\\] session \\d+ desktop pid=\\d+ pgid=\\d+ uid=500 gid=545 groups=544,545$"
+    },
+    {
+     "name": "safe-mode",
+     "check": "safe",
+     "from": "s1-loader",
+     "to": "s1-display",
+     "min": 1,
+     "pattern": "^\\[user \\d+\\] \\[logon\\] automatic logon not applicable safe=1$"
+    },
+    {
+     "name": "no-autologon-after-password",
+     "check": "normal",
+     "from": "b3-loader",
+     "to": "b3-list",
+     "max": 0,
+     "pattern": "^\\[user \\d+\\] \\[logon\\] (?:automatic logon requested|authenticated uid=)"
+    },
+    {
+     "name": "no-secret-on-serial",
+     "check": "secrets",
+     "from": "start",
+     "to": "end",
+     "max": 0,
+     "pattern": "^.*(?:Ciuki-pass-2026|Admin-pass-2026)",
+     "note": "contract 4.3: no typed password (right or wrong) appears in a serial record"
+    }
+   ],
+   "figures": [
+    {
+     "name": "logon-records",
+     "check": "records",
+     "reducer": "lines",
+     "page": false,
+     "pattern": "^\\[user \\d+\\] \\[logon\\] "
+    },
+    {
+     "name": "security-records",
+     "check": "records",
+     "reducer": "lines",
+     "page": false,
+     "pattern": "^\\[security\\] "
+    },
+    {
+     "name": "account-records",
+     "check": "records",
+     "reducer": "lines",
+     "pattern": "^\\[user \\d+\\] \\[accounts\\] manage "
+    },
+    {
+     "name": "sectest-records",
+     "check": "records",
+     "reducer": "lines",
+     "page": false,
+     "pattern": "^\\[console\\] sectest "
+    },
+    {
+     "name": "gate-latency",
+     "check": "records",
+     "reducer": "lines",
+     "pattern": "^\\[security\\] console (?:concealed|restored) "
+    }
+   ],
+   "note": "The confirmed Setup CD repair with every administrator verifier lost stays host evidence (H08) until the runner has a CD path."
+  },
+  {
+   "kind": "acceptance",
+   "probe": "acceptance",
+   "profile": "qemu-t23",
+   "expected": {
+    "evidence_kind": "acceptance"
+   },
+   "id": "su-13-crash",
+   "item": 13,
+   "timeout": 3600,
+   "title": "SU-13 interrupted account creation: power is cut while User Accounts creates an account; the next boot opens a coherent store (the account fully created or absent) and the administrator logs on",
+   "resets": 1,
+   "items": {
+    "13": [
+     "setup",
+     "crash",
+     "secrets"
+    ]
+   },
+   "steps": [
+    {
+     "template": "boot",
+     "prefix": "b1",
+     "check": "setup",
+     "settle": 15
+    },
+    {
+     "name": "cp1-run",
+     "check": "setup",
+     "actions": [
+      {
+       "keys": "meta_l+r"
+      }
+     ],
+     "screen_settle": {
+      "changed": true,
+      "stable": 1.5,
+      "timeout": 30
+     },
+     "note": "Win+R opens Run"
+    },
+    {
+     "name": "cp1-type",
+     "check": "setup",
+     "actions": [
+      {
+       "text": "control --panel=users"
+      },
+      {
+       "keys": "ret"
+      }
+     ]
+    },
+    {
+     "name": "cp1-window",
+     "check": "setup",
+     "timeout": 120,
+     "settle": 8,
+     "wait": [
+      "^\\[user \\d+\\] \\[desktop\\] launch name=control pid=(?P<cp1>[1-9]\\d*) error=0 ",
+      "^\\[user \\d+\\] \\[desktop\\] focus pid=<<cp1>> window=\\d+ titled=\\d internal=0 app=control$"
+     ],
+     "fail": [
+      "^\\[user \\d+\\] \\[desktop\\] launch name=control pid=0 "
+     ]
+    },
+    {
+     "name": "cp1-pw",
+     "check": "setup",
+     "actions": [
+      {
+       "keys": [
+        "tab",
+        "tab",
+        "tab",
+        "tab",
+        "tab"
+       ],
+       "pause": 0.4
+      },
+      {
+       "keys": "ret",
+       "pause": 2.5
+      },
+      {
+       "keys": "tab",
+       "pause": 0.4
+      },
+      {
+       "text": "Ciuki-pass-2026"
+      },
+      {
+       "keys": "tab",
+       "pause": 0.4
+      },
+      {
+       "text": "Ciuki-pass-2026"
+      },
+      {
+       "keys": "ret"
+      }
+     ],
+     "note": "User Accounts: Change the password (current, new, confirm)"
+    },
+    {
+     "name": "cp1-pw-done",
+     "check": "setup",
+     "timeout": 120,
+     "wait": "^\\[user \\d+\\] \\[accounts\\] manage op=password caller=1000 target=1000 type=admin result=0$",
+     "fail": "^\\[user \\d+\\] \\[accounts\\] manage op=password caller=\\d+ target=\\d+ type=\\w+ result=-\\d+$"
+    },
+    {
+     "name": "newbob",
+     "check": "setup",
+     "settle": 3,
+     "actions": [
+      {
+       "keys": [
+        "tab",
+        "tab",
+        "tab"
+       ],
+       "pause": 0.4
+      },
+      {
+       "keys": "ret",
+       "pause": 2.5
+      },
+      {
+       "text": "Bob"
+      },
+      {
+       "keys": "tab",
+       "pause": 0.4
+      },
+      {
+       "keys": "tab",
+       "pause": 0.4
+      },
+      {
+       "text": "Bob-pass-2026"
+      },
+      {
+       "keys": "tab",
+       "pause": 0.4
+      },
+      {
+       "text": "Bob-pass-2026"
+      },
+      {
+       "keys": "ret"
+      },
+      {
+       "sleep": 0.4
+      },
+      {
+       "power_cut": true
+      }
+     ],
+     "note": "User Accounts: Create a new account Bob (standard user); the runner cuts power 0.4 s after the request (QMP system_reset)"
+    },
+    {
+     "name": "cut-reset",
+     "check": "crash",
+     "wait_event": "RESET",
+     "timeout": 60
+    },
+    {
+     "name": "b2-loader",
+     "check": "crash",
+     "wait": "^SELECT_READY$",
+     "timeout": 900,
+     "actions": [
+      {
+       "keys": "n"
+      }
+     ],
+     "note": "loader menu: N, Normal"
+    },
+    {
+     "name": "b2-kernel",
+     "check": "crash",
+     "timeout": 600,
+     "wait": [
+      "^L:SELECT_SOURCE=menu$",
+      "^Ciuki VMM F0 build (?P<b2_build>[!-~]+) - CiukiOS$"
+     ],
+     "fail": [
+      "^L:SAFE=1$",
+      "^L:STARTUP="
+     ]
+    },
+    {
+     "name": "b2-welcome",
+     "check": "crash",
+     "timeout": 900,
+     "wait": [
+      "^\\[supervisor\\] bootstrap: trusted logon pid=\\d+$",
+      "^\\[user \\d+\\] \\[logon\\] screen welcome$"
+     ],
+     "fail": [
+      "^\\[user \\d+\\] \\[logon\\] authenticated uid=",
+      "^\\[user \\d+\\] \\[logon\\] automatic logon requested$"
+     ]
+    },
+    {
+     "name": "b2-list",
+     "check": "crash",
+     "timeout": 120,
+     "wait": "^\\[user \\d+\\] \\[logon-ui\\] view mode=welcome view=list items=\\d+ accounts=(?P<accounts>[12]) status=\\w+$",
+     "note": "a coherent store: Bob fully created or absent"
+    },
+    {
+     "template": "logon",
+     "prefix": "ciuki",
+     "check": "crash",
+     "user": "CiukiUser",
+     "password": "Ciuki-pass-2026",
+     "settle": 8
+    }
+   ],
+   "assertions": [
+    {
+     "name": "store-open",
+     "check": "crash",
+     "from": "b2-loader",
+     "to": "b2-list",
+     "min": 1,
+     "pattern": "^\\[user \\d+\\] \\[accounts\\] open; account database available$"
+    },
+    {
+     "name": "no-store-fault",
+     "check": "crash",
+     "from": "b2-loader",
+     "to": "ciuki-display",
+     "max": 0,
+     "pattern": "^\\[user \\d+\\] \\[accounts\\] (?:open refused|storage fault|first-boot (?:migration|promotion) refused)"
+    },
+    {
+     "name": "no-secret-on-serial",
+     "check": "secrets",
+     "from": "start",
+     "to": "end",
+     "max": 0,
+     "pattern": "^.*(?:Ciuki-pass-2026|Bob-pass-2026)",
+     "note": "contract 4.3: no typed password (right or wrong) appears in a serial record"
+    }
+   ],
+   "figures": [
+    {
+     "name": "logon-records",
+     "check": "records",
+     "reducer": "lines",
+     "page": false,
+     "pattern": "^\\[user \\d+\\] \\[logon\\] "
+    },
+    {
+     "name": "security-records",
+     "check": "records",
+     "reducer": "lines",
+     "page": false,
+     "pattern": "^\\[security\\] "
+    },
+    {
+     "name": "account-records",
+     "check": "records",
+     "reducer": "lines",
+     "pattern": "^\\[user \\d+\\] \\[accounts\\] manage "
+    },
+    {
+     "name": "sectest-records",
+     "check": "records",
+     "reducer": "lines",
+     "page": false,
+     "pattern": "^\\[console\\] sectest "
+    },
+    {
+     "name": "gate-latency",
+     "check": "records",
+     "reducer": "lines",
+     "pattern": "^\\[security\\] console (?:concealed|restored) "
+    }
+   ],
+   "note": "Killing the account service mid-management, a stale v1 lock and each OWNER/migration publication stage stay host evidence (H03, H02, H08) until a runtime fault selector exists."
+  },
+  {
+   "kind": "acceptance",
+   "probe": "acceptance",
+   "profile": "qemu-t23",
+   "expected": {
+    "evidence_kind": "acceptance"
+   },
+   "id": "su-14-shutdown",
+   "item": 14,
+   "timeout": 3600,
+   "title": "SU-14 shutdown: a Standard user shuts the computer down after the end-session query; machine settings stay refused (Restart and Shut Down at Welcome: acc-accounts, su-01)",
+   "items": {
+    "14": [
+     "setup",
+     "shutdown",
+     "secrets"
+    ]
+   },
+   "steps": [
+    {
+     "template": "boot",
+     "prefix": "b1",
+     "check": "setup",
+     "settle": 15
+    },
+    {
+     "name": "cp1-run",
+     "check": "setup",
+     "actions": [
+      {
+       "keys": "meta_l+r"
+      }
+     ],
+     "screen_settle": {
+      "changed": true,
+      "stable": 1.5,
+      "timeout": 30
+     },
+     "note": "Win+R opens Run"
+    },
+    {
+     "name": "cp1-type",
+     "check": "setup",
+     "actions": [
+      {
+       "text": "control --panel=users"
+      },
+      {
+       "keys": "ret"
+      }
+     ]
+    },
+    {
+     "name": "cp1-window",
+     "check": "setup",
+     "timeout": 120,
+     "settle": 8,
+     "wait": [
+      "^\\[user \\d+\\] \\[desktop\\] launch name=control pid=(?P<cp1>[1-9]\\d*) error=0 ",
+      "^\\[user \\d+\\] \\[desktop\\] focus pid=<<cp1>> window=\\d+ titled=\\d internal=0 app=control$"
+     ],
+     "fail": [
+      "^\\[user \\d+\\] \\[desktop\\] launch name=control pid=0 "
+     ]
+    },
+    {
+     "name": "cp1-pw",
+     "check": "setup",
+     "actions": [
+      {
+       "keys": [
+        "tab",
+        "tab",
+        "tab",
+        "tab",
+        "tab"
+       ],
+       "pause": 0.4
+      },
+      {
+       "keys": "ret",
+       "pause": 2.5
+      },
+      {
+       "keys": "tab",
+       "pause": 0.4
+      },
+      {
+       "text": "Ciuki-pass-2026"
+      },
+      {
+       "keys": "tab",
+       "pause": 0.4
+      },
+      {
+       "text": "Ciuki-pass-2026"
+      },
+      {
+       "keys": "ret"
+      }
+     ],
+     "note": "User Accounts: Change the password (current, new, confirm)"
+    },
+    {
+     "name": "cp1-pw-done",
+     "check": "setup",
+     "timeout": 120,
+     "wait": "^\\[user \\d+\\] \\[accounts\\] manage op=password caller=1000 target=1000 type=admin result=0$",
+     "fail": "^\\[user \\d+\\] \\[accounts\\] manage op=password caller=\\d+ target=\\d+ type=\\w+ result=-\\d+$"
+    },
+    {
+     "name": "newbob",
+     "check": "setup",
+     "settle": 3,
+     "actions": [
+      {
+       "keys": [
+        "tab",
+        "tab",
+        "tab"
+       ],
+       "pause": 0.4
+      },
+      {
+       "keys": "ret",
+       "pause": 2.5
+      },
+      {
+       "text": "Bob"
+      },
+      {
+       "keys": "tab",
+       "pause": 0.4
+      },
+      {
+       "keys": "tab",
+       "pause": 0.4
+      },
+      {
+       "text": "Bob-pass-2026"
+      },
+      {
+       "keys": "tab",
+       "pause": 0.4
+      },
+      {
+       "text": "Bob-pass-2026"
+      },
+      {
+       "keys": "ret"
+      }
+     ],
+     "note": "User Accounts: Create a new account Bob (standard user)"
+    },
+    {
+     "name": "newbob-done",
+     "check": "setup",
+     "timeout": 120,
+     "wait": "^\\[user \\d+\\] \\[accounts\\] manage op=create caller=1000 target=(?P<newbob_uid>\\d+) type=standard result=0$",
+     "fail": "^\\[user \\d+\\] \\[accounts\\] manage op=create caller=\\d+ target=\\d+ type=\\w+ result=-\\d+$"
+    },
+    {
+     "name": "cp1-close",
+     "check": "setup",
+     "settle": 1,
+     "actions": [
+      {
+       "keys": "alt+f4",
+       "pause": 1.5
+      }
+     ],
+     "note": "Alt+F4 closes the Control Panel"
+    },
+    {
+     "name": "lo1",
+     "check": "setup",
+     "settle": 2,
+     "actions": [
+      {
+       "keys": [
+        "esc",
+        "esc",
+        "ctrl+esc"
+       ],
+       "pause": 1.0
+      },
+      {
+       "keys": "l",
+       "pause": 0.8
+      },
+      {
+       "keys": "ret"
+      }
+     ],
+     "note": "Start > Log Off"
+    },
+    {
+     "name": "lo1-done",
+     "check": "setup",
+     "timeout": 240,
+     "wait": [
+      "^\\[user \\d+\\] \\[logon\\] session (?P<lo1_session>\\d+) ending reason=1$",
+      "^\\[user \\d+\\] \\[logon\\] session <<lo1_session>> ended reason=1$",
+      "^\\[user \\d+\\] \\[logon\\] screen welcome$"
+     ],
+     "fail": [
+      "^\\[user \\d+\\] \\[logon\\] automatic logon requested$"
+     ]
+    },
+    {
+     "template": "logon",
+     "prefix": "bob",
+     "check": "shutdown",
+     "user": "Bob",
+     "password": "Bob-pass-2026",
+     "settle": 8
+    },
+    {
+     "name": "stbob-run",
+     "check": "shutdown",
+     "actions": [
+      {
+       "keys": "meta_l+r"
+      }
+     ],
+     "screen_settle": {
+      "changed": true,
+      "stable": 1.5,
+      "timeout": 30
+     },
+     "note": "Win+R opens Run"
+    },
+    {
+     "name": "stbob-type",
+     "check": "shutdown",
+     "actions": [
+      {
+       "text": "sectest --expect=standard --check=machine-setting"
+      },
+      {
+       "keys": "ret"
+      }
+     ]
+    },
+    {
+     "name": "stbob-done",
+     "check": "shutdown",
+     "timeout": 240,
+     "wait": [
+      "^\\[user \\d+\\] \\[desktop\\] launch name=sectest pid=(?P<stbob_pid>[1-9]\\d*) error=0 ",
+      "^\\[console\\] sectest begin version=1 uid=<<newbob_uid>> gid=\\d+ session=\\d+ groups=545 role=standard expect=standard profile=\\S+ result=0 verdict=pass$",
+      "^\\[console\\] sectest end role=standard checks=\\d+ passed=\\d+ failed=0 skipped=\\d+$"
+     ],
+     "fail": [
+      "^\\[console\\] sectest usage",
+      "^\\[console\\] sectest begin .* verdict=fail$",
+      "^\\[console\\] sectest check=\\S+ .* verdict=fail",
+      "^\\[user \\d+\\] \\[desktop\\] launch name=sectest pid=0 "
+     ],
+     "note": "sectest --expect=standard --check=machine-setting: one record per check (apps/systools/sectest_model.c)"
+    },
+    {
+     "name": "bob-shutdown",
+     "check": "shutdown",
+     "arm": "shutdown",
+     "settle": 3,
+     "actions": [
+      {
+       "keys": [
+        "esc",
+        "esc",
+        "ctrl+esc",
+        "u"
+       ],
+       "pause": 1.0
+      },
+      {
+       "sleep": 2
+      },
+      {
+       "keys": "s",
+       "pause": 1.0
+      },
+      {
+       "keys": "ret"
+      }
+     ],
+     "note": "Start > Shut Down... > Shut down (S) > Enter, as the Standard user"
+    },
+    {
+     "name": "bob-power",
+     "check": "shutdown",
+     "timeout": 240,
+     "wait": [
+      "^\\[user \\d+\\] \\[logon\\] session <<bob_session>> ending reason=2$",
+      "^\\[power\\] power off requested by pid \\d+ attempt=\\d+ progress=\\d+ storage=\\w+$",
+      "^\\[storage\\] completion drive=C kind=durable result=0 ",
+      "^\\[power\\] stage=(?:(?:acpi|apm)-off state=quiescent$|acpi-s5-off )"
+     ],
+     "fail": [
+      "^\\[storage\\] shutdown (?:busy|refused) ",
+      "^\\[power\\] no qualified soft-off provider"
+     ]
+    },
+    {
+     "name": "bob-off",
+     "check": "shutdown",
+     "wait_event": "SHUTDOWN",
+     "timeout": 120
+    }
+   ],
+   "assertions": [
+    {
+     "name": "bob-machine-setting-refused",
+     "check": "shutdown",
+     "from": "stbob-run",
+     "to": "stbob-done",
+     "min": 1,
+     "max": 1,
+     "pattern": "^\\[console\\] sectest check=machine-setting expect=deny result=-(?:1|13|30) verdict=pass$"
+    },
+    {
+     "name": "no-secret-on-serial",
+     "check": "secrets",
+     "from": "start",
+     "to": "end",
+     "max": 0,
+     "pattern": "^.*(?:Ciuki-pass-2026|Bob-pass-2026)",
+     "note": "contract 4.3: no typed password (right or wrong) appears in a serial record"
+    }
+   ],
+   "figures": [
+    {
+     "name": "logon-records",
+     "check": "records",
+     "reducer": "lines",
+     "page": false,
+     "pattern": "^\\[user \\d+\\] \\[logon\\] "
+    },
+    {
+     "name": "security-records",
+     "check": "records",
+     "reducer": "lines",
+     "page": false,
+     "pattern": "^\\[security\\] "
+    },
+    {
+     "name": "account-records",
+     "check": "records",
+     "reducer": "lines",
+     "pattern": "^\\[user \\d+\\] \\[accounts\\] manage "
+    },
+    {
+     "name": "sectest-records",
+     "check": "records",
+     "reducer": "lines",
+     "page": false,
+     "pattern": "^\\[console\\] sectest "
+    },
+    {
+     "name": "gate-latency",
+     "check": "records",
+     "reducer": "lines",
+     "pattern": "^\\[security\\] console (?:concealed|restored) "
+    }
+   ]
+  },
+  {
+   "kind": "acceptance",
+   "probe": "acceptance",
+   "profile": "qemu-t23",
+   "expected": {
+    "evidence_kind": "acceptance"
+   },
+   "id": "su-r2-gate",
+   "item": 15,
+   "timeout": 2400,
+   "title": "Round 2 (A2-2/A2-3) trusted gate: the desktop's same-session lock, Ctrl+Alt+Del while locked keeps authentication required (no menu, no restore), only the owner's password releases it",
+   "items": {
+    "15": [
+     "setup",
+     "gate",
+     "secrets"
+    ]
+   },
+   "steps": [
+    {
+     "template": "boot",
+     "prefix": "b1",
+     "check": "setup",
+     "settle": 15
+    },
+    {
+     "name": "cp1-run",
+     "check": "setup",
+     "actions": [
+      {
+       "keys": "meta_l+r"
+      }
+     ],
+     "screen_settle": {
+      "changed": true,
+      "stable": 1.5,
+      "timeout": 30
+     },
+     "note": "Win+R opens Run"
+    },
+    {
+     "name": "cp1-type",
+     "check": "setup",
+     "actions": [
+      {
+       "text": "control --panel=users"
+      },
+      {
+       "keys": "ret"
+      }
+     ]
+    },
+    {
+     "name": "cp1-window",
+     "check": "setup",
+     "timeout": 120,
+     "settle": 8,
+     "wait": [
+      "^\\[user \\d+\\] \\[desktop\\] launch name=control pid=(?P<cp1>[1-9]\\d*) error=0 ",
+      "^\\[user \\d+\\] \\[desktop\\] focus pid=<<cp1>> window=\\d+ titled=\\d internal=0 app=control$"
+     ],
+     "fail": [
+      "^\\[user \\d+\\] \\[desktop\\] launch name=control pid=0 "
+     ]
+    },
+    {
+     "name": "cp1-pw",
+     "check": "setup",
+     "actions": [
+      {
+       "keys": [
+        "tab",
+        "tab",
+        "tab",
+        "tab",
+        "tab"
+       ],
+       "pause": 0.4
+      },
+      {
+       "keys": "ret",
+       "pause": 2.5
+      },
+      {
+       "keys": "tab",
+       "pause": 0.4
+      },
+      {
+       "text": "Ciuki-pass-2026"
+      },
+      {
+       "keys": "tab",
+       "pause": 0.4
+      },
+      {
+       "text": "Ciuki-pass-2026"
+      },
+      {
+       "keys": "ret"
+      }
+     ],
+     "note": "User Accounts: Change the password (current, new, confirm)"
+    },
+    {
+     "name": "cp1-pw-done",
+     "check": "setup",
+     "timeout": 120,
+     "wait": "^\\[user \\d+\\] \\[accounts\\] manage op=password caller=1000 target=1000 type=admin result=0$",
+     "fail": "^\\[user \\d+\\] \\[accounts\\] manage op=password caller=\\d+ target=\\d+ type=\\w+ result=-\\d+$"
+    },
+    {
+     "name": "cp1-close",
+     "check": "setup",
+     "settle": 1,
+     "actions": [
+      {
+       "keys": "alt+f4",
+       "pause": 1.5
+      }
+     ],
+     "note": "Alt+F4 closes the Control Panel"
+    },
+    {
+     "name": "lock",
+     "check": "gate",
+     "settle": 2,
+     "actions": [
+      {
+       "keys": [
+        "esc",
+        "esc",
+        "ctrl+esc"
+       ],
+       "pause": 1.0
+      },
+      {
+       "keys": [
+        "l",
+        "l"
+       ],
+       "pause": 0.8
+      },
+      {
+       "keys": "ret"
+      }
+     ]
+    },
+    {
+     "name": "locked",
+     "check": "gate",
+     "timeout": 120,
+     "settle": 2,
+     "wait": [
+      "^\\[user \\d+\\] \\[logon\\] session <<b1_session>> locked by the desktop$",
+      "^\\[user \\d+\\] \\[logon-ui\\] view mode=locked view=password "
+     ],
+     "actions": [
+      {
+       "keys": "ctrl+alt+delete"
+      }
+     ],
+     "note": "Ctrl+Alt+Del while locked"
+    },
+    {
+     "name": "attention-locked",
+     "check": "gate",
+     "timeout": 60,
+     "settle": 3,
+     "wait": "^\\[security\\] secure attention source=keyboard result=-?\\d+$",
+     "actions": [
+      {
+       "keys": "esc"
+      }
+     ],
+     "note": "the lock stays (authentication_required); Esc changes nothing"
+    },
+    {
+     "name": "still-locked",
+     "check": "gate",
+     "timeout": 60,
+     "settle": 5,
+     "wait": "^\\[user \\d+\\] \\[logon-ui\\] view mode=locked view=password ",
+     "since": "case",
+     "actions": [
+      {
+       "text": "Ciuki-pass-2026"
+      },
+      {
+       "keys": "ret"
+      }
+     ]
+    },
+    {
+     "name": "unlocked",
+     "check": "gate",
+     "timeout": 120,
+     "wait": [
+      "^\\[security\\] console leave session=<<b1_session>>$",
+      "^\\[user \\d+\\] \\[logon\\] session <<b1_session>> unlocked$"
+     ]
+    }
+   ],
+   "assertions": [
+    {
+     "name": "attention-never-shows-the-menu",
+     "check": "gate",
+     "from": "locked",
+     "to": "unlocked",
+     "max": 0,
+     "pattern": "^\\[user \\d+\\] \\[logon\\] screen security$"
+    },
+    {
+     "name": "no-leave-before-password",
+     "check": "gate",
+     "from": "locked",
+     "to": "still-locked",
+     "max": 0,
+     "pattern": "^\\[security\\] console leave "
+    },
+    {
+     "name": "one-leave",
+     "check": "gate",
+     "from": "locked",
+     "to": "unlocked",
+     "max": 1,
+     "min": 1,
+     "pattern": "^\\[security\\] console leave session=<<b1_session>>$"
+    },
+    {
+     "name": "no-secret-on-serial",
+     "check": "secrets",
+     "from": "start",
+     "to": "end",
+     "max": 0,
+     "pattern": "^.*(?:Ciuki-pass-2026)",
+     "note": "contract 4.3: no typed password (right or wrong) appears in a serial record"
+    }
+   ],
+   "figures": [
+    {
+     "name": "logon-records",
+     "check": "records",
+     "reducer": "lines",
+     "page": false,
+     "pattern": "^\\[user \\d+\\] \\[logon\\] "
+    },
+    {
+     "name": "security-records",
+     "check": "records",
+     "reducer": "lines",
+     "page": false,
+     "pattern": "^\\[security\\] "
+    },
+    {
+     "name": "account-records",
+     "check": "records",
+     "reducer": "lines",
+     "pattern": "^\\[user \\d+\\] \\[accounts\\] manage "
+    },
+    {
+     "name": "sectest-records",
+     "check": "records",
+     "reducer": "lines",
+     "page": false,
+     "pattern": "^\\[console\\] sectest "
+    },
+    {
+     "name": "gate-latency",
+     "check": "records",
+     "reducer": "lines",
+     "pattern": "^\\[security\\] console (?:concealed|restored) "
+    }
+   ],
+   "note": "Challenge relays with two UI links, forged generations and service restarts between each transition stay host evidence (H01/H09/H10)."
+  },
+  {
+   "kind": "acceptance",
+   "probe": "acceptance",
+   "profile": "qemu-t23",
+   "expected": {
+    "evidence_kind": "acceptance"
+   },
+   "id": "su-r2-status",
+   "item": 16,
+   "timeout": 3600,
+   "title": "Round 2 (A2-4/A2-6) management STATUS, receipts and checkpoints",
+   "pending": {
+    "directive": "sec-user-01 (H03)",
+    "reason": "more than 2048 management operations and cancellations around the first dequeue cannot be driven through User Accounts in a bounded run; host H03 drives the production service"
+   },
+   "steps": []
+  },
+  {
+   "kind": "acceptance",
+   "probe": "acceptance",
+   "profile": "qemu-t23",
+   "expected": {
+    "evidence_kind": "acceptance"
+   },
+   "id": "su-r2-profile",
+   "item": 17,
+   "timeout": 3600,
+   "title": "Round 2 (A2-8) PROFILE of a migrated uid whose root keeps another suffix",
+   "pending": {
+    "directive": "sec-user-05 (H11)",
+    "reason": "needs a G32-upgrade image fixture (enrollment) that the canonical image does not carry; a runtime overlay fixture adapter is future runner work"
+   },
+   "steps": []
+  },
+  {
+   "kind": "acceptance",
+   "probe": "acceptance",
+   "profile": "qemu-t23",
+   "expected": {
+    "evidence_kind": "acceptance"
+   },
+   "id": "su-r1-dos",
+   "item": 18,
+   "timeout": 3600,
+   "title": "Round 1 (A1-7) DOS private C:\\WORK and C:\\TEMP short paths, read-only D:, INT 25h/26h/7305h failures",
+   "pending": {
+    "directive": "sec-k05 (H06)",
+    "reason": "the DOS window's text is not on the serial port: a DOS-side record probe is needed before a runtime case can assert"
+   },
+   "steps": []
+  },
+  {
+   "kind": "acceptance",
+   "probe": "acceptance",
+   "profile": "qemu-t23",
+   "expected": {
+    "evidence_kind": "acceptance"
+   },
+   "id": "su-r1-restart",
+   "item": 19,
+   "timeout": 3600,
+   "title": "Round 1 (A1-8, SU-07/13) service restart: LOGON/ACCOUNT/registry broker restarts between transitions, restart journals",
+   "pending": {
+    "directive": "sec-k06/sec-k07 (H07, H09)",
+    "reason": "no runtime fault selector stops a sealed SYSTEM service; fw_cfg requests replace the ordinary boot (probes_main) and a build variant is not allowed"
+   },
+   "steps": []
+  },
+  {
+   "kind": "acceptance",
+   "probe": "acceptance",
+   "profile": "qemu-t23",
+   "expected": {
+    "evidence_kind": "acceptance"
+   },
+   "id": "su-r1-console",
+   "item": 20,
+   "timeout": 3600,
+   "title": "Round 1 (A1-9/A1-10) console-subsystem backing and installer temp extraction with Windows/TEMP denied; libreg personal preferences",
+   "pending": {
+    "directive": "sec-user-05/sec-k06 (H11, H07)",
+    "reason": "needs a Win32 console fixture in the image; the machine-registry half runs in su-04 (sectest machine-registry through the production libreg adapter)"
+   },
+   "steps": []
+  }
+ ]
+}

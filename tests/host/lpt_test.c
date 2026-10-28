@@ -8,6 +8,7 @@
 #include <setjmp.h>
 #define CIUKI_CPU_H
 #include <ciuki/kernel.h>
+#include "security/subject_fixture.h"
 #include <ciuki/lpt.h>
 #include <ciuki/task.h>
 #include <ciuki/mm.h>
@@ -526,6 +527,7 @@ static void test_vga_coexistence(void)
 }
 int main(void)
 {
+    security_fixture_identity(&user_process,1001,1,false,0);
     setvbuf(stdout,0,_IONBF,0);
     test_spp(); test_modes(); test_dma(); test_discovery(); test_vga_coexistence(); test_native(); test_int17();
     printf("PASS LPT metadata=%zu VM_state=%zu native_operation=%zu bytes; no global limit increase\n",

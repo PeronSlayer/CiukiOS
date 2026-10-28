@@ -65,6 +65,16 @@ static uint32_t expand(const char *in,char *out,unsigned cap)
                 if (strlen(names[k])==n && !strncasecmp(names[k],in+1,n)) value=defaults[k];
         }
         if (end) {
+            /* sec-user-05: the session's native profile values (USERPROFILE,
+             * TEMP, TMP from the kernel launch) are DOS-spelled for Win32. */
+            char dos[264];
+            int profile_key=(n==11 && !strncasecmp(in+1,"USERPROFILE",11)) || (n==4 && !strncasecmp(in+1,"TEMP",4)) ||
+                            (n==3 && !strncasecmp(in+1,"TMP",3));
+            if (profile_key && value && value[0]=='/' && strlen(value)<sizeof(dos)-3) {
+                snprintf(dos,sizeof(dos),"C:%s",value);
+                for (char *c=dos+2;*c;c++) if (*c=='/') *c='\\';
+                value=dos;
+            }
             const char *bytes=value ? value : in;
             n=value ? strlen(value) : (size_t)(end-in+1);
             if(n>=cap-at)return 234;

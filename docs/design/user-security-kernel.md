@@ -452,6 +452,155 @@ The account-service lock is a kernel-owned mutex/endpoint lifetime lock;
 death releases ownership and wakes waiters. Persistent intent is recoverable
 transaction state, never an immortal exclusive .lock file.
 
+#### System-volume binding and OWNER queries (sec-own amendment, 2026-10-27)
+
+Implementation record and decisions: `docs/validation/sec-own.md`.
+
+- **Volume identity.** The managed system volume is identified by its FAT32
+  partition's first LBA << 32 | BPB volume serial (`ciuki_provision_volume_id`),
+  the same value the image builder and Setup stage in `bootstrap.state`. The
+  kernel computes it from the mounted C: and gives it to ACCOUNT through OWNER
+  IDENTITY; a superfloppy, non-FAT32 or Setup-mode C: is not managed.
+- **Binding at boot** (`fs/owner_system.c`, before PID 1 starts any service or
+  desktop): with `/System/Security/machine.sid` the existing OWNER store opens
+  (recovery included), the OWNER service binds it, and the volume's
+  `policy_volume` with its OWNER lease is bound. With neither SID nor store the
+  volume stays unmanaged (the sec-k03 interim rule) until the first account
+  batch. A SID without a store, or an unreadable store, closes the account
+  service; the volume stays unmanaged so the interim administrator desktop
+  keeps booting.
+- **Fresh provisioning gate.** Only the first RESERVE of the ACCOUNT role may
+  create the store, and only when the destination's own durable evidence
+  shows an UNPROVISIONED installation: `bootstrap.state` valid and
+  UNPROVISIONED for this volume with no replacement candidates, `machine.sid`
+  and ACCOUNT's `bootstrap.sid` intent naming the request's SID, volume, origin
+  and seed digest, the staged `provision.seed` (origins 1/2) matching that
+  digest, no published database and no OWNER store. The policy and lease are
+  bound as soon as that store is open.
+- **ACCOUNT evidence** for the OWNER core is read by the kernel itself under
+  `/System/Security`, never written: `accounts.db` (generation, whole-file
+  digest), the `acct.commit`/`acct.abort` phase markers plus the
+  `accounts.db.txn` intent of the exact request digest (COMMIT_REQUIRED), the
+  `owner.checkpoint` blob (exact CHECKPOINT header and watermarks) and the
+  `enrollment.catalogue` map (retained G32 roots).
+- **Query operations 8..14** on service 3 (same ACCOUNT/boot-SETUP admission,
+  fixed 160-byte request and reply, layout in `fs/owner_system.h`): IDENTITY,
+  GENERATION, BINDING (committed live record: key, generation, root; retired or
+  pending EACCES, none ENOENT), ROOT_OCCUPIED, SNAPSHOT (the candidate
+  checkpoint image is written to the SYSTEM-only `/System/Security/Owner/snapshot`
+  and named by size and digest, because it can exceed a service body),
+  RECOVER_ORPHANS (an owner batch ACCOUNT no longer carries is finished from
+  ACCOUNT's durable intent) and CHECKPOINT_FLOOR.
+- **Transactions in flight.** `owner_store.busy` is the single-writer
+  admission of OWNER transactions, not unavailable metadata: label and policy
+  readers keep using committed records while a batch or creator-root operation
+  is in flight (the in-flight names stay fenced by the pending records and
+  root intent; the kernel is non-preemptible, so the in-memory map changes
+  only between yield points).
+- **Interim session.** The bootstrap desktop session (uid 1000) carries the
+  committed profile descriptor of uid 1000 once OWNER has it, so k05's DOS data
+  roots move from the legacy machine store into that profile.
+
+#### SYSTEM services for administrator operations and logs (sec-sysvc amendment, 2026-10-28)
+
+Implementation record, research and the complete inventory:
+`docs/validation/sec-sysvc.md`. K-Q4 keeps the sealed boot/service set and the
+security/log trees SYSTEM-only; administrators reach them only through these
+typed kernel services of call 99 (`CIUKI_SYS_RECOVERY`, records in `abi.h`;
+the same model as SCANDISK and the media maintenance broker). Each service
+checks the caller's retained subject (an administrator, or SYSTEM outside any
+session) before its first side effect, then acts on fixed SYSTEM targets
+through a kernel VFS table. A caller-chosen input (a driver package folder, the
+original of a system file) is read through the caller's own namespace and
+subject, so a service never carries a file the caller could not read. No
+SYSTEM descriptor is handed out and the rule table is unchanged, except that
+`/System/SFC.LST` (the restore service's trust input) joins the sealed set.
+
+| Service | Who | What the kernel does as SYSTEM |
+| --- | --- | --- |
+| BOOT_CONFIG (5) SET | Administrators | Rewrites `C:\SYSTEM\BOOT.CFG` (printable text, the loader's 127 bytes), restoring the previous text after a failed write. Startup menu/selective startup stay RECOVERY SET/ENABLE. |
+| LOG (6) LIST/READ, MACHINE | Administrators | Lists and reads `C:\SYSTEM\LOGS` (Event Viewer model: SYSTEM-owned logs, administrators read through the service; standard users and Guest EPERM; no direct file access for anyone). |
+| LOG APPEND, MACHINE | Administrators | Appends the maintenance reports `SCANDISK.LOG` and `SFC.LOG` only; every other system log is written by SYSTEM itself. |
+| LOG LIST/READ/APPEND/REPLACE, USER | Every interactive user | The caller's own logs, `<profile>\Local Settings\Application Data\CiukiOS\Logs` (A1-10), opened as the caller; a session without a committed profile (only the interim administrator session of a first boot) holds them in `C:\SYSTEM\LOGS\Users\u<uid>`. Names are 8.3; APPEND starts the file over past its limit. |
+| DRIVER_PACK (7) INSTALL/REMOVE | Administrators | Stages `C:\SYSTEM\DRIVERS\<package>.stage`, copies the sealed manifest's files from the caller's folder hashing every byte, verifies with the NDIS gate's `ndp_verify`, renames into place; removal records `remove.ndp` before `manifest.ndp` goes and finishes interrupted removals. Qualified packages need the lead qualification and a stopped host. |
+| SFC_RESTORE (8) | Administrators | Restores a file of the sealed baseline `C:\SYSTEM\SFC.LST` from the caller's original (size and SHA-256 checked), after copying the current file to `C:\SYSTEM\Helpdesk\SFC`, with one replacing rename. |
+
+Programs that are not SYSTEM never write `C:\SYSTEM\LOGS`: NetSurf's log and
+the crash reports of a session's programs (`CRASHn.TXT` native, `WCRASHn.TXT`
+Win32) are that user's own logs; the Log Viewer shows the user's logs and, to
+administrators, the system logs. Per-user crash reports follow the rule
+table's "may instead be placed in the owning profile".
+
+#### SYSTEM jobs, sealed boot settings and Registry Checker (sec-sysvc2 amendment, 2026-10-28)
+
+Implementation record, Windows XP research and evidence:
+`docs/validation/sec-sysvc2.md`.
+
+- **One per-user log location.** A session's own logs and crash reports
+  (`NETSURF.LOG`, `CRASHn.TXT`, `WCRASHn.TXT`) live only in
+  `<profile>\Local Settings\Application Data\CiukiOS\Logs`, the LOG service's
+  USER scope; sec-user-05's `Local Settings\Application Data\{NetSurf,Crash}`
+  folders are not used. Without the service (ENOSYS, ENODEV) a profile
+  session's programs write that same folder, and only the profile-less
+  bootstrap desktop writes the machine folders.
+- **SYSTEM jobs.** Scheduled system maintenance runs as SYSTEM whoever is
+  logged on. JOB (call 99 op 9, record `ciuki_system_job`) is open to every
+  live session subject and SYSTEM; STARTUP_REPORT appends each ScanDisk check
+  of this start to `C:\SYSTEM\LOGS\SCANDISK.LOG` once, formatted by the kernel
+  from its own record (no caller data). The daily Registry Checker backup is
+  the registry broker's SYSTEM job (below).
+- **Sealed boot settings.** The rule table's "files consumed as privileged
+  configuration during the next boot" now covers `C:\SYSTEM\HWPROF.CFG` and,
+  in `C:\SYSTEM\SETTINGS`, `performance.cfg`, `hwprofiles.cfg` and the display
+  attempt files (`accel*.cfg` and every registered driver's declared attempt
+  file): SEALED by name in `policy_child`, like the hive slots, without a trie
+  node. Administrators change HWPROF.CFG, performance.cfg and the DM8 retry
+  request through SETTING (call 99 op 10, record `ciuki_system_setting`),
+  which validates the text the loader and kernel accept and rewrites the file
+  as SYSTEM; the kernel alone writes the attempt markers.
+- **Registry Checker.** `C:\SYSTEM\SYSBCKUP` is SECRET (one trie rule, 30 of
+  32 nodes). Registry Checker runs in the SYSTEM registry broker
+  (`RB_CHECKER_*` of the private registry protocol): backups hold the broker's
+  machine registry (native System and Programs roots, the committed Win32
+  machine hive slot), BOOT.CFG, HWPROF.CFG and the settings files; LIST, BACKUP, RESTORE
+  and FIX are for administrators; DAILY (once a local day by the broker's
+  clock) and STATUS for every session. A restore is recorded and applied by the
+  broker at its next start, before any root or hive is loaded; a damaged root,
+  and a machine hive without a valid slot, are restored there too.
+
+#### Coverage audit follow-ups (sec-k08 amendment, 2026-10-28)
+
+Implementation record, research and figures: `docs/validation/sec-k08.md`.
+
+- **Two more sealed machine settings** (lead decisions S2-5, U4-6). In
+  `C:\SYSTEM\SETTINGS`, `clock.cfg` (the time zone service's store, read at
+  boot) and `power.cfg` (the machine's power-button and lid actions, read by
+  every session's desktop) are SEALED by name like the boot inputs above.
+  Administrators change them through SETTING (`CIUKI_SYSTEM_SETTING_CLOCK` 4,
+  a complete `lib/tzrule.c` record of at most 511 bytes;
+  `CIUKI_SYSTEM_SETTING_POWER` 5, exactly the `power_button=`/`power_lid=`
+  lines of at most 127 bytes); the time zone service keeps writing
+  `clock.cfg` as SYSTEM. In a LOGON session the desktop applies `power.cfg`
+  over the user's own settings; schemes, alarms, the meter and the resume
+  preference stay per user. CiukiOS has no hibernation, so there is no
+  hibernation setting to move.
+- **Unknown policy kinds deny.** `policy_check` refuses a label whose kind is
+  outside `enum policy_kind` for every subject, SYSTEM included (corrupt
+  metadata is never a public object); unknown access bits already did.
+- **Firmware-initiated suspend** (lead decision U4-3). An APM Critical System
+  Suspend (0008h, acknowledged by the kernel itself), a Critical Resume
+  (0004h) and a resume notification that is not the echo of a call-73 Stand
+  by raise the trusted gate through PID 1, as a physical secure attention does,
+  before the session's desktop runs again. LOGON's watch sees the moved gate
+  and the call-73 resume/critical counts: an owner with a password is locked
+  (`SECURE_ENTER` RESUME), a passwordless owner is restored (no false lock).
+  ACPI sleeping states are entered only by OSPM and CiukiOS enters none.
+- **Census.** Every published selector (native calls, call-101 operations,
+  call-99 services and sub-actions, channel services/operations, call-69
+  device commands, VFS access bits and policy kinds) is derived from the
+  sources by H13 and has exactly one policy class and covering test
+  (`tests/host/security/policy_census.py`); each dispatcher's default denies.
+
 ### Enforcement points and retained handles
 
 | Operation | Required checks before first side effect |
@@ -1092,6 +1241,14 @@ all old successes. If trusted UI cannot restart, retain neutral error/shutdown
 presentation. Session termination uses END_BEGIN/END_COLLECT, not an unlock
 shortcut. Sec-k01 supplies operations/state machine and host grant adapter;
 sec-k07 qualifies every real display/input backend before a secure-lock claim.
+(sec-k07, 2026-10-27, details in [sec-k07](../validation/sec-k07.md): the
+merged native input queue consumes physical Ctrl+Alt+Delete only once a LOGON
+role exists, so the interim desktop keeps its Task Manager sequence until
+sec-user-03; LOGON is notified through LOGON_UI, which receives
+CIUKI_INPUT_ATTENTION on its trusted input grant and relays LOCK_EVENT.
+Concealing a visible session also waits for a neutral kernel frame; SECURE_ENTER
+returns EBUSY until then. END_COLLECT stays CLOSING until PID 1 has ended the
+session's DOS VMs and no Win32 object of the session remains.)
 
 Mandatory H01/H09 sequences, repeated with service generations/process/fd reuse:
 (1) pending launch -> SECURE_ENTER(LOCK) -> both ready -> LAUNCH_POLL: READY and

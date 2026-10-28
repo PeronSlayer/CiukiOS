@@ -575,6 +575,9 @@ run_convert_tests
 # sec-k02 uses this runner's existing filesystem sanitizer policy. The direct
 # H02 command retains its default LeakSanitizer setting.
 python3 -B -m unittest discover -s tests/host/security -p test_owner_policy.py
+# ---- sec-k03 H04 (one block): subject enforcement on the production VFS. ----
+python3 -B -m unittest discover -s tests/host/security -p test_file_enforcement.py
+# ---- end sec-k03 ----
 python3 - <<'PY'
 from pathlib import Path
 root=Path('build/host/fs')

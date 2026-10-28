@@ -2,6 +2,7 @@
  * independent desktop-frame watchdog. See docs/design/f1-acceptance.md.
  * SPDX-License-Identifier: GPL-2.0-only */
 #include <ciuki/kernel.h>
+#include <ciuki/security_device.h>
 #include <ciuki/cpu.h>
 #include <ciuki/display.h>
 #include <ciuki/biosvm.h>
@@ -137,6 +138,10 @@ void display_fullscreen_entry_request(void)
 
 uint32_t display_change_counter(void) { return changes; }
 static void changed(void) { if (!++changes) ++changes; }
+/* sec-k07: a secure console domain switch; both owners repaint on the
+ * changed counter they read from their display grant (no I/O, IRQ safe). */
+void display_console_changed(void) { changed(); }
+#pragma weak grants_console_trusted
 void display_present_returned(void)
 {
     changed();
@@ -268,6 +273,7 @@ int display_check_begin(uint16_t id)
 {
     /* H page and the T self-test (before its desktop) only. */
     if (!(g_boot.flags & (CBI_F_HW_CHECK | CBI_F_SELF_TEST)) || grants_display_pid()) return -EPERM;
+    if (grants_console_trusted && grants_console_trusted()) return -EPERM; /* sec-k07: trusted UI owns scanout */
     if (check_display || switching || fullscreen_display || present_provider || awaiting_frame) return -EBUSY;
     if (!listed(id) || !listed(fbdev_get()->mode_id)) return -EOPNOTSUPP;
     if (!fbdev_get()->present) return -ENODEV;
@@ -592,7 +598,10 @@ static int screen_control(struct process *p, struct ciuki_screen_control *q)
 {
     if (q->version!=CIUKI_SCREEN_VERSION || q->size!=sizeof(*q) ||
         (q->flags&~CIUKI_SCREEN_PERSIST)) return -EINVAL;
-    bool desktop=p && p->pid==supervisor_desktop_pid();
+    bool trusted=security_device_system(p) && security_role(p)==CIUKI_SECURITY_ROLE_LOGON_UI;
+    bool desktop=security_device_desktop(p) || trusted;
+    if (!trusted && (!security_device_session(p) || (!desktop &&
+        !security_same(p,proc_find(supervisor_desktop_pid()))))) return -EPERM;
     if ((q->action==CIUKI_SCREEN_CONFIG || q->action==CIUKI_SCREEN_STATUS) && !desktop) return -EPERM;
     uint32_t action=q->action;
     bool inhibited=fullscreen_display || (display_present_active && display_present_active());

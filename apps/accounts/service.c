@@ -111,7 +111,12 @@ static int admin(const struct acct_subject *subject)
     return 0;
 }
 static int authentication(unsigned op)
-{ return op == ACCT_AUTH || op == ACCT_UNLOCK || op == ACCT_ENROLL_VERIFY || op == ACCT_AUTOLOGON || op == ACCT_CHALLENGE || op == ACCT_ENROLL_PLAN; }
+{ return op == ACCT_AUTH || op == ACCT_UNLOCK || op == ACCT_ENROLL_VERIFY || op == ACCT_AUTOLOGON || op == ACCT_CHALLENGE || op == ACCT_ENROLL_PLAN ||
+         op == ACCT_ENROLL_SOURCE; /* sec-user-04: LOGON-only route, no secret */ }
+/* sec-user-04: the read-only source list is LOGON-only like authentication
+ * but never waits for the failed-authentication retry delay. */
+static int throttled(unsigned op)
+{ return (authentication(op) && op != ACCT_ENROLL_SOURCE) || op == ACCT_PASSWORD; }
 static uint32_t retry_ms(struct acct_service *s)
 {
     uint64_t now = s->store.kernel.monotonic_ms(s->store.kernel.ctx);
@@ -126,7 +131,7 @@ int acct_submit(struct acct_service *s, int endpoint, struct acct_request *q, si
     if (!q || bytes != sizeof(*q)) return out->error = -EINVAL;
     int e = 0;
     if (!s->leased || s->faulted || (!s->available && !(authentication(q->operation) || q->operation==ACCT_LIST))) e = -EIO;
-    else if (q->operation < ACCT_LIST || q->operation > ACCT_PROFILE ||
+    else if (q->operation < ACCT_LIST || q->operation > ACCT_ENROLL_SOURCE || /* sec-user-04 */
              !memchr(q->name, 0, 32) || !memchr(q->picture, 0, 96) ||
              !acct_password_valid(q->password, 1) || !acct_password_valid(q->confirm, 1) ||
              !acct_password_valid(q->old_password, 1)) e = -EINVAL;
@@ -148,7 +153,7 @@ int acct_submit(struct acct_service *s, int endpoint, struct acct_request *q, si
         if (!try_lock(&s->queue_lock)) e = -EAGAIN;
         else {
             uint32_t retry = retry_ms(s);
-            if ((authentication(q->operation) || q->operation == ACCT_PASSWORD) && retry) {
+            if (throttled(q->operation) && retry) {
                 out->retry_after_ms = retry; e = -EAGAIN;
             } else if (!s->next_ticket) e = -EAGAIN;
             else {
@@ -189,6 +194,8 @@ static void snapshot(const struct acct_db *d, const struct acct_subject *subject
             !(subject->service==ACCT_ENDPOINT_AUTH && subject->safe_mode && r->uid == 500 && (r->flags & ACCT_PASSWORD_SET))) continue;
         struct acct_public *p = &out->records[out->count++];
         p->uid = r->uid; p->flags = (r->flags & ACCT_ENABLED) | (r->groups == ACCT_ADMIN ? 2u : 0u); p->groups = r->groups;
+        if (subject->service==ACCT_ENDPOINT_AUTH && (r->flags & ACCT_READY_BLANK))
+            p->flags |= ACCT_PUBLIC_BLANK_LOGON;
         memcpy(p->name, r->name, 32); memcpy(p->picture, r->picture, 96);
     }
 }
@@ -264,8 +271,12 @@ static int mutate(struct acct_service *s, struct acct_job *job)
             !acct_password_valid(q->password,0) || strcmp(q->password,q->confirm)) return -EINVAL;
     } else {
         if (index<0) return -ENOENT;
-        int personal=q->operation==ACCT_PASSWORD || q->operation==ACCT_PICTURE || q->operation==ACCT_RENAME ||
-            (q->operation==ACCT_UPDATE && !(q->selectors&~(1024u|4096u)));
+        /* sec-k08 (lead decision U4-5): a Standard user or Guest changes
+         * only their own password and picture (Windows XP limited accounts);
+         * the name, like type and status, is an administrator's change. The
+         * service refuses it, whatever the page offers. */
+        int personal=q->operation==ACCT_PASSWORD || q->operation==ACCT_PICTURE ||
+            (q->operation==ACCT_UPDATE && !(q->selectors&~4096u));
         if (!is_admin && !(self && personal)) return -EPERM;
         int destructive=q->operation==ACCT_DELETE || q->operation==ACCT_ROLE ||
             (q->operation==ACCT_ENABLE && !(q->flags&ACCT_ENABLED)) ||
@@ -364,11 +375,17 @@ static int profile(struct acct_service *s, struct acct_job *job, struct acct_res
 {
     struct acct_request *q=&job->request; int i=q->uid?find_uid(&s->db,q->uid):find_name(&s->db,q->name);
     int trusted=job->subject.role==ACCT_ROLE_LOGON || job->subject.role==ACCT_ROLE_ACCOUNT;
+    /* The sealed SYSTEM broker resolves the private hive of its retained
+     * caller. uid 0 by itself remains untrusted, as for all account APIs. */
+    if (job->subject.role==ACCT_ROLE_REGISTRY && !job->subject.uid && !job->subject.session_id) trusted=1;
     /* Deny a foreign selector before disclosing whether that mapping exists. */
     if(!admin(&job->subject) && !trusted && (q->uid?q->uid!=job->subject.uid:
         (i<0 || s->db.records[i].uid!=job->subject.uid))) return -EACCES;
     if(i<0) return -ESRCH;
-    if(q->generation!=s->db.generation) return -EAGAIN;
+    /* Generation 0 is a pure read of the current mapping (the protocol admits
+     * it for LOOKUP and PROFILE; w32srv and libc use it); a stated generation
+     * must still be current. */
+    if(q->generation && q->generation!=s->db.generation) return -EAGAIN;
     char root[64]={0}; struct acct_owner_binding b={0}; uint64_t generation=0;
     int e=s->store.owner.generation(s->store.owner.ctx,&generation);
     if(!e) e=s->store.owner.binding(s->store.owner.ctx,s->store.volume,s->db.records[i].uid,root,&b);
@@ -417,6 +434,21 @@ static int execute(struct acct_service *s, struct acct_job *job, struct acct_res
     e=mutate(s,job);
     return acct_results_finish(s,q,e);
 }
+/* sec-user-06: the management audit record (adapter.h audit). The new
+ * account of a committed CREATE is the database's last record. */
+static void audit_management(const struct acct_service *s, int status)
+{
+    const struct acct_request *q = &s->active.request;
+    unsigned op = q->operation;
+    if (!s->store.kernel.audit || (op != ACCT_CREATE && op != ACCT_DELETE && op != ACCT_RENAME && op != ACCT_ENABLE &&
+                                   op != ACCT_ROLE && op != ACCT_PASSWORD && op != ACCT_PICTURE && op != ACCT_UPDATE)) return;
+    uint32_t target = q->uid, groups = q->groups;
+    if (op == ACCT_CREATE && !status && s->db.count) target = s->db.records[s->db.count - 1].uid;
+    for (uint32_t i = 0; op != ACCT_CREATE && op != ACCT_ROLE && i < s->db.count; i++)
+        if (s->db.records[i].uid == target) groups = s->db.records[i].groups;
+    const char *type = (groups & 1u) ? "admin" : groups == ACCT_GUEST ? "guest" : groups ? "standard" : "-";
+    s->store.kernel.audit(s->store.kernel.ctx, op, s->active.subject.uid, target, type, status);
+}
 int acct_work(struct acct_service *s, struct acct_response *out)
 {
     if (!out) return -EINVAL;
@@ -425,7 +457,7 @@ int acct_work(struct acct_service *s, struct acct_response *out)
     if (!try_lock(&s->queue_lock)) { unlock(&s->worker_lock); return -EAGAIN; }
     if (!s->active.occupied) { unlock(&s->queue_lock); unlock(&s->worker_lock); return 0; }
     uint32_t retry = s->completed ? 0 : retry_ms(s);
-    if (!s->faulted && retry && (authentication(s->active.request.operation) || s->active.request.operation == ACCT_PASSWORD)) {
+    if (!s->faulted && retry && throttled(s->active.request.operation)) {
         out->retry_after_ms = retry;
         unlock(&s->queue_lock); unlock(&s->worker_lock); return -EAGAIN;
     }
@@ -456,6 +488,7 @@ int acct_work(struct acct_service *s, struct acct_response *out)
     }
     struct acct_subject subject = s->active.subject;
     uint32_t wire_operation=s->active.request.wire_operation;
+    audit_management(s, out->error);   /* sec-user-06 */
     acct_wipe(&s->active, sizeof(s->active));
     s->active = s->pending;
     acct_wipe(&s->pending, sizeof(s->pending));

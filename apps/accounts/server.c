@@ -5,6 +5,7 @@
  * exchange timeout. Received frames are wiped: request bodies carry secrets.
  */
 #include "server.h"
+#include "production.h" /* sec-own: acct_tree_io, acct_dos_saves_migrate */
 #include "kernel_sys.h"
 #include "wire.h"
 #include <ciuki/abi.h>
@@ -55,6 +56,29 @@ static void link_closed(struct acct_server *s, int fd)
     (void)acct_kernel_adapter_retire(&s->kernel,fd); /* deferred while referenced */
 }
 
+/* sec-own: old machine DOS title data (sec-k05 legacy store) moves into the
+ * first administrator's profile once accounts are published; restartable at
+ * every open. A failure is reported and never closes the service. */
+#pragma weak acct_dos_saves_migrate /* harnesses without owner_kernel.c */
+static void migrate_dos_saves(struct acct_server *s)
+{
+    if (!s->tree || !acct_dos_saves_migrate) return;
+    const struct acct_db *d=&s->service.db; uint32_t uid=0;
+    for (unsigned i=0;i<d->count;i++)
+        if (d->records[i].uid>=1000 && d->records[i].groups==ACCT_ADMIN && (!uid || d->records[i].uid<uid)) uid=d->records[i].uid;
+    if (!uid) return;
+    char root[64]={0}; struct acct_owner_binding b; memset(&b,0,sizeof(b));
+    const struct acct_store *st=&s->service.store;
+    int e=st->owner.binding(st->owner.ctx,st->volume,uid,root,&b);
+    unsigned moved=0, kept=0;
+    if (!e) e=acct_dos_saves_migrate(s->tree,root,&moved,&kept);
+    if (e || moved || kept) {
+        char line[128];
+        snprintf(line,sizeof(line),"[accounts] dos saves migration uid=%u moved=%u kept=%u result=%d",(unsigned)uid,moved,kept,e);
+        acct_sys_log(line);
+    }
+}
+/* end sec-own */
 int acct_server_init(struct acct_server *s, const struct acct_store *tables, int host_test)
 {
     if (!s || !tables) return -EINVAL;
@@ -67,10 +91,33 @@ int acct_server_open(struct acct_server *s, uint64_t now)
 {
     if (s->opened) return 1;
     if (now<s->next_open) return 0;
+    /* sec-user-02 first-boot adapter (firstboot.h): protect G32 evidence
+     * before open; promote a staged seed or register the enrollment source
+     * after an open that found no published database. */
+    int prepared=acct_firstboot_prepare(&s->tables,s->legacy);
+    if (prepared<0) note("first-boot migration refused",prepared);
     int e=acct_service_open(&s->service,&s->tables,s->host_test);
+    if (!e && !s->service.available) {
+        int previous=s->firstboot_result;
+        s->firstboot_result=acct_firstboot_promote(&s->service);
+        if (s->firstboot_result<0) { if (s->firstboot_result!=previous) note("first-boot promotion refused",s->firstboot_result); }
+        else if (s->firstboot_result==ACCT_FIRSTBOOT_PROMOTED) note("first boot: provisioning seed promoted",0);
+        else if (s->firstboot_result==ACCT_FIRSTBOOT_ENROLLMENT) note("first boot: G32 enrollment required",0);
+        /* EAGAIN: the kernel OWNER store or the entropy generator is not
+         * ready yet on a slow first boot. The interrupted batch resumes
+         * through the recovery of the next open (contract 3.6), so close
+         * and reopen shortly instead of serving an unpublished store. */
+        if (s->firstboot_result==-EAGAIN) {
+            acct_service_close(&s->service);
+            s->next_open=now+ACCT_SERVER_FIRSTBOOT_RETRY_MS;
+            return 0;
+        }
+    }
+    /* end sec-user-02 */
     if (!e) {
         s->opened=1; s->last_open_error=0;
         note(s->service.available ? "open; account database available" : "open; no published database",0);
+        if (s->service.available) migrate_dos_saves(s); /* sec-own */
         return 1;
     }
     if (e!=s->last_open_error) note("open refused; every request is answered with EIO",e);

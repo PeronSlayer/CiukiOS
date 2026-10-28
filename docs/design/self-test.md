@@ -10,7 +10,11 @@
   `src/kernel/core/selftest_model.c` (sequencing, bounds and report format, shared with the host
   tests), `src/kernel/core/selftest_checks.c` (check table), `src/kernel/vm/dosvm_selftest.c`
   (DOS full screen), `src/probes/dos/fs_test.asm` (`FSTEST.COM`), `apps/desktop/desktop.c`
-  (notice and DOS box launch), `scripts/test/selftest_report.py` (parser).
+  (notice, DOS box launch and the Registry Checker backup answer), `scripts/test/selftest_report.py`
+  (parser); sec-user-06: `src/kernel/lib/pbkdf2.c` (the account service's KDF), the figure
+  hand-off in `src/kernel/core/syscall.c`, the attention entry `input_selftest_attention` in
+  `src/kernel/drivers/i8042.c` and LOGON's one automatic menu return
+  (`apps/logon/coordinator.c`).
 
 ## 1. Entry
 
@@ -60,6 +64,11 @@ its generation changes with every new reason. The desktop polls it twice a secon
 flag bit 23 is set) and:
 
 - on `launch-dosbox` starts `/Programs/dosbox` once per generation through the Programs-menu path;
+- on `registry-backup` (sec-user-06) makes one synchronous Registry Checker backup through the
+  SYSTEM registry broker (`rc_backup`, comment `Self-test`) and answers on its debug log with
+  `[selftest] registry_backup backup_ms=<n> result=<errno> bytes=<n> files=<n>`; the kernel
+  (`core/syscall.c` `sys_debug_write`) hands such a line to `selftest_submit` only during a T boot
+  and only from the desktop process (`supervisor_desktop_pid`);
 - on `Self-test complete: ...` or `Self-test stalled in ...` shows one dialog titled
   `CiukiOS self-test` naming `C:\SYSTEM\LOGS\SELFTEST.LOG` (information icon when nothing failed,
   warning otherwise).
@@ -70,7 +79,7 @@ Each check has a bound and returns PASS, FAIL or SKIP with its figures. The mode
 that returns after its bound (`deadline_exceeded=1 limit_ms=<bound>`, measured figures kept).
 Every check skips with a reason when its device or subsystem is absent, so the same image runs on
 every supported machine. The table is `selftest_phase1` and `selftest_phase2` in
-`selftest_checks.c`; the bounds add up to 569 s in the worst case, while the host T23 profile
+`selftest_checks.c`; the bounds add up to 599 s in the worst case, while the host T23 profile
 completes in about 30 s of check time plus the real desktop, 3D and DOS start-up times.
 
 | Check | Bound | What it observes | PASS / SKIP |
@@ -94,6 +103,8 @@ completes in about 30 s of check time plus the real desktop, 3D and DOS start-up
 | `dos.fullscreen_13h` | 25 s | types `\FSTEST.COM`; at its mode 13h stage enters full screen through `dosvm_fullscreen_enter` (Alt+Enter's path), holds 1 s, leaves; enter/leave/repaint times, provider, return to the window | SKIP no DOS window |
 | `dos.fullscreen_101h` | 25 s | one key moves FSTEST to VBE 101h (banked 640x480x8); the same round trip | SKIP no DOS window, windowed by policy |
 | `dos.return` | 30 s | Enter (at most three times) ends FSTEST, `EXIT` closes the VM; VM count back to the baseline and the box's temporary overlay file gone | FAIL forced stop, VM left or overlay left |
+| `security.registry_backup` | 12 s | sec-user-06, lead decision S2-6: the desktop's synchronous Registry Checker backup through the SYSTEM registry broker (an administrator's BACKUP, the work of the daily backup) against the 5 s deadline of the desktop's request (`sdk/libreg/transport.c`): answer, wait, `backup_ms`, result, bytes | PASS answered in time; FAIL over the deadline or failed; SKIP no desktop, no answer, or a session that is not an administrator's |
+| `security.lock_latency` | 10 s | sec-user-06, contract 4.3: the trusted gate on this machine. The check asks the input driver for the transition of a physical Ctrl+Alt+Del (`input_selftest_attention` in `drivers/i8042.c`: the trusted input domain with its ATTENTION event, then the kernel's attention entry; refused outside a T boot and before the LOGON role, logged as `[input] self-test secure attention`, and listed with its single caller in the attention census of `test_secure_gate.py`); LOGON shows its security menu and, on a T boot only, returns from it by itself once (`apps/logon/coordinator.c`). Figures from `grants_console_timing`: conceal to the neutral black frame and to the first trusted frame, activation to the session's first frame, their maxima over the boot; `standby=not_run` (Stand by and resume lock through the same gate with reason resume; their figures are the `[security] console concealed/restored` records of a manual trial) | PASS concealed and restored; FAIL not concealed or not restored; SKIP no desktop or no trusted LOGON |
 | `optical.drive` | 25 s | ATAPI drive identity (model, firmware, channel, unit, packet size, DMA), media state, readiness stage, sense | SKIP no optical drive |
 | `optical.disc` | 40 s | with a disc: TOC, audio CD recognition, the ISO 9660 mount, the first file read (up to 256 KiB, FNV-1a, KiB/s) | SKIP no disc |
 | `audio.device` | 2 s | backend, PCI id, ready, error, output rate, quarantine | SKIP no device |
@@ -104,6 +115,7 @@ completes in about 30 s of check time plus the real desktop, 3D and DOS start-up
 | `usb.controllers` | 10 s | controllers by kind (UHCI/OHCI/EHCI), ready, quarantined, after their port scan (Details per controller) | SKIP no controller |
 | `usb.devices` | 2 s | present, configured and quarantined devices (Details per device) | SKIP no device |
 | `storage.ata` | 2 s | ATA/ATAPI units, DMA and UDMA mode, errors, retries (Details per unit) | SKIP no ATA unit |
+| `security.kdf` | 8 s | sec-k08, U6-6: up to five PBKDF2-HMAC-SHA-256 derivations of the ACCOUNT service's work factor (10,000 iterations, `ciuki/pbkdf2.h`, byte-identical to `acct_derive` by H13) on a fixed non-secret input while the desktop runs: `iterations runs min_ms median_ms max_ms target_ms=1000` | PASS with measured figures; `warning=WARN` above the 1000 ms median target (K8-4), no CPU-dependent failure; stop sampling when another run would exceed the bound |
 | `serial.records` | 1 s | UART records accepted/sent/queued/dropped during the run | FAIL evidence records lost; SKIP no UART |
 | `memory.end` | 3 s | the memory figures again, heap and page-allocator refusals during the run, free-page delta | FAIL ledger mismatch or an allocation refused |
 
@@ -177,7 +189,9 @@ check, SKIP without reason, log/serial differences) or unreadable.
 ## 5. Safety
 
 - **Files.** The run writes only `SELFTEST.LOG` (whole-file rewrites through the VFS; a read-only
-  `C:` leaves the serial copy as the report). Ordinary components behave as on any boot and are
+  `C:` leaves the serial copy as the report) and, by lead decision S2-6, the one Registry Checker
+  backup of `security.registry_backup` (`C:\SYSTEM\SYSBCKUP`, written by the SYSTEM broker and
+  rotated like every daily backup). Ordinary components behave as on any boot and are
   not counted as the run's writes: the boot log, the loader's boot-status sector, the Savage
   qualification's crash-guard marker (set and cleared by the driver, as on a `3d=probe` boot), and
   the DOS box's temporary copy-on-write file (`C:\SYSTEM\DOS\*.COW`, created and deleted by the
@@ -189,8 +203,12 @@ check, SKIP without reason, log/serial differences) or unreadable.
 - **Power.** No check powers off, suspends or reboots: `power.acpi_s5` reads the parsed `\_S5`
   data only, `power.apm` reads the discovery result.
 - **Sound.** The stream is digital silence and the MIDI message is All Notes Off.
+- **Screen.** `security.lock_latency` shows LOGON's Ctrl+Alt+Del screen for about three seconds;
+  LOGON returns to the desktop by itself once per T boot (a Ctrl+Alt+Del the owner presses earlier
+  in the same T boot would take that one return, and the check then reports `not_restored`).
 - **Absent devices** skip with a reason; the host harness runs the whole table on a machine with
-  no framebuffer, desktop or devices: 28 SKIP, `memory.*` PASS and `desktop.start` FAIL.
+  no framebuffer, desktop or devices: 30 SKIP, `memory.*` and `security.kdf` PASS and
+  `desktop.start` FAIL.
 
 ## 6. Host tests
 
@@ -209,7 +227,10 @@ check, SKIP without reason, log/serial differences) or unreadable.
 - the parser on both producers' outputs, incomplete and malformed reports, two runs in one
   capture, the CLI exit codes;
 - static checks: check ids, bounds and this table, no reserved key in a check's figures, the boot
-  flag, loader and kernel wiring, and the assembled `FSTEST.COM` (no disk or file write calls).
+  flag, loader and kernel wiring, and the assembled `FSTEST.COM` (no disk or file write calls);
+- sec-user-06 (`tests/host/security/test_runner_contract.py`, H14): `pbkdf2_hmac_sha256` equals
+  `acct_derive` and PBKDF2-HMAC-SHA-256 (four vectors), the figure hand-off and LOGON's self-test
+  return are wired as described.
 
 The loader tests cover `T` and Startup menu choice 9 (`test_startup_menu.py`, assembled loader;
 `test_loader_menu.py`, model).

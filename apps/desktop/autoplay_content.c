@@ -3,6 +3,7 @@
 #define _POSIX_C_SOURCE 200809L
 #include "autoplay.h"
 #include "../dosbox/autorun.h"
+#include "exe_kind.h"
 #include <errno.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -165,6 +166,7 @@ int ap_drive_label(const struct fm_vfs *fs,unsigned drive,char out[33])
     }
     free(c); free(w); return e;
 }
+static int ap_open_program(const struct fm_vfs *,struct ap_content *,struct ap_workspace *);
 static int probe(const struct fm_vfs *fs,unsigned drive,struct ap_content *c,struct ap_workspace *w)
 {
     memset(c,0,sizeof(*c)); if (drive<3 || drive>=26) return -EINVAL;
@@ -188,33 +190,79 @@ static int probe(const struct fm_vfs *fs,unsigned drive,struct ap_content *c,str
     scan_phase(w,"media-scan:inf");
     if (s->inf[0]) { int n=read_prefix(fs,s->inf,w->data,sizeof(w->data),w);
         if (n>=0 && n<=AP_INF_MAX) (void)ap_parse(&c->inf,(char *)w->data,(size_t)n); }
-    if (!within_time(w)) return 0;
-    if (!c->inf.open[0]) return 0;
-    c->run_kind=3;
+    if (!within_time(w) || !c->inf.open[0]) return 0;
+    return ap_open_program(fs,c,w);
+}
+/* Bytes [offset, offset+cap) of a file through the sequential VFS seam,
+ * one sniff; the skip is bounded so a header far into a file never turns
+ * the probe into a long read. Returns the bytes read (short at EOF). */
+static int read_window(const struct fm_vfs *fs,const char *path,uint32_t offset,void *out,unsigned cap,struct ap_workspace *w)
+{
+    if (offset>AP_HEADER_SKIP) return -E2BIG;
+    if (!within_time(w)) return -ETIMEDOUT;
+    if (w->content->sniffed==AP_SNIFF_FILES) { w->content->budget="sniff"; return -E2BIG; }
+    w->content->sniffed++;
+    int fd=fs->open(fs->ctx,path,0); if (fd<0) return fd;
+    unsigned char skip[512]; uint32_t at=0; unsigned used=0; int error=0;
+    while (at<offset && within_time(w)) {
+        unsigned want=offset-at<sizeof(skip) ? offset-at : (unsigned)sizeof(skip);
+        int n=fs->read(fs->ctx,fd,skip,want); if (n<0) { error=n; break; } if (!n) break; at+=(unsigned)n;
+    }
+    while (!error && at==offset && used<cap && within_time(w)) {
+        int n=fs->read(fs->ctx,fd,(char *)out+used,cap-used); if (n<0) { error=n; break; } if (!n) break; used+=(unsigned)n;
+    }
+    int e=fs->close(fs->ctx,fd);
+    if (!within_time(w)) return -ETIMEDOUT;
+    return error ? error : e ? e : (int)used;
+}
+/* fx-autorun: classify and prepare AUTORUN.INF open=. Microsoft "Autorun.inf
+ * Entries": open=[exepath\]exefile [param1 [param2] ...], a bare name in
+ * the drive's root, a path relative to the root otherwise. A Windows
+ * program (PE, or a 16-bit Windows NE such as an InstallShield 5 setup
+ * stub, exe_kind.h) starts through the Win32 personality from the disc
+ * root; an MS-DOS program is typed into the DOS Box. A program that is not
+ * on the disc, unreadable or of another type keeps the entry visible and
+ * disabled with its reason (run_reason). */
+static int ap_open_program(const struct fm_vfs *fs,struct ap_content *c,struct ap_workspace *w)
+{
+    c->run_kind=3; c->run_reason="unsupported";
     char name[97]; const char *args=c->inf.open; unsigned n=0;
     if (*args=='"') { args++; while (*args && *args!='"' && n<96) name[n++]=*args++; if (*args!='"') return 0; args++; }
-    else while (*args && *args!=' ' && n<96) name[n++]=*args++;
-    name[n]=0; while (*args==' ') args++;
-    if (relative(c->program,c->root,name)) return 0;
+    else while (*args && *args!=' ' && *args!='\t' && n<96) name[n++]=*args++;
+    name[n]=0; while (*args==' ' || *args=='\t') args++;
+    snprintf(c->arguments,sizeof(c->arguments),"%s",args);
+    if (relative(c->program,c->root,name)) { c->program[0]=0; return 0; }
     if (!ext(name,".exe|.com|.bat|")) return 0;
-    struct fm_meta meta; if (fs->stat_path(fs->ctx,c->program,&meta) || !within_time(w) || meta.type!=FM_FILE) return 0;
-    unsigned char *h=w->data; int got=read_prefix(fs,c->program,h,4096,w); if (got<0) return 0;
+    struct fm_meta meta; int missing=fs->stat_path(fs->ctx,c->program,&meta);
+    if (!within_time(w)) return 0;
+    if (missing || meta.type!=FM_FILE) { c->run_reason="not found"; return 0; }
+    unsigned char *h=w->data; int got=read_prefix(fs,c->program,h,4096,w); if (got<0) { c->run_reason="unreadable"; return 0; }
     if (ext(name,".exe|")) {
         if (got<28 || memcmp(h,"MZ",2)) return 0;
-        uint32_t pe=got>=64 ? (uint32_t)h[60]|(uint32_t)h[61]<<8|(uint32_t)h[62]<<16|(uint32_t)h[63]<<24 : 0;
-        if (pe>=64 && pe<(uint64_t)meta.size) {
-            if (pe>(unsigned)got-4u) return 0;
-            if (!memcmp(h+pe,"PE\0\0",4) || !memcmp(h+pe,"NE",2) || !memcmp(h+pe,"LE",2) || !memcmp(h+pe,"LX",2)) { c->run_kind=2; return 0; }
+        uint32_t at=desk_exe_lfanew(h,(size_t)got);
+        unsigned char header[DESK_EXE_HEADER]; const unsigned char *next=NULL; size_t next_bytes=0;
+        if (at && at<(uint64_t)meta.size) {
+            if (at<(unsigned)got) { next=h+at; next_bytes=(unsigned)got-at<DESK_EXE_HEADER ? (unsigned)got-at : DESK_EXE_HEADER; }
+            /* A Windows header lies within the first KiBs (stubs are small);
+             * an MS-DOS program's bytes at 0x3c can point anywhere, so an
+             * offset past the skip bound is read as "no extended header". */
+            if (next_bytes<DESK_EXE_HEADER && at+next_bytes<(uint64_t)meta.size && at<=AP_HEADER_SKIP) {
+                int more=read_window(fs,c->program,at,header,sizeof(header),w);
+                if (more<0) { c->run_reason="unreadable"; return 0; }
+                next=header; next_bytes=(size_t)more;
+            }
         }
-    }
+        c->exe_kind=desk_exe_classify(h,(size_t)got,next,next_bytes);
+        if (c->exe_kind==DESK_EXE_WIN32 || c->exe_kind==DESK_EXE_WIN16) { c->run_kind=2; c->run_reason=NULL; return 0; }
+    } else c->exe_kind=DESK_EXE_DOS;
     /* The DOS typist splits on spaces and cannot quote executable paths. */
     char dos[97]; if (strlen(name)>90 || strchr(name,' ')) return 0;
     while (*name=='/' || *name=='\\') memmove(name,name+1,strlen(name));
     for (char *p=name;*p;p++) if (*p=='/') *p='\\';
-    int len=snprintf(dos,sizeof(dos),"%c:\\%s%s%s",'A'+drive,name,*args ? " " : "",args);
+    int len=snprintf(dos,sizeof(dos),"%c:\\%s%s%s",c->root[5]-'a'+'A',name,*args ? " " : "",args);
     if (len<0 || len>96) return 0;
     char lines[DOSBOX_LINES_MAX][DOSBOX_COMMAND_MAX+4]; if (dosbox_command_lines(dos,lines)<0) return 0;
-    snprintf(c->command,sizeof(c->command),"%s",dos); c->run_kind=1; return 0;
+    snprintf(c->command,sizeof(c->command),"%s",dos); c->run_kind=1; c->run_reason=NULL; return 0;
 }
 int ap_probe(const struct fm_vfs *fs,unsigned drive,struct ap_content *c)
 {
@@ -233,4 +281,48 @@ int ap_probe_workspace(const struct fm_vfs *fs,unsigned drive,struct ap_content 
         return 0;
     }
     return result;
+}
+/* fx-autorun: the launch record of a probed open= program. A Windows
+ * program starts with the disc root as its current directory, as AutoRun
+ * starts it on Windows; an MS-DOS program keeps the DOS Box's own working
+ * directory rule (desk_w32_dos_command: the program's folder). */
+int ap_launch_record(const struct ap_content *c,struct desk_launch_record *r)
+{
+    memset(r,0,sizeof(*r));
+    if ((c->run_kind!=1 && c->run_kind!=2) || !c->program[0]) return -ENOEXEC;
+    const char *base=strrchr(c->program,'/'); base=base ? base+1 : c->program;
+    snprintf(r->label,sizeof(r->label),"%.63s",c->inf.label[0] ? c->inf.label : base);
+    if (strlen(c->program)>=sizeof(r->target) || strlen(c->arguments)>=sizeof(r->arguments)) return -ENAMETOOLONG;
+    strcpy(r->target,c->program); strcpy(r->arguments,c->arguments);
+    if (c->run_kind==2) snprintf(r->directory,sizeof(r->directory),"%s",c->root);
+    r->show=1;
+    return desk_launch_valid(r) ? 0 : -EINVAL;
+}
+/* fx-autorun: what My Computer needs for a drive: its AUTORUN.INF label and,
+ * when open= names a program it can start, the AutoPlay verb's record
+ * (Microsoft "Enabling and Disabling AutoRun": the drive's shortcut menu
+ * includes AutoPlay). One bounded root listing plus the INF and program
+ * header reads of ap_probe's open= rules; no music/picture scan. */
+int ap_drive_info(const struct fm_vfs *fs,unsigned drive,struct ap_drive_info *out)
+{
+    memset(out,0,sizeof(*out)); if (drive<3 || drive>=26) return -EINVAL;
+    struct ap_content *c=calloc(1,sizeof(*c));
+    struct ap_workspace *w=calloc(1,sizeof(*w));
+    if (!c || !w) { free(c); free(w); return -ENOMEM; }
+    snprintf(c->root,sizeof(c->root),"/mnt/%c",'a'+drive);
+    w->content=c; w->start=scan_now();
+    w->s=(struct scan){.c=c,.dir=c->root,.workspace=w,.limit=AP_ROOT_ENTRIES,.budget="root"};
+    int e=fs->list(fs->ctx,c->root,FM_LIST_NAMES_ONLY,entry,&w->s);
+    if (within_time(w) && !e && w->s.inf[0]) {
+        int n=read_prefix(fs,w->s.inf,w->data,sizeof(w->data),w);
+        if (n>=0 && n<=AP_INF_MAX && !ap_parse(&c->inf,(char *)w->data,(size_t)n)) {
+            memcpy(out->label,c->inf.label,sizeof(out->label));
+            if (c->inf.open[0] && within_time(w)) {
+                (void)ap_open_program(fs,c,w);
+                out->run_kind=c->run_kind; out->exe_kind=c->exe_kind;
+                if (out->run_kind!=3 && ap_launch_record(c,&out->record)) out->run_kind=3;
+            }
+        }
+    }
+    free(c); free(w); return e;
 }

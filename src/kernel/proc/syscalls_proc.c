@@ -1,6 +1,7 @@
 /* Native syscall rows owned by f2-02. Wire records/constants come from abi.h.
  * SPDX-License-Identifier: GPL-2.0-only */
 #include <ciuki/kernel.h>
+#include <ciuki/security_device.h>
 #include <ciuki/cpu.h>
 #include <ciuki/process.h>
 #include <ciuki/security.h>
@@ -244,7 +245,6 @@ int proc_terminate(struct process *caller, int32_t pid, uint32_t signo, int32_t 
 {
     if ((signo != SIGTERM && signo != SIGKILL) || pid <= 0 || (uint32_t)pid == caller->pid)
         return -EINVAL;
-    bool authority = false;
     uint32_t owner_pid = 0;
     if (authority_fd != (int32_t)CIUKI_PROC_NO_AUTHORITY) {
         if (authority_fd < 0 || authority_fd >= CIUKI_OPEN_MAX || !caller->fds ||
@@ -252,9 +252,8 @@ int proc_terminate(struct process *caller, int32_t pid, uint32_t signo, int32_t 
             return -EBADF;
         const struct proc_authority *a = (const struct proc_authority *)caller->fds[authority_fd].object;
         owner_pid = a->owner;
-        authority = caller->pid == owner_pid || caller->ppid == owner_pid;
     }
-    if (pid == 1)
+    if (!security_process_live(caller) || pid == 1)
         return -EPERM;
     struct process *target = proc_find((uint32_t)pid);
     if (!target || target->state != PROC_LIVE)
@@ -270,16 +269,9 @@ int proc_terminate(struct process *caller, int32_t pid, uint32_t signo, int32_t 
     struct process *owner = owner_pid ? proc_find(owner_pid) : 0;
     if (owner && target->pgid == owner->pgid && caller != owner)
         return -EPERM;
-    if (!target->live_threads)
+    if (!target->live_threads || (security_system(target) && !security_device_system(caller)))
         return -EPERM;                  /* kernel controller owner, no user thread */
-    bool descendant = false;
-    struct process *at = target;
-    for (unsigned depth = 0; at && depth < CIUKI_PROCESS_MAX && !descendant; depth++) {
-        descendant = at->ppid == caller->pid;
-        at = at->ppid > 1 ? proc_find(at->ppid) : 0;
-    }
-    if (!descendant && !authority)
-        return -EPERM;
+    if (!security_device_admin(caller) && !security_same(caller,target)) return -EPERM;
     proc_signal_post(target, 0, signo, caller->pid);
     return 0;
 }

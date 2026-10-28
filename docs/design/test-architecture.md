@@ -280,7 +280,7 @@ INCOMPLETE, one line per trial item, key figures and evidence paths).
 - **Predicates** are line-anchored regular expressions over the serial
   capture, never a frame digest: kernel `klog` lines, program output
   (`[console] ...`) and the desktop's diagnostic records
-  (`[user N] [desktop] display start|focus|not-responding|notify|message|autoplay ...`,
+  (`[user N] [desktop] display start|focus|window|not-responding|notify|message|autoplay ...`,
   `apps/desktop/diag_record.h`, written through diagnostic call 2 also in
   quiet boots) and `[dosvm-window] video` (`src/kernel/vm/dosvm_vga.c`, one
   line per change of a DOS window's layout). Steps wait for patterns in order
@@ -289,9 +289,29 @@ INCOMPLETE, one line per trial item, key figures and evidence paths).
   Installed files and Start-menu links are compared on the overlay after a
   verified teardown (`win32_inventory.overlay_delta`). Screendumps only pace
   the input (`screen_settle`; an installer `wizard` presses its next key once
-  the screen has been still for some seconds and the focused window is one
-  of the installer's untitled pages) and check geometry and the desktop
-  layout colours of `observe_normal_boot_screen`.
+  the screen has been still for some seconds) and check geometry and the
+  desktop layout colours of `observe_normal_boot_screen`. fx-acc1: a wizard
+  with `pages` follows the installer page by page from the desktop's
+  `window pid= window= owner= modal= state= title=` records (one per title
+  or visibility change of a program window, `apps/desktop/input.c`): the
+  newest shown owned window of the installer's process is the page, named by
+  the first page spec whose title expression matches; its keys are pressed
+  once (again after `retry` seconds, at most `max_retries` times) while the
+  installer's process holds the focus, and a page that stays past its
+  timeout fails the step naming the page. The first run (c634b7c6) showed
+  why the untitled-focus rule could not work: Installer VISE creates each
+  DialogBox page hidden and untitled, titles it in WM_INITDIALOG and shows
+  it afterwards, so the focus record of a page carried no title.
+- **Program output records are whole lines only when written by one
+  `write()`**: the kernel publishes every console write as its own
+  `[console] ` line, and newlib's unbuffered `stderr` (opened `__SRW|__SNBF`,
+  so its `_UNBUF_STREAM_OPT` single-write path never applies) writes each
+  `fprintf` conversion separately. The desktop makes `stderr` line buffered
+  at start (ISO C 7.21.3: stderr is never fully buffered; every desktop
+  record ends with a newline), so its records are single lines (fx-acc1,
+  run f63df5ab: `end task dialog kind=dos` arrived as seven lines and the DOS
+  close step never matched). Other programs' `fprintf(stderr)` records are
+  still fragmented; prefer klog lines and diagnostic records in predicates.
 - **Known failures** name their directive (`known_failure`, optionally only
   for a `fail` pattern): the summary shows the item as PASS* and they do not
   block. Today: the DOS full-screen entry refused by QEMU's standard VGA
@@ -307,7 +327,91 @@ INCOMPLETE, one line per trial item, key figures and evidence paths).
   absent snapshots make the case `not_run`. Same-site fetch errors fail it,
   other hosts are recorded.
 - A pending item (`pending`: directive, required paths, reason) is `not_run`
-  and does not block (item 9 until fx-is5boot is merged).
+  and does not block.
+- **Item 9** (fx-acc1) inserts a generated InstallShield 5 test medium
+  (`iso_fixtures.is5_files`, media `content: "is5"`): an authored NE header
+  as SETUP.EXE, SETUP.INS/INI/LID and a Stirling `_INST32I.EX_` of
+  literal-only DCL members whose engine is an authored 1.5 KiB PE that writes
+  its current directory to `C:\Documents\is5engine.txt` and exits 42. The
+  case starts `D:\SETUP.EXE` from Run and waits for the bootstrap helper,
+  the `_INSnnnn._MP` engine and both exits, then shuts down so the overlay
+  holds the engine's file (`disk.menu_links: false`).
+
+## Security runtime cases (amendment, sec-user-06, 2026-10-28)
+
+Directive `docs/directives/sec-user-06.md`; binding cases in
+[user-security-contract.md 10.1](user-security-contract.md#101-exact-lead-qemu-checklist-future-implementation-gate)
+(SU-01..14 and the round-1/round-2 additions). Host evidence H14:
+`tests/host/security/test_runner_contract.py`. No QEMU result is claimed here.
+
+- **LOGON images.** With the trusted LOGON service PID 1 no longer spawns
+  `/Programs/desktop`: it logs `[supervisor] bootstrap: trusted logon pid=<n>`
+  and LOGON's SESSION_LAUNCH publishes each session's programs, one kernel record
+  each (`proc/security.c` `launch_record`):
+  `[security] session <s> desktop|w32srv pid=<n> pgid=<n> uid=<u> gid=<g> groups=<g,...>`.
+  The normal-boot milestones `desktop_spawn` and `desktop_pid` accept both forms
+  (a second session's desktop in one normal boot is a repeated milestone), and so
+  does the acceptance `boot` template. Without these the f0-smoke normal-boot
+  cases and every acc-t23 boot would stop at the desktop milestone on a security
+  image. Safe Mode never logs on automatically (`apps/logon/coordinator.c`), so
+  `boot-safe` logs on at Welcome as the blank CiukiUser.
+- **Templates** (`scripts/test/acceptance.py`): `boot` (automatic logon),
+  `boot-safe`, `boot-logon` and `boot-safe-logon` (a typed-name logon with
+  `user`/`password`), and `logon` (Welcome inside a boot, after a Log Off). A
+  logon waits for LOGON_UI's painted list (`[logon-ui] view mode=welcome
+  view=list ... accounts>=1`), presses Up twice (the item list wraps from the
+  first tile through Turn Off Computer to "Type a user name"), Enter, types the
+  name, Enter, the password, Enter, then waits for `[logon] authenticated uid=`,
+  the session, the kernel desktop record with its credential, `running` and the
+  desktop's display record. Typed text reaches `result.json` as a count only;
+  every case that types a password asserts that none appears on the serial port.
+- **Records the cases assert on** (all also in quiet boots): LOGON
+  `[logon] screen <mode>`, `authentication refused action=<2|3> status=<errno>`,
+  `session <s> locked by the screen saver|stand by|desktop|security menu`,
+  `session <s> unlocked`, `restart|shutdown requested at the logon screen`;
+  LOGON_UI `[logon-ui] view mode= view= items= accounts= status=<class>`
+  (classes only, never a name or typed text); ACCOUNT
+  `[accounts] manage op= caller= target= type= result=` (one per management
+  request, success or failure, as Windows XP's account-management audit:
+  [Audit account management](https://learn.microsoft.com/en-us/previous-versions/windows/it-pro/windows-server-2003/cc737542(v=ws.10)));
+  kernel `[security] console enter session= reason=lock|saver|resume|attention
+  authentication=`, `console leave`, `console concealed neutral_ms= trusted_ms=`,
+  `console restored ms=` (`proc/grants.c`); desktop `[desktop] saver start kind=
+  source=idle|command` and `saver wake protect=1 lock=`.
+- **sectest.** `/Programs/sectest` (`apps/systools/sectest_model.c`, Start >
+  Programs > Developer, like `hello` and `libc_smoke`) runs from Run as the
+  account under test and writes one `[console] sectest ...` record per check:
+  identity (`role`, groups, never SYSTEM), environment (USERPROFILE/TMPDIR/HOME),
+  own and other profiles, `/Programs`, a creator-owned root folder (`GAME`), a
+  folder another account created, the installer store and its presentation
+  folder, the machine registry through the broker, call-99 SETTING, the raw
+  system disk, `/System/Security`, `/System/SysBckup`. Each check uses the
+  production entry point; the expectation table is the policy's
+  (`security_policy.c`, `broker.c`, `syscalls_sysvc.c`, `disklease.c`) and H14
+  compares them. `sectest saver` asks SC_SCREENSAVE as any program of the session
+  may ([WM_SYSCOMMAND](https://learn.microsoft.com/en-us/windows/win32/menurc/wm-syscommand)).
+- **Power cut.** The action `{"power_cut": true}` sends QMP `system_reset` (QEMU
+  ShutdownCause `host-qmp-system-reset`,
+  [qapi/run-state.json](https://gitlab.com/qemu-project/qemu/-/blob/master/qapi/run-state.json)); it arms its own
+  reset, counts against the case's `resets` and accepts the one `guest-reset`
+  SeaBIOS performs within 3 s after it (as `run.py` `unexpected_resets` already
+  records). The guest loses what it had not written; the overlay keeps what
+  reached it.
+- **Suite `sec-users`** (`"acceptance": true`, profile qemu-t23):
+  `scripts/test/acceptance.sh --suite sec-users` (`--list` validates and lists any
+  acceptance suite without QEMU). Cases a runtime hook does not yet allow are
+  `pending` (not run, never counted as a pass) and name the host evidence that
+  covers them: su-02-setup (no CD installation path in the runner), su-10-resume
+  (no qualified virtual standby provider), su-r2-status, su-r2-profile,
+  su-r1-dos, su-r1-restart, su-r1-console.
+- **Why not a fw_cfg test request.** A fw_cfg request sets `CBI_F_TEST_REQUEST`,
+  and `probes_main` then replaces the ordinary boot: no supervisor, LOGON or
+  desktop unless a probe is admitted like `f5:q3-lease-eio`, a verbose console,
+  early entropy readiness, no autoscan, fatal lock-order reports and no Setup mode
+  (`probes/probes.c`, `core/entropy.c`, `fs/mount.c`, `core/sync.c`). The security
+  cases therefore boot from the loader menu exactly as a user does; the runner
+  selects them at run time (suite and `--case`), never a build variant (rule 2's
+  intent). This is a lead decision recorded in the sec-user-06 report.
 
 ## Migration
 

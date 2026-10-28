@@ -103,6 +103,25 @@ int security_launch_environment(struct proc_strings *, const struct ciuki_securi
 int proc_security_launch_prepare(struct process *parent, struct ciuki_security_launch *, struct process **);
 void security_launch_preparation_done(uint32_t session);
 int security_console_attention(uint32_t reason); /* kernel physical input/resume only */
+/* --- sec-k07 (begin): real secure-console backend (proc/secure_console.c) ---
+ * security_init installs secure_console_ops when linked. Physical secure
+ * attention arms only once a LOGON role exists; until sec-user-03 ships
+ * LOGON/LOGON_UI the interim desktop keeps Ctrl+Alt+Del as Task Manager.
+ * secure_console_poll runs in PID 1: deferred attention, the neutral frame
+ * and session drain (DOS VMs, Win32 session objects/reports). */
+extern const struct security_grant_ops secure_console_ops;
+bool security_attention_armed(void);
+void security_attention_physical(void);
+/* sec-k08 (U4-3): a firmware-initiated suspend/resume (core/power_source.c). */
+void security_attention_resume(void);
+void secure_console_poll(void);
+unsigned secure_session_retained(uint32_t session);
+void secure_service_notify(uint32_t session);
+struct secure_console_stats { uint32_t attention_pending; uint64_t attention_handled, drain_passes; int attention_result; };
+void secure_console_stats(struct secure_console_stats *out);
+int channel_kernel_endpoint(struct process *child, int32_t *child_fd, struct proc_object **kernel_end);
+int channel_kernel_notify(struct proc_object *end, const void *data, uint32_t length);
+/* --- sec-k07 (end) --- */
 void security_tick(void); /* bounded deadline wake; no I/O or waits */
 void security_poll(void); /* PID 1 maintenance: deadlines and pair failures */
 /* Committed per-profile TZ loader. Absent key => UTC0; absent adapter may use

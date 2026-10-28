@@ -12,6 +12,7 @@ extern void net_fd_changed(struct process *, unsigned) __attribute__((weak));
 #include <ciuki/signal.h>
 #include <ciuki/security.h>
 #include "../fs/owner_channel.h"
+#pragma weak proc_notify /* sec-own: channel harnesses without the process table */
 
 struct channel_message {
     struct ciuki_message wire;
@@ -279,6 +280,9 @@ int channel_send(struct process *p, int32_t fd, uint32_t message, uint32_t flags
             if (!err) {
                 kwait_wake_all(&c->changed[peer]);
                 if (net_fd_changed) net_fd_changed(0,0);
+                /* sec-own: PID 1 serves OWNER in its maintenance turn; wake
+                 * it for a complete request instead of the 100-tick poll. */
+                if (c->service==CIUKI_SECURITY_SERVICE_OWNER && !d->u.endpoint.side && c->complete[0] && proc_notify) proc_notify();
             }
             return channel_end(op,err);
         }
@@ -585,6 +589,48 @@ int channel_endpoint_handoff(struct process *parent, int32_t fd, struct process 
     *child_fd=slot;
     return 0;
 }
+/* --- sec-k07 (begin): kernel-held notification endpoint ---
+ * The W32SRV child's child_service_fd: side 0 belongs to the unpublished
+ * child, side 1 is bound to the kernel subject and held only by the secure
+ * console backend (no descriptor anywhere). The kernel posts at most one
+ * pending 16-byte notification; the child sees POLLHUP when the session's
+ * backend record releases its end. Never inheritable or attachable. */
+int channel_kernel_endpoint(struct process *child, int32_t *child_fd, struct proc_object **kernel_end)
+{
+    if (!child || child->published || child->state!=PROC_PREPARING || !child_fd || !kernel_end) return -EPERM;
+    int32_t fds[2];
+    int err=channel_pair(child,fds);
+    if (err) return err;
+    struct desktop_description *u=desktop_fd(child,fds[0]), *k=desktop_fd(child,fds[1]);
+    struct channel *c=k->u.endpoint.channel;
+    err=security_subject_get(proc_supervisor()->subject);
+    if (err) { desktop_close(child,fds[0]); desktop_close(child,fds[1]); return err; }
+    security_subject_put(c->subjects[1]); c->subjects[1]=proc_supervisor()->subject;
+    c->handed[0]=c->handed[1]=true;
+    k->object.inheritable=u->object.inheritable=false;
+    child->fds[fds[1]]=(struct proc_fd){0}; /* the reference moves to the kernel */
+    *kernel_end=&k->object; *child_fd=fds[0];
+    return 0;
+}
+int channel_kernel_notify(struct proc_object *end, const void *data, uint32_t length)
+{
+    if (!desktop_object_is_channel(end) || !data || length>CIUKI_MESSAGE_PAYLOAD_MAX) return -EINVAL;
+    struct desktop_description *d=(struct desktop_description *)end;
+    struct channel *c=d->u.endpoint.channel; unsigned peer=d->u.endpoint.side^1;
+    if (c->revoked[0] || c->revoked[1] || !c->open[peer]) return -EPIPE;
+    if (c->inbox[peer].count) return 0; /* level-triggered: one wakeup suffices */
+    struct channel_message *m=kzalloc(sizeof(*m));
+    if (!m) return -ENOMEM;
+    m->wire.length=length; memcpy(m->wire.data,data,length);
+    struct channel_queue *q=&c->inbox[peer];
+    if (q->tail) q->tail->next=m; else q->head=m;
+    q->tail=m; q->count++;
+    desktop_objects.messages++;
+    kwait_wake_all(&c->changed[peer]);
+    if (net_fd_changed) net_fd_changed(0,0);
+    return 1;
+}
+/* --- sec-k07 (end) --- */
 /* The readiness coordinator is kernel-owned. A LOGON instance owns its fd,
  * while its death cannot discard a child's authenticated ready handshake.
  * Only this initial, unpublished binding and fixed-role recovery can install
@@ -694,7 +740,12 @@ static int channel_security_frame(struct channel *c, unsigned side, const struct
         h[9]>192 || m->length!=64+h[9] || h[13]>8192 ||
         h[14]>h[13] || h[9]>h[13]-h[14] || h[15] ||
         (!h[9] && h[13]) || (int32_t)h[12]>0 || (!side && h[12]) || (h[12] && h[13])) return -EINVAL;
-    static const uint32_t max_op[]={0,7,9,7,0xffffffffu,7,0xffffffffu};
+    /* sec-own: OWNER (service 3) adds the query operations 8..14.
+     * sec-user-03: LOGON (service 5) adds private UI_STATE=8 (LOGON_UI) and
+     * SESSION_EVENT=9 (same-session DESKTOP); LOGON authorizes each route.
+     * sec-user-04: AUTH (service 1) adds ENROLL_SOURCE=8 (LOGON) and LOGON
+     * adds its ENROLL_SOURCE=10 relay (LOGON_UI). */
+    static const uint32_t max_op[]={0,8,9,14,0xffffffffu,10,0xffffffffu};
     if (!h[4] || h[4]>max_op[c->service]) return -EOPNOTSUPP;
     bool first=!c->exchange;
     if (first) {

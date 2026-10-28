@@ -157,6 +157,14 @@ static int mkdirs(const char *root, const char *path)
 }
 int sfc_restore(const char *root, const char *path, const char *source_root)
 {
+#if defined(__CIUKIOS__) && !defined(__linux__)
+    /* sec-sysvc: the baseline and boot files are sealed; the SYSTEM service
+     * verifies the original against SFC.LST and replaces the file. */
+    if (!root || !*root) {
+        if (!ciuki_sfc_restore(path, source_root && *source_root ? source_root : "/")) return 0;
+        if (errno != ENOSYS && errno != ENODEV) return -errno;
+    }
+#endif
     struct table t = { 0 };
     int e = load(root, SFC_LIST, &t, true);
     int at = e ? -1 : find(&t, path);
@@ -192,16 +200,19 @@ int sfc_restore(const char *root, const char *path, const char *source_root)
 }
 int sfc_log(const char *root, const struct sfc_result *r, int64_t now)
 {
-    char p[512];
-    int e = full(p, sizeof(p), root, SFC_LOG); if (e) return e;
-    FILE *f = fopen(p, "a");
-    if (!f) return -errno;
     time_t t = (time_t)now; struct tm tm; char when[32];
     if (localtime_r(&t, &tm)) strftime(when, sizeof(when), "%Y-%m-%d %H:%M", &tm); else snprintf(when, sizeof(when), "?");
-    fprintf(f, "%s System File Checker: %u checked, %u changed, %u deleted\n", when, r->checked, r->changed, r->deleted);
-    for (unsigned i = 0; i < r->count; i++)
-        fprintf(f, "  %s %s\n", r->problems[i].state == SFC_DELETED ? "deleted" : "changed", r->problems[i].path);
-    e = ferror(f) ? -EIO : 0;
-    if (fclose(f) && !e) e = -errno;
+    size_t cap = 128 + (size_t)r->count * (sizeof(r->problems[0].path) + 16), used = 0;
+    char *text = malloc(cap);
+    if (!text) return -ENOMEM;
+    int n = snprintf(text, cap, "%s System File Checker: %u checked, %u changed, %u deleted\n", when, r->checked, r->changed, r->deleted);
+    if (n > 0) used = (size_t)n < cap ? (size_t)n : cap - 1;
+    for (unsigned i = 0; i < r->count && used < cap - 1; i++) {
+        n = snprintf(text + used, cap - used, "  %s %s\n", r->problems[i].state == SFC_DELETED ? "deleted" : "changed", r->problems[i].path);
+        if (n > 0) used += (size_t)n < cap - used ? (size_t)n : cap - used - 1;
+    }
+    /* sec-sysvc: a system log, appended through the SYSTEM log service. */
+    int e = sr_log_append(root, "SFC.LOG", text, used);
+    free(text);
     return e;
 }

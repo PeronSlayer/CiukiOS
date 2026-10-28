@@ -30,6 +30,10 @@ class VolumeResolutionTests(unittest.TestCase):
             subprocess.run([*flags, '-Wno-macro-redefined', '-D__CIUKIOS__', '-I'+str(inc),
                             '-I'+str(ROOT / 'src/kernel/include'), '-c',
                             str(ROOT / 'apps/desktop/master_storage.c'), '-o', str(master)], check=True, env=env)
+            # The master store embeds a private libreg instance.
+            transport = work / 'transport.o'
+            subprocess.run([*flags, '-include', str(ROOT / 'apps/desktop/master_registry.h'),
+                            '-c', str(ROOT / 'sdk/libreg/transport.c'), '-o', str(transport)], check=True, env=env)
             sources = ['src/kernel/fs/'+n+'.c' for n in
                        ('fs_port', 'blkreq', 'cache', 'partition', 'path', 'fat', 'vfs', 'fs_ro', 'iso9660', 'ntfs_fs', 'ntfs_ro', 'mount')]
             sources += ['src/kernel/core/bootlog.c', 'src/kernel/drivers/blkpart.c',
@@ -38,7 +42,7 @@ class VolumeResolutionTests(unittest.TestCase):
             binary = work / 'volume-test'
             subprocess.run([*flags, '-Wno-unused-function', '-DFS_HOST', '-D_POSIX_C_SOURCE=200809L',
                             '-I'+str(ROOT / 'src/kernel/include'), '-I'+str(ROOT / 'src/kernel/fs'),
-                            *(str(ROOT / s) for s in sources), str(master), '-Wl,--gc-sections',
+                            *(str(ROOT / s) for s in sources), str(master), str(transport), '-Wl,--gc-sections',
                             *('-Wl,--wrap='+n for n in ('open', 'close', 'stat', 'mkdir', 'unlink', 'rename', 'fsync', 'fopen', 'fileno')),
                             '-o', str(binary)], check=True, env=env)
             subprocess.run([str(binary), *(str(out / ('fat'+str(n)+'.img')) for n in (32, 12, 16)), iso['path']],

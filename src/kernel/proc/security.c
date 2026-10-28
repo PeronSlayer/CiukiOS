@@ -10,6 +10,7 @@
 #pragma weak desktop_close
 #include <ciuki/desktop.h>
 extern struct ciuki_boot_info g_boot __attribute__((weak));
+#pragma weak klog /* sec-user-06 records; host harnesses link no log sink */
 
 extern int security_owner_verify(const struct ciuki_security_profile *) __attribute__((weak));
 extern void channel_fd_closed(struct process *,struct proc_object *) __attribute__((weak));
@@ -65,6 +66,9 @@ extern int channel_kernel_receive(struct process *, int32_t, struct ciuki_messag
 extern int channel_control_install(struct process *,struct proc_object *) __attribute__((weak));
 extern void channel_security_revoke(struct process *) __attribute__((weak));
 extern int proc_security_launch_prepare(struct process *, struct ciuki_security_launch *, struct process **) __attribute__((weak));
+/* sec-k07: the real device backend and the session drain, when linked. */
+#pragma weak secure_console_ops
+#pragma weak secure_session_retained
 
 void security_init(struct process *p)
 {
@@ -76,6 +80,7 @@ void security_init(struct process *p)
     role_generations[CIUKI_SECURITY_ROLE_OWNER]=1;
     p->fds=owner_endpoint_fds;
     p->subject = &system_subject;
+    if (&secure_console_ops) security_grants=&secure_console_ops; /* sec-k07 */
 }
 const struct ciuki_credential *security_credential(const struct process *p)
 { return p && p->subject ? &p->subject->credential : 0; }
@@ -338,6 +343,9 @@ int security_session_end(uint32_t id, bool begin, uint32_t *state)
             if (p && p->subject && p->subject->session == s && p->state != PROC_ZOMBIE)
                 draining = true;
         }
+        /* sec-k07: DOS VMs (kernel tasks, not processes) and Win32 session
+         * objects/reports are drained by PID 1; nonblocking query here. */
+        if (secure_session_retained && secure_session_retained(id)) draining = true;
         /* Unpublished children fence admission. Revoked subject snapshots
          * retain the DEAD record but cannot keep an old desktop executing. */
         if (!draining && !s->fence_pending && !s->fencing && !s->constructing) {
@@ -346,7 +354,14 @@ int security_session_end(uint32_t id, bool begin, uint32_t *state)
             boot_console.session_id = boot_console.session_generation = 0;
             boot_console.authentication_required = 0;
             boot_console.restore_cookie_lo = boot_console.restore_cookie_hi = 0;
-            if (security_grants && security_grants->release) security_grants->release(id);
+            /* sec-k07: the backend releases kernel-held endpoints whose last
+             * subject reference may be this session's; keep the record alive
+             * until its state has been reported. */
+            if (security_grants && security_grants->release && s->refs != UINT32_MAX) {
+                s->refs++;
+                security_grants->release(id);
+                s->refs--;
+            }
         }
     }
     *state = s->state;
@@ -366,6 +381,14 @@ int security_bootstrap_desktop(struct process *p)
     struct ciuki_credential c = { .version = 1, .size = 64, .uid = 1000,
         .primary_gid = 545, .group_count = 2, .groups = {544, 545}, .flags = CIUKI_CRED_INTERACTIVE };
     struct ciuki_security_profile profile = { .version = 1, .size = 112, .uid = 1000 };
+    /* sec-own: once OWNER has committed uid 1000's profile (CiukiUser on a
+     * ready image, Setup's first administrator), the interim session carries
+     * that committed descriptor; until then it has none (k05 legacy stores). */
+    extern int owner_system_profile(uint32_t, struct ciuki_security_profile *) __attribute__((weak));
+    struct ciuki_security_profile committed;
+    if (owner_system_profile && !owner_system_profile(1000, &committed) &&
+        !profile_template(&committed, 1000) && security_owner_verify && !security_owner_verify(&committed)) profile = committed;
+    /* end sec-own */
     uint32_t id;
     int err = session_reserve(&c, &profile, &id);
     if (!err) session_find(id)->bootstrap = true;
@@ -487,12 +510,14 @@ int security_subject_check(const struct security_subject *s, uint32_t action, ui
     uint32_t service=action>>16, op=action&65535u, r=s->role;
     if (!service) return action ? -EINVAL : 0;
     if (!s->origin || !channel_peer_service || channel_peer_service(&s->peer)!=service) return -EACCES;
-    if (!op || (service==2 && op>9) || (service==3 && op>7)) return -EOPNOTSUPP;
-    if (service==1) return r==1 ? (op>=1 && op<=7 ? 0 : -EOPNOTSUPP) :
+    /* sec-own: OWNER query operations 8..14 (fs/owner_system.h). */
+    if (!op || (service==2 && op>9) || (service==3 && op>14)) return -EOPNOTSUPP;
+    /* sec-user-04: AUTH ENROLL_SOURCE=8 (LOGON), LOGON ENROLL_SOURCE=10 (LOGON_UI). */
+    if (service==1) return r==1 ? (op>=1 && op<=8 ? 0 : -EOPNOTSUPP) :
         r==2 && op==1 ? 0 : -EPERM;
     if (service==5) {
-        if ((r==3 && op==1) || (r==2 && (op==2 || op==3 || op==4 || op==6 || op==7)) ||
-            (r==6 && op==5 && scope && s->credential.session_id==scope)) return 0;
+        if ((r==3 && op==1) || (r==2 && (op==2 || op==3 || op==4 || op==6 || op==7 || op==8 || op==10)) ||
+            (r==6 && (op==5 || op==9) && scope && s->credential.session_id==scope)) return 0; /* sec-user-03: 8, 9 */
         return -EPERM;
     }
     if (service==3 && r!=3 && r!=8) return -EPERM;
@@ -623,12 +648,25 @@ static int console_enter_locked(struct process *logon, uint32_t id, const struct
     *out=*c;
     return 0;
 }
+/* sec-user-06: one record per completed trusted-gate transition, also in
+ * quiet boots: an entry that issued a fresh restoration cookie (retries
+ * that only drained a fence, and idempotent re-entries, write none) and a
+ * leave that activated the session. Reasons are the frozen
+ * CIUKI_SECURITY_SECURE_* values; no secret or name. */
+static const char *console_reason(uint32_t r)
+{ return r==1 ? "lock" : r==2 ? "saver" : r==3 ? "resume" : r==4 ? "attention" : "other"; }
 static int console_enter(struct process *logon, uint32_t id, const struct ciuki_security_console *in,
                          struct ciuki_security_console *out, bool physical)
 {
     uint32_t flags=irq_save();
+    uint64_t cookie=cookie_high_water;
     int err=console_enter_locked(logon,id,in,out,physical);
-    irq_restore(flags); return err;
+    bool fresh=!err && cookie_high_water!=cookie;
+    uint32_t required=fresh ? out->authentication_required : 0;
+    irq_restore(flags);
+    if (fresh && klog) klog("[security] console enter session=%u reason=%s authentication=%u%s",id,console_reason(in->reason),
+                    required,physical ? " physical=1" : "");
+    return err;
 }
 static bool launch_pair_ready(struct security_session *s)
 { return s->launches[0].state>=2 && s->launches[0].state<=3 && s->launches[1].state>=2 && s->launches[1].state<=3; }
@@ -692,7 +730,9 @@ static int console_leave(struct process *p, uint32_t id, const struct ciuki_secu
 {
     uint32_t flags=irq_save();
     int err=console_leave_locked(p,id,in,out);
-    irq_restore(flags); return err;
+    irq_restore(flags);
+    if (!err && klog) klog("[security] console leave session=%u",id);   /* sec-user-06 */
+    return err;
 }
 static void launch_fds_clear(struct ciuki_security_launch *l)
 {
@@ -762,6 +802,28 @@ void security_launch_preparation_done(uint32_t id)
     if (!s || !s->constructing) return;
     s->constructing=false; s->refs--;
     if (!s->refs && s->state==CIUKI_SECURITY_SESSION_DEAD) memset(s,0,sizeof(*s));
+}
+/* sec-user-06: one serial record per published session program, also in
+ * quiet boots. On LOGON images PID 1 no longer spawns the desktop, so this
+ * is the runner's desktop milestone (scripts/test/run.py, acceptance.py),
+ * and it carries the credential the program runs with (contract 10.1
+ * SU-01: uid, groups, never SYSTEM). Ids only; no name or secret. */
+static void launch_record(const struct security_session *s, unsigned which, const struct process *child)
+{
+    if (!klog) return;
+    const struct ciuki_credential *c=security_credential(child);
+    char groups[8*11+2]; unsigned used=0;
+    for (unsigned i=0;c && i<c->group_count && i<8;i++) {
+        char digits[10]; unsigned n=0; uint32_t v=c->groups[i];
+        do { digits[n++]=(char)('0'+v%10); v/=10; } while (v && n<sizeof(digits));
+        if (i) groups[used++]=',';
+        while (n) groups[used++]=digits[--n];
+    }
+    if (!used) groups[used++]='-';
+    groups[used]=0;
+    klog("[security] session %u %s pid=%u pgid=%u uid=%u gid=%u groups=%s",s->credential.session_id,
+         which ? "w32srv" : "desktop",child->pid,child->pgid,c ? c->uid : CIUKI_UID_INVALID,
+         c ? c->primary_gid : CIUKI_GID_INVALID,groups);
 }
 static int session_launch(struct process *parent, const struct ciuki_security_launch *in,
                           struct ciuki_security_launch *out, bool poll)
@@ -850,6 +912,7 @@ static int session_launch(struct process *parent, const struct ciuki_security_la
     *l=next;
     s->deadlines[which]=g_ticks+CIUKI_SECURITY_LAUNCH_TIMEOUT_MS;
     proc_publish(child,CIUKI_SPAWN_NEW_GROUP);
+    launch_record(s,which,child);   /* sec-user-06 */
     *out=*l;
     return 0;
 }

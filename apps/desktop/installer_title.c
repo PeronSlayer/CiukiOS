@@ -22,6 +22,7 @@
 #include <sys/wait.h>
 #include <unistd.h>
 #include "tz_env.h"
+#include "profile.h" /* sec-user-05 */
 
 extern void desk_v3_fixture_report(const char *);
 #ifndef TITLE_MNT
@@ -369,7 +370,10 @@ static int spawn_win32(const char *native, const char *dos, const char *argument
     if (directory[0] && chdir(directory)) return -errno;
     char *argv[] = {(char *)dos, command, NULL};
     char tz[DESK_TZ_ENV_BYTES];
-    char *env[] = {"LC_ALL=C", desk_tz_env(tz, sizeof(tz)), "PATH=/Programs", "HOME=/Documents", NULL};
+    /* sec-user-05: the installer runs with the session's profile temporaries. */
+    struct profile_env profile;
+    char *env[10] = {"LC_ALL=C", desk_tz_env(tz, sizeof(tz)), "PATH=/Programs"};
+    env[profile_env_add(&profile, env, 3)] = NULL;
     /* A new process group: the installer tree is followed by group as well. */
     int pid = ciuki_spawn(native, argv, env, NULL, 0, CIUKI_SPAWN_NEW_GROUP);
     int error = pid < 0 ? -errno : 0;

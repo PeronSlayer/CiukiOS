@@ -18,8 +18,15 @@
 #include <unistd.h>
 #include <stdlib.h>
 #include "win32_crash.h"
+#include "profile.h" /* sec-user-05 */
+#if defined(__CIUKIOS__) && !defined(__linux__)
+#include "../../sdk/libreg/transport.h"
+static struct reg_remote registry_broker={.fd=-1};
+#endif
 uint32_t desk_w32_record(void *,uint32_t);
 extern int desk_w32_crash_store(const char *,const struct ciuki_w32_fault *) __attribute__((weak));
+extern int desk_w32_crash_log(const struct ciuki_w32_fault *) __attribute__((weak)); /* sec-sysvc */
+extern int desk_w32_crash_store_as(const char *,const char *,const struct ciuki_w32_fault *) __attribute__((weak)); /* sec-sysvc2 */
 extern void desk_w32_fault_dialog(struct desktop *,const struct ciuki_w32_fault *) __attribute__((weak));
 extern void desk_v3_revoke(struct desktop *) __attribute__((weak));
 extern void desk_v3_pointer_release(struct desktop *) __attribute__((weak));
@@ -29,9 +36,23 @@ static pthread_mutex_t crash_disk_lock=PTHREAD_MUTEX_INITIALIZER;
 static void *crash_disk_worker(void *p)
 {
     pthread_mutex_lock(&crash_disk_lock);
-    /* G13: native program faults live with the other logs (BOOT.LOG, NETSURF.LOG). */
+    /* sec-sysvc: the report is the faulting user's own log, written through
+     * the SYSTEM log service (Log Viewer lists it). */
     const struct ciuki_w32_fault *f=p;
-    int error=desk_w32_crash_store?desk_w32_crash_store(f->kind==W32_REPORT_NATIVE_FAULT?"/system/logs":"/WINDOWS/CRASH",p):-ENOSYS;
+    int error=desk_w32_crash_log?desk_w32_crash_log(f):-ENOSYS;
+    if(error==-ENOSYS || error==-ENODEV){
+        /* sec-sysvc2: without the log service (an older kernel, ENOSYS; no
+         * managed system volume, ENODEV) a profile session still keeps its
+         * reports in its own log folder, the one the service uses
+         * (<profile>/Local Settings/Application Data/CiukiOS/Logs, CRASHn.TXT
+         * native, WCRASHn.TXT Win32); only the profile-less bootstrap desktop
+         * writes G13's machine folders (sec-user-05). */
+        char own[200];const char *directory=profile_data(own,sizeof(own),PROFILE_LOGS,0);
+        int native=f->kind==W32_REPORT_NATIVE_FAULT;
+        if(directory)error=desk_w32_crash_store_as?desk_w32_crash_store_as(directory,native?"CRASH":"WCRASH",p):-ENOSYS;
+        else if(profile_root_path())error=-EACCES;
+        else error=desk_w32_crash_store?desk_w32_crash_store(native?"/system/logs":"/WINDOWS/CRASH",p):-ENOSYS;
+    }
     pthread_mutex_unlock(&crash_disk_lock);
     if(error)fprintf(stderr,"[win32] warning check=crash-file-write error=%d\n",error);
     free(p);return NULL;
@@ -100,6 +121,14 @@ uint32_t desk_w32_exchange(const void *input,uint32_t n,void *output,uint32_t ca
 {
     if(!input || !output || !used || n>W32R_MAX || n<sizeof(struct w32r_request)+2)return 87;
     *used=0;pthread_mutex_lock(&rpc_lock);
+#if defined(__CIUKIOS__) && !defined(__linux__)
+    const struct w32r_request *request=input;
+    if(request->op<=W32R_FLUSH||request->op==W32R_COMPAT){
+        size_t count=0;int e=reg_remote_win32(&registry_broker,input,n,output,cap,&count);
+        uint32_t result=e?(errno==EACCES||errno==EPERM?5:errno==ENOMEM?8:errno==EINVAL?87:1062):0;
+        if(!e)*used=(uint32_t)count;pthread_mutex_unlock(&rpc_lock);return result;
+    }
+#endif
     struct w32r_service a;uint32_t error=service(2,2,&a);
     if(!error && !a.result)error=1062;
     uint32_t id=++serial;if(!id)id=++serial;
@@ -211,7 +240,8 @@ static int launch_execute(enum desk_w32_kind kind,const struct desk_launch_recor
     maps[count++]=(struct ciuki_spawn_fd){report[1],4};
     char type[8],show[2]={(char)('0'+r->show),0};snprintf(type,sizeof(type),"%u",(unsigned)kind);
     char *argv[]={"/System/Win32/shell-launch",type,(char *)r->target,(char *)r->arguments,(char *)r->directory,show,wait ? "--wait" : NULL,NULL};
-    char *env[]={"LC_ALL=C","PATH=/Programs","HOME=/Documents",NULL};
+    struct profile_env profile;char *env[9]={"LC_ALL=C","PATH=/Programs"}; /* sec-user-05 */
+    env[profile_env_add(&profile,env,2)]=NULL;
     helper=ciuki_spawn(argv[0],argv,env,maps,count,0);
     if(helper<0){result=-errno;goto done;}
     uint64_t deadline=clock_ns()+(wait ? UINT64_C(300000000000) : UINT64_C(1500000000));
@@ -302,10 +332,14 @@ int desk_w32_native_shortcut(struct desktop *d,const struct desk_launch_record *
  * (a thread in a kernel wait) is abandoned and the shutdown proceeds (call
  * 73 then reports its holders as EBUSY and the user may Force). */
 #define DESK_W32_SHUTDOWN_MS 10000u
+/* sec-user-03: in a LOGON session the window server is the session's
+ * W32SRV launched by LOGON; the desktop neither spawns nor restarts it. */
+static int role_server;
 static int shutdown_pending,shutdown_done,shutdown_error,shutdown_killed;
 static uint64_t shutdown_sent_ms;
 int desk_w32_shutdown(void)
 {
+    if(role_server)return 1;   /* sec-user-03: the session's W32SRV flushes when the session ends */
     uint64_t now=clock_ns()/1000000;
     if(!shutdown_pending){
         supervisor.stopping=1;shutdown_pending=1;shutdown_done=0;shutdown_error=0;shutdown_killed=0;shutdown_sent_ms=now;
@@ -412,7 +446,8 @@ static void *restart_launch_worker(void *unused)
     else{
         struct ciuki_spawn_fd map={report[1],4};
         char *argv[]={"/System/Win32/runonce.exe",restart_command,NULL};
-        char *env[]={"LC_ALL=C","PATH=/Programs","HOME=/Documents",NULL};
+        struct profile_env profile;char *env[9]={"LC_ALL=C","PATH=/Programs"}; /* sec-user-05 */
+        env[profile_env_add(&profile,env,2)]=NULL;
         int helper=ciuki_spawn(argv[0],argv,env,&map,1,0);
         if(helper<0)result=-errno;
         else{
@@ -600,7 +635,9 @@ void desk_w32_start(struct desktop *d)
 {
     owner=d;struct w32r_service a;uint32_t e=service(1,1,&a);
     if(e || !a.result){fprintf(stderr,"[win32] desktop endpoint unavailable error=%u\n",e);return;}
-    authorized=1;d->launch_presented=launch_feedback_poll;d->w32_session=w32_session;d->w32_power=w32_power;d->power_w32_pids=w32_power_pids;desk_w32_supervise(&supervisor,&supervision,clock_ns());
+    role_server=d->logon_session;
+    authorized=1;d->launch_presented=launch_feedback_poll;d->w32_session=w32_session;d->w32_power=w32_power;d->power_w32_pids=w32_power_pids;
+    if(!role_server)desk_w32_supervise(&supervisor,&supervision,clock_ns());
 }
 void desk_w32_poll(struct desktop *d)
 {
@@ -620,7 +657,7 @@ void desk_w32_poll(struct desktop *d)
         shutdown_pending=shutdown_done=shutdown_error=0;
         supervisor.stopping=0;
     }
-    desk_w32_supervise(&supervisor,&supervision,now);
+    if(!role_server)desk_w32_supervise(&supervisor,&supervision,now);
     struct w32r_service a;
     for(unsigned k=0;k<DESK_CLIENTS;k++){
         if(service(3,1,&a) || !a.result)break;

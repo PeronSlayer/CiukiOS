@@ -13,7 +13,8 @@ tests explicitly select test mode. No fake endpoint is installed at runtime.
 ## Image binding (sec-int-01)
 
 `build_accounts.py` links the core with `kernel_adapter.c`, `server.c`,
-`kernel_sys_ciuki.c`, `owner_interim.c`, `storage_posix.c`, `main.c` and the
+`kernel_sys_ciuki.c`, `owner_kernel.c` and `tree_posix.c` (sec-own; the image
+no longer links `owner_interim.c`), `storage_posix.c`, `main.c` and the
 private `sdk/private/accounts_link.c` into `/System/Services/accounts`, the
 kernel's fixed ACCOUNT role image. PID 1 starts it from the sealed manifest and
 respawns it with a fresh role generation; `main.c` never exits on its own.
@@ -44,13 +45,47 @@ G32 desktop logon and the interim uid-1000 desktop are unchanged.
   retries a refused open every 30 s and closes/reopens after a storage fault.
   CANCEL is a client operation; the server drops partial exchanges with
   `acct_transport_drop` instead.
-- `owner_interim.c` stands in for sec-k02 (decision u01-D2): every owner-store
-  operation, `root_occupied` included, returns ENOSYS, so a provisioned store
-  never opens and no owner transaction is published.
+- `owner_kernel.c` (sec-own) is the production OWNER adapter: the role-bound
+  OWNER link (call 101 SERVICE_CONNECT, service 3) to the kernel supervisor
+  (PID 1, OWNER role) carries the contract 3.5 batch operations 1..7 and the
+  query operations 8..14 (`src/kernel/fs/owner_system.h`: IDENTITY, GENERATION,
+  BINDING, ROOT_OCCUPIED, SNAPSHOT, RECOVER_ORPHANS, CHECKPOINT_FLOOR). `main.c`
+  takes the system volume identity (partition LBA << 32 | FAT serial, the value
+  the builder and Setup stage) from IDENTITY. Staging builds each binding's
+  tree below `/System/Security/Staging/g<G>/p<uid>` (a fresh profile gets the
+  shell-folder skeleton and `Settings`; a retained G32 root is copied from its
+  proven old root; KEEP/RETIRE bindings an empty tree), hashes it with the same
+  canonical stream as the kernel's `owner_vfs_tree_digest`, and prunes earlier
+  generations that hold only empty directories. SNAPSHOT images come back
+  through the SYSTEM-only `/System/Security/Owner/snapshot` file, checked against
+  the reply's size and digest. `tree_posix.c` binds the native file access.
+  After every open with a published database, `server.c` moves old machine DOS
+  title data (`/System/DOS/SAVES`) into the first administrator's
+  `<profile>/Settings/DOS` (sec-k05 layout); an entry already present at the
+  destination, or still open, stays where it is.
+- `owner_interim.c` stood in for sec-k02 (decision u01-D2): every owner-store
+  operation returns ENOSYS. The image no longer uses it; the host adapter test
+  keeps exercising it as the fail-closed table of a kernel without OWNER.
 - `storage_posix.c` stores the protected files below `/System/Security`;
   absolute names must lie below it (the OWNER staging tree) and get their
   missing directories created; barriers commit the base and every changed
   directory; rename never replaces.
+
+- `firstboot.c` (sec-user-02) runs around every open in `server.c`.
+  `acct_firstboot_prepare`, under the lease and before open, protects a G32
+  upgrade: when `/System/Settings/users.dat` exists and no v2 evidence does, it
+  copies users.dat/users.new/users.lock to SYSTEM-only `migration.*` evidence,
+  writes `migration.marker`, stages an origin-3 UNPROVISIONED `bootstrap.state`
+  bound to the evidence digest and removes the shared originals; every step is
+  restartable from the marker, and a G32 file beside v2 evidence fails closed.
+  `acct_firstboot_promote`, after an open that found no published database,
+  promotes an origin 1/2 `provision.seed` (staged by the image builder or
+  Setup) through `acct_service_bootstrap` and then removes the residual seed,
+  or hands the origin-3 evidence to `acct_enrollment_source`. It never creates
+  a seed, password or account. `firstboot_posix.c` binds the G32 directory.
+  A first boot cut after the allocation watermark and before the account
+  intent resumes with the same SID intent at the next generation (`store.c`,
+  marked sec-user-02); any other prior reservation stays closed.
 
 `tests/host/security/test_account_adapter.py` runs this binding against the
 kernel host harness (call 101 through `proc_syscall`, kernel channels/sessions,

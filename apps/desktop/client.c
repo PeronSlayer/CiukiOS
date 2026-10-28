@@ -147,6 +147,7 @@ void desk_drop_client(struct desktop *d, int i)
     if (c->v3_peer && c->window_id) for (int j=0;j<DESK_CLIENTS;j++)
         if (d->clients[j].v3_peer==c->v3_peer && d->clients[j].owner_id==c->window_id) desk_drop_client(d,j);
     if (desk_clip_drop) desk_clip_drop(d,i);
+    desk_window_record(d,i,"closed");
     uint32_t pid=c->pid, owner=c->owner_id, id=c->window_id;
     if (id) desk_shell_program_remove(d,id);
     char application[sizeof(c->application)]; memcpy(application,c->application,sizeof(application));
@@ -1133,6 +1134,7 @@ void desk_receive(struct desktop *d, int i, const struct ciuki_message *m)
         int32_t result = (c->program != DESK_APP_CONTROL && !taskman_power) || !d->shell ? -EPERM : desk_session_busy(d) ? -EBUSY : 0;
         if (!result && p.request == DESK_SETTINGS_OPEN_POWER && desk_internal_open(d,DESK_INTERNAL_SHUTDOWN)<0) result=-ENOMEM;
         if (!result && p.request==DESK_SETTINGS_SAVER_PREVIEW) result=desk_saver_start(d,p.values[0]);
+        if (!result && p.request==DESK_SETTINGS_PASSWORD_SET) result=desk_session_password_set(d);   /* sec-user-04 */
         if (!result && p.request == DESK_SETTINGS_RELOAD) { d->sh.want_reload |= 1; d->sh.user_reload=1; }
         if (!result && p.request == DESK_SETTINGS_PROGRAMS) {d->sh.want_reload |= 3;d->sh.want_programs=1;d->v3_links_next=0;d->v3_links_force|=DESK_LINKS_SCAN|DESK_LINKS_GAMES;}
         if (!result && (p.request == DESK_SETTINGS_DISPLAY || p.request == DESK_SETTINGS_DISPLAY_PREVIEW)) {
@@ -1234,6 +1236,16 @@ void desk_saver_config(struct desktop *d)
     if (!d->screen_control(&q)) d->saver_poll=0;
     d->saver_idle=d->now_ns; d->monitor_failed=0;
 }
+/* sec-user-06: the saver's start and dismissal, also in quiet boots. The
+ * security suites check that a dismissed password-protected saver locks
+ * through LOGON (contract 4.3) before the desktop is shown again. */
+static void saver_record(const struct desktop *d, const char *source, int lock)
+{
+    char line[120];
+    int n=source ? snprintf(line,sizeof(line),"[desktop] saver start kind=%u source=%s",(unsigned)d->saver_kind,source) :
+                   snprintf(line,sizeof(line),"[desktop] saver wake protect=1 lock=%d",lock);
+    if (n>0 && (size_t)n<sizeof(line)) desk_diag_record(line,n);
+}
 int desk_saver_start(struct desktop *d, unsigned kind)
 {
     if (kind>2) return -EINVAL;
@@ -1267,7 +1279,27 @@ static int saver_wake(struct desktop *d)
 {
     /* Gate first: even a DPMS wake must never scan out the old desktop.
      * Suppression can also terminate a protected saver without input. */
-    if ((d->saver_active && !d->saver_preview) || (d->monitor_off && !d->saver_preview))
+    int protect=(d->saver_active && !d->saver_preview) || (d->monitor_off && !d->saver_preview);
+    if (d->logon_session) {
+        /* sec-user-04: LOGON's trusted gate before the desktop is restored.
+         * The pre-DPMS black frame conceals scanout, so the monitor wakes
+         * first (a concealed session may not change DPMS); a failed lock
+         * keeps the saver (fail closed). */
+        if (protect) {
+            if (d->monitor_off) {
+                int e=d->monitor_power ? d->monitor_power(-1) : -ENOSYS;
+                if (e) return e;
+                d->monitor_off=0; saver_damage(d);
+            }
+            int e=desk_session_saver_lock(d);
+            saver_record(d,NULL,e);   /* sec-user-06: 0 locked (or no saver password) */
+            if (e) {
+                /* A DPMS-only wake has no saver to keep: conceal with the blank one. */
+                if (!d->saver_active) { d->saver_active=1; d->saver_kind=0; d->saver_frame=d->now_ns; saver_damage(d); }
+                return e;
+            }
+        }
+    } else if (protect)
         desk_session_lock(d);
     if (d->monitor_off) {
         /* The pre-DPMS black frame conceals scanout until grants resume. */
@@ -1314,7 +1346,9 @@ void desk_saver_tick(struct desktop *d)
             if (q.sequence!=d->saver_sequence) {
                 d->saver_sequence=q.sequence;
                 if (q.flags&CIUKI_SCREEN_PERSIST) d->sh.want_save=1;
-                if (q.command==0xf140 && !desk_saver_start(d,q.argument<0 ? q.saver : (unsigned)q.argument)) d->saver_preview=0;
+                if (q.command==0xf140 && !desk_saver_start(d,q.argument<0 ? q.saver : (unsigned)q.argument)) {
+                    d->saver_preview=0; saver_record(d,"command",0);   /* sec-user-06: SC_SCREENSAVE */
+                }
                 if (q.command==0xf170 && !saver_suppressed(d)) {
                     if (q.argument==-1) (void)saver_wake(d);
                     else if (d->monitor_power) {
@@ -1332,7 +1366,7 @@ void desk_saver_tick(struct desktop *d)
     uint64_t idle=d->now_ns>=d->saver_idle ? d->now_ns-d->saver_idle : 0;
     if (!d->saver_active && d->sh.cfg.saver_enabled && d->sh.cfg.saver_seconds>0 &&
         idle>=(uint64_t)d->sh.cfg.saver_seconds*1000000000ull)
-        if (!desk_saver_start(d,(unsigned)d->sh.cfg.saver_kind)) d->saver_preview=0;
+        if (!desk_saver_start(d,(unsigned)d->sh.cfg.saver_kind)) { d->saver_preview=0; saver_record(d,"idle",0); }
     if (!d->monitor_off && !d->monitor_failed && d->sh.cfg.monitor_seconds>0 &&
         idle>=(uint64_t)d->sh.cfg.monitor_seconds*1000000000ull) {
         int e=saver_monitor_off(d,2);
@@ -3127,6 +3161,9 @@ void desk_w32_fault_dialog(struct desktop *d,const struct ciuki_w32_fault *f)
     case W32_REFUSE_MISSING_DLL:snprintf(text,sizeof(text),"The dynamic link library %.63s could not be found in the specified path.",f->module);break;
     case W32_REFUSE_EXPORT:snprintf(text,sizeof(text),"The %.63s file is linked to missing export %.63s.",f->exe,f->module);break;
     case W32_REFUSE_SERVER:snprintf(text,sizeof(text),"The Windows program server is not available. Please try again.");break;
+    /* fx-autorun: a 16-bit Windows (NE) program other than an InstallShield 5
+     * setup stub; Windows 98 runs these in its Win16 subsystem. */
+    case W32_REFUSE_WIN16:snprintf(text,sizeof(text),"%.63s is a 16-bit Windows program. It needs 16-bit Windows support, which this version of CiukiOS does not include.",f->exe);break;
     default:snprintf(text,sizeof(text),"%.63s is not a valid Win32 application.",f->exe);break;
     }
     desk_shell_message(d,"Error Starting Program",text,1);
@@ -3372,7 +3409,7 @@ int desk_v3_receive(struct desktop *d, int peer, const struct ciuki_message *m)
                     if (owner>=0 && (d->clients[owner].v3_style&DESK_V3_TOPMOST)) p.style|=DESK_V3_TOPMOST;
                     memcpy(c->title,p.title,sizeof(c->title)); anchor->v3_last[id-1]=generation;
                     if (anchor->awaiting_frame && !anchor->window_ns) anchor->window_ns=client_clock(d);
-                    v3_place(d,i,&p); v3_reply(d,peer,&p,0); desk_focus(d,i);
+                    v3_place(d,i,&p); v3_reply(d,peer,&p,0); desk_window_record(d,i,desk_window_state(d,i)); desk_focus(d,i);
                     /* fx-2: its task button, as for a native window. */
                     if (d->shell) desk_damage_add(&d->damage,desk_taskbar(d),d->width,d->height);
                     return 0;
@@ -3483,8 +3520,21 @@ int desk_v3_receive(struct desktop *d, int peer, const struct ciuki_message *m)
         if ((p.style&DESK_V3_MODAL) && !c->owner_id) { error=-EINVAL; break; }
         if (c->owner_id) for (int k=0;k<DESK_CLIENTS;k++) if (d->clients[k].window_id==c->owner_id &&
             (d->clients[k].v3_style&DESK_V3_TOPMOST)) p.style|=DESK_V3_TOPMOST;
-        v3_place(d,i,&p); if (c->minimized && d->focus==i) desk_focus(d,desk_next_window(d,i,0,NULL));
+    {
+        int was=c->minimized;
+        v3_place(d,i,&p);
+        if (was!=c->minimized) desk_window_record(d,i,desk_window_state(d,i));
+        if (c->minimized && d->focus==i) desk_focus(d,desk_next_window(d,i,0,NULL));
+        /* fx-acc1: a modal prompt that becomes visible while its owner chain
+         * holds the focus takes it, as Windows activates a dialog box over
+         * its disabled owner. A page created hidden (every DialogBox page)
+         * gave the focus back to its owner at the hiding PLACE; shown later
+         * without an activation request, it stayed inactive with its owner
+         * active under it (acceptance run c634b7c6, Quake III's Welcome page). */
+        else if (was && !c->minimized && (c->v3_style&DESK_V3_MODAL) && d->focus>=0 && d->focus!=i &&
+                 desk_modal_target(d,d->focus)==i) desk_focus(d,d->focus);
         break;
+    }
     case DESK_V3_RESIZE: {
         struct desk_box b=desk_content(c);
         if (p.serial!=c->resize_serial || p.serial<=c->applied_serial || p.width!=(unsigned)b.w/c->v3_scale || p.height!=(unsigned)b.h/c->v3_scale) error=-ENOENT;
@@ -3508,7 +3558,7 @@ int desk_v3_receive(struct desktop *d, int peer, const struct ciuki_message *m)
         else if (d->focus==i) desk_focus(d,desk_next_window(d,i,0,NULL));
         break;
     case DESK_SET_TITLE:
-        if(strcmp(c->title,p.title)) { memcpy(c->title,p.title,sizeof(c->title));desk_caption_damage(d,i); }
+        if(strcmp(c->title,p.title)) { memcpy(c->title,p.title,sizeof(c->title));desk_caption_damage(d,i);desk_window_record(d,i,desk_window_state(d,i)); }
         break;
     case DESK_SET_CURSOR:
         if (p.index && !(c->v3_cursor_valid&(1u<<(p.index-1)))) error=-ENOENT;

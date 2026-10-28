@@ -64,6 +64,41 @@ static void driver_text(char *out, unsigned size, const char *in)
 static uint64_t native_count[CIUKI_ENGINE_OPERATIONS], software_count[CIUKI_ENGINE_OPERATIONS];
 static uint64_t command_native_count[14], command_software_count[14];
 
+/* ---- sec-sysvc2: the declared attempt files are boot inputs the policy
+ * seals (fs/security_policy.c boot_input): true when leaf, a name in
+ * C:\SYSTEM\SETTINGS, is one of them for any registered driver ("%04x"
+ * matches four hex digits; letter case ignored, as FAT does). */
+static bool attempt_char(char a, char b)
+{
+    if (a >= 'A' && a <= 'Z') a = (char)(a + 32);
+    if (b >= 'A' && b <= 'Z') b = (char)(b + 32);
+    return a == b;
+}
+static bool attempt_match(const char *pattern, const char *leaf)
+{
+    while (*pattern) {
+        if (!strncmp(pattern, "%04x", 4)) {
+            for (unsigned i = 0; i < 4; i++, leaf++)
+                if (!((*leaf >= '0' && *leaf <= '9') || (*leaf >= 'a' && *leaf <= 'f') || (*leaf >= 'A' && *leaf <= 'F'))) return false;
+            pattern += 4;
+            continue;
+        }
+        if (!*leaf || !attempt_char(*pattern, *leaf)) return false;
+        pattern++; leaf++;
+    }
+    return !*leaf;
+}
+bool display_attempt_file(const char *leaf)
+{
+    static const char prefix[] = "C:/system/settings/";
+    for (unsigned d = 0; leaf && d < sizeof(drivers) / sizeof(*drivers); d++)
+        for (unsigned i = 0; i < DISPLAY_ATTEMPT_FILES; i++) {
+            const char *f = drivers[d]->attempt_files[i];
+            if (f && !strncmp(f, prefix, sizeof(prefix) - 1) && attempt_match(f + sizeof(prefix) - 1, leaf)) return true;
+        }
+    return false;
+}
+/* ---- end sec-sysvc2 ---- */
 bool display_accel_disabled(const char **reason)
 {
     if (system_performance && !system_performance()->graphics) { if (reason) *reason = "performance_setting"; return true; }

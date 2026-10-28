@@ -60,8 +60,25 @@ static void *interrupt_sleep(void *arg) {
     return (void *)(uintptr_t)pthread_kill((pthread_t)(uintptr_t)arg,SIGUSR1);
 }
 static void *thread_errno(void *arg) { (void)arg;errno=ERANGE;CHECK(errno==ERANGE);return (void *)(uintptr_t)errno; }
+#ifdef CIUKI_LIBC_HOST_STDIO
+unsigned ciuki_host_writes(int fd);
+#endif
 int main(void) {
     CHECK(callback_order==1);callback_order=2;CHECK(!atexit(smoke_atexit));
+    /* fx-autorun: the C runtime line-buffers stderr, and stdout when it is a
+     * character device (the console), before main; errno stays zero. */
+    CHECK(errno==0);CHECK((stderr->_flags&__SLBF)&&!(stderr->_flags&__SNBF));
+    { struct stat console;if(!fstat(1,&console)&&S_ISCHR(console.st_mode))CHECK(stdout->_flags&__SLBF);errno=0; }
+#ifdef CIUKI_LIBC_HOST_STDIO
+    { /* One record, one write: a multi-conversion fprintf and a line built
+       * from two fputs calls each reach fd 2 once, at the newline. */
+        unsigned before=ciuki_host_writes(2);
+        CHECK(fprintf(stderr,"CiukiOS stderr record a=%d b=%s c=%u\n",1,"two",3u)>0);CHECK(ciuki_host_writes(2)==before+1);
+        before=ciuki_host_writes(2);CHECK(fputs("CiukiOS stderr ",stderr)>=0);CHECK(ciuki_host_writes(2)==before);
+        CHECK(fputs("pieces\n",stderr)>=0);CHECK(ciuki_host_writes(2)==before+1);
+        before=ciuki_host_writes(1);CHECK(printf("CiukiOS stdout record %d %s\n",4,"five")>0);CHECK(ciuki_host_writes(1)==before+1);
+    }
+#endif
     char text[128];CHECK(snprintf(text,sizeof(text),"%lld %.2f",(long long)0x100000001,1.25)>0);CHECK(!strcmp(text,"4294967297 1.25"));
     CHECK(printf("CiukiOS libc smoke: %s\n",text)>0);CHECK(fprintf(stderr,"CiukiOS stderr smoke\n")>0);CHECK(!fflush(NULL));
     void *p=malloc(37);CHECK(p&&((uintptr_t)p%8)==0);if(p) { memset(p,0x5a,37);p=realloc(p,4096);CHECK(p&&((unsigned char *)p)[0]==0x5a);free(p); }

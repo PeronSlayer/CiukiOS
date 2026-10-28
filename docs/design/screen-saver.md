@@ -2,6 +2,12 @@
 
 Expected behaviour and implementation contract, researched before implementation.
 
+> **Superseded in part by user security** (sec-user-06 reconciliation, 2026-10-28). A password-protected saver locks through
+> LOGON's trusted gate when it is dismissed, never through a desktop overlay; a password-less account
+> keeps only the concealment ([lock, saver and resume](user-security-contract.md#43-lock-saver-and-resume), sec-user-04).
+> Runtime: acc-accounts item 16 and su-09-lock (`[desktop] saver start/wake`, `[logon] session S locked
+> by the screen saver`, `[security] console enter ... reason=saver`).
+
 Windows 98 Resource Kit, chapter 30 (`wrkc30_4.htm`, local read-only reference),
 identifies keyboard, mouse and joystick activity as use, and describes the Power
 Management page's inactivity interval for turning off the monitor. Appendix D

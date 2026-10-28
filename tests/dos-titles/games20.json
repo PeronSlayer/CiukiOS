@@ -1,0 +1,929 @@
+{
+  "schema_version": 1,
+  "titles": [
+    {
+      "id": "doom",
+      "name": "DOOM",
+      "target": "DOOM",
+      "executable": "DOOM.EXE",
+      "genre": "fps",
+      "coverage_targets": {
+        "video": [
+          "mode13h"
+        ],
+        "extender": "dos4gw",
+        "music": [
+          "opl",
+          "general-midi"
+        ],
+        "mouse": true,
+        "joystick": true
+      },
+      "audio": "both",
+      "enter": [
+        "esc",
+        "ret",
+        "ret",
+        "ret"
+      ],
+      "play": [
+        "up",
+        "ctrl"
+      ],
+      "quit": [
+        "f10",
+        "y"
+      ],
+      "lan": {
+        "host_args": null,
+        "join_args": null,
+        "host_input": null,
+        "join_input": null,
+        "host_executable": null,
+        "join_executable": null
+      },
+      "calibration": null,
+      "installed": {
+        "directory": "build/downloads/dos-titles/doom-installed",
+        "files": []
+      },
+      "terms_reviewed": true,
+      "music": "opl"
+    },
+    {
+      "id": "quake",
+      "name": "Quake",
+      "target": "QUAKE",
+      "executable": "QUAKE.EXE",
+      "genre": "fps",
+      "coverage_targets": {
+        "video": [
+          "mode13h",
+          "vesa"
+        ],
+        "extender": "native",
+        "music": [
+          "digital"
+        ],
+        "mouse": true,
+        "joystick": true
+      },
+      "audio": "digital",
+      "enter": [
+        "esc",
+        "ret",
+        "ret",
+        "ret"
+      ],
+      "play": [
+        "up",
+        "ctrl"
+      ],
+      "quit": [
+        "grave_accent",
+        "q",
+        "u",
+        "i",
+        "t",
+        "ret"
+      ],
+      "lan": {
+        "host_args": null,
+        "join_args": null,
+        "host_input": null,
+        "join_input": null,
+        "host_executable": null,
+        "join_executable": null
+      },
+      "calibration": null,
+      "installed": {
+        "directory": "build/downloads/dos-titles/quake-installed",
+        "files": []
+      },
+      "terms_reviewed": true,
+      "music": "digital"
+    },
+    {
+      "id": "wolf3d",
+      "name": "Wolfenstein 3D",
+      "target": "WOLF3D",
+      "executable": "WOLF3D.EXE",
+      "genre": "fps",
+      "coverage_targets": {
+        "video": [
+          "mode13h"
+        ],
+        "extender": "none",
+        "music": [
+          "opl"
+        ],
+        "mouse": true,
+        "joystick": true
+      },
+      "audio": "both",
+      "enter": [
+        "esc",
+        "ret",
+        "ret",
+        "ret"
+      ],
+      "play": [
+        "up",
+        "ctrl"
+      ],
+      "quit": [
+        "f10",
+        "y"
+      ],
+      "lan": null,
+      "calibration": null,
+      "installed": {
+        "directory": "build/downloads/dos-titles/wolf3d-installed",
+        "files": []
+      },
+      "terms_reviewed": true,
+      "music": "opl"
+    },
+    {
+      "id": "rott",
+      "name": "Rise of the Triad",
+      "target": "ROTT",
+      "executable": "ROTT.EXE",
+      "genre": "fps",
+      "coverage_targets": {
+        "video": [
+          "modex"
+        ],
+        "extender": "dos4gw",
+        "music": [
+          "opl"
+        ],
+        "mouse": true,
+        "joystick": true
+      },
+      "audio": "both",
+      "enter": [
+        "esc",
+        "ret",
+        "ret",
+        "ret"
+      ],
+      "play": [
+        "up",
+        "ctrl"
+      ],
+      "quit": [
+        "esc",
+        "up",
+        "ret",
+        "y"
+      ],
+      "lan": {
+        "host_args": null,
+        "join_args": null,
+        "host_input": null,
+        "join_input": null,
+        "host_executable": null,
+        "join_executable": null
+      },
+      "calibration": null,
+      "installed": {
+        "directory": "build/downloads/dos-titles/rott-installed",
+        "files": []
+      },
+      "terms_reviewed": true,
+      "music": "opl"
+    },
+    {
+      "id": "keen4",
+      "name": "Commander Keen 4",
+      "target": "KEEN4",
+      "executable": "KEEN4E.EXE",
+      "genre": "platform",
+      "coverage_targets": {
+        "video": [
+          "ega"
+        ],
+        "extender": "none",
+        "music": [
+          "opl"
+        ],
+        "mouse": false,
+        "joystick": true
+      },
+      "audio": "both",
+      "enter": [
+        "ret",
+        "ret",
+        "ret"
+      ],
+      "play": [
+        "up",
+        "ctrl"
+      ],
+      "quit": [
+        "esc",
+        "q",
+        "y"
+      ],
+      "lan": null,
+      "calibration": null,
+      "installed": {
+        "directory": "build/downloads/dos-titles/keen4-installed",
+        "files": []
+      },
+      "terms_reviewed": true,
+      "music": "opl"
+    },
+    {
+      "id": "duke3d",
+      "name": "Duke Nukem 3D",
+      "target": "DUKE3D",
+      "executable": "DUKE3D.EXE",
+      "genre": "fps",
+      "coverage_targets": {
+        "video": [
+          "mode13h",
+          "vesa"
+        ],
+        "extender": "dos4gw",
+        "music": [
+          "opl",
+          "general-midi"
+        ],
+        "mouse": true,
+        "joystick": true
+      },
+      "audio": "both",
+      "enter": [
+        "esc",
+        "ret",
+        "ret",
+        "ret"
+      ],
+      "play": [
+        "up",
+        "ctrl"
+      ],
+      "quit": [
+        "esc",
+        "up",
+        "ret",
+        "y"
+      ],
+      "lan": {
+        "host_args": null,
+        "join_args": null,
+        "host_input": null,
+        "join_input": null,
+        "host_executable": null,
+        "join_executable": null
+      },
+      "calibration": null,
+      "installed": {
+        "directory": "build/downloads/dos-titles/duke3d-installed",
+        "files": []
+      },
+      "terms_reviewed": true,
+      "music": "opl"
+    },
+    {
+      "id": "heretic",
+      "name": "Heretic",
+      "target": "HERETIC",
+      "executable": "HERETIC.EXE",
+      "genre": "fps",
+      "coverage_targets": {
+        "video": [
+          "mode13h"
+        ],
+        "extender": "dos4gw",
+        "music": [
+          "opl",
+          "general-midi"
+        ],
+        "mouse": true,
+        "joystick": true
+      },
+      "audio": "both",
+      "enter": [
+        "esc",
+        "ret",
+        "ret",
+        "ret"
+      ],
+      "play": [
+        "up",
+        "ctrl"
+      ],
+      "quit": [
+        "f10",
+        "y"
+      ],
+      "lan": {
+        "host_args": null,
+        "join_args": null,
+        "host_input": null,
+        "join_input": null,
+        "host_executable": null,
+        "join_executable": null
+      },
+      "calibration": null,
+      "installed": {
+        "directory": "build/downloads/dos-titles/heretic-installed",
+        "files": []
+      },
+      "terms_reviewed": false,
+      "music": "opl"
+    },
+    {
+      "id": "hexen",
+      "name": "Hexen demo",
+      "target": "HEXEN",
+      "executable": "HEXEN.EXE",
+      "genre": "fps",
+      "coverage_targets": {
+        "video": [
+          "mode13h"
+        ],
+        "extender": "dos4gw",
+        "music": [
+          "opl",
+          "general-midi"
+        ],
+        "mouse": true,
+        "joystick": true
+      },
+      "audio": "both",
+      "enter": [
+        "esc",
+        "ret",
+        "ret",
+        "ret"
+      ],
+      "play": [
+        "up",
+        "ctrl"
+      ],
+      "quit": [
+        "f10",
+        "y"
+      ],
+      "lan": {
+        "host_args": null,
+        "join_args": null,
+        "host_input": null,
+        "join_input": null,
+        "host_executable": null,
+        "join_executable": null
+      },
+      "calibration": null,
+      "installed": {
+        "directory": "build/downloads/dos-titles/hexen-installed",
+        "files": []
+      },
+      "terms_reviewed": false,
+      "music": "opl"
+    },
+    {
+      "id": "descent",
+      "name": "Descent",
+      "target": "DESCENT",
+      "executable": "DESCENT.EXE",
+      "genre": "six-axis shooter",
+      "coverage_targets": {
+        "video": [
+          "mode13h"
+        ],
+        "extender": "dos4gw",
+        "music": [
+          "opl",
+          "general-midi"
+        ],
+        "mouse": true,
+        "joystick": true
+      },
+      "audio": "both",
+      "enter": [
+        "ret",
+        "ret",
+        "ret",
+        "ret"
+      ],
+      "play": [
+        "up",
+        "ctrl"
+      ],
+      "quit": [
+        "esc",
+        "esc",
+        "up",
+        "ret",
+        "ret"
+      ],
+      "lan": {
+        "host_args": null,
+        "join_args": null,
+        "host_input": null,
+        "join_input": null,
+        "host_executable": null,
+        "join_executable": null
+      },
+      "calibration": null,
+      "installed": {
+        "directory": "build/downloads/dos-titles/descent-installed",
+        "files": []
+      },
+      "terms_reviewed": false,
+      "music": "opl"
+    },
+    {
+      "id": "descent2",
+      "name": "Descent II demo",
+      "target": "DESCENT2",
+      "executable": "D2DEMO.EXE",
+      "genre": "six-axis shooter",
+      "coverage_targets": {
+        "video": [
+          "mode13h",
+          "vesa"
+        ],
+        "extender": "dos4gw",
+        "music": [
+          "opl",
+          "general-midi"
+        ],
+        "mouse": true,
+        "joystick": true
+      },
+      "audio": "both",
+      "enter": [
+        "ret",
+        "ret",
+        "ret",
+        "ret"
+      ],
+      "play": [
+        "up",
+        "ctrl"
+      ],
+      "quit": [
+        "esc",
+        "esc",
+        "up",
+        "ret",
+        "ret"
+      ],
+      "lan": {
+        "host_args": null,
+        "join_args": null,
+        "host_input": null,
+        "join_input": null,
+        "host_executable": null,
+        "join_executable": null
+      },
+      "calibration": null,
+      "installed": {
+        "directory": "build/downloads/dos-titles/descent2-installed",
+        "files": []
+      },
+      "terms_reviewed": false,
+      "music": "general-midi"
+    },
+    {
+      "id": "shadowwarrior",
+      "name": "Shadow Warrior",
+      "target": "SW",
+      "executable": "SW.EXE",
+      "genre": "fps",
+      "coverage_targets": {
+        "video": [
+          "mode13h",
+          "vesa"
+        ],
+        "extender": "dos4gw",
+        "music": [
+          "opl",
+          "general-midi"
+        ],
+        "mouse": true,
+        "joystick": true
+      },
+      "audio": "both",
+      "enter": [
+        "esc",
+        "ret",
+        "ret",
+        "ret"
+      ],
+      "play": [
+        "up",
+        "ctrl"
+      ],
+      "quit": [
+        "esc",
+        "up",
+        "ret",
+        "y"
+      ],
+      "lan": {
+        "host_args": null,
+        "join_args": null,
+        "host_input": null,
+        "join_input": null,
+        "host_executable": null,
+        "join_executable": null
+      },
+      "calibration": null,
+      "installed": {
+        "directory": "build/downloads/dos-titles/shadowwarrior-installed",
+        "files": []
+      },
+      "terms_reviewed": false,
+      "music": "opl"
+    },
+    {
+      "id": "wacky",
+      "name": "Wacky Wheels",
+      "target": "WACKY",
+      "executable": "WW.EXE",
+      "genre": "racing",
+      "coverage_targets": {
+        "video": [
+          "mode13h"
+        ],
+        "extender": "none",
+        "music": [
+          "opl"
+        ],
+        "mouse": false,
+        "joystick": true
+      },
+      "audio": "both",
+      "enter": [
+        "esc",
+        "ret",
+        "ret",
+        "ret"
+      ],
+      "play": [
+        "up",
+        "ctrl"
+      ],
+      "quit": [
+        "esc",
+        "up",
+        "ret",
+        "y"
+      ],
+      "lan": null,
+      "calibration": null,
+      "installed": {
+        "directory": "build/downloads/dos-titles/wacky-installed",
+        "files": []
+      },
+      "terms_reviewed": false,
+      "music": "opl"
+    },
+    {
+      "id": "cosmo",
+      "name": "Cosmo",
+      "target": "COSMO",
+      "executable": "COSMO1.EXE",
+      "genre": "platform",
+      "coverage_targets": {
+        "video": [
+          "ega"
+        ],
+        "extender": "none",
+        "music": [
+          "opl"
+        ],
+        "mouse": false,
+        "joystick": true
+      },
+      "audio": "opl",
+      "enter": [
+        "ret",
+        "ret",
+        "ret"
+      ],
+      "play": [
+        "up",
+        "ctrl"
+      ],
+      "quit": [
+        "esc",
+        "q",
+        "y"
+      ],
+      "lan": null,
+      "calibration": null,
+      "installed": {
+        "directory": "build/downloads/dos-titles/cosmo-installed",
+        "files": []
+      },
+      "terms_reviewed": false,
+      "music": "opl"
+    },
+    {
+      "id": "duke2",
+      "name": "Duke Nukem II",
+      "target": "DUKE2",
+      "executable": "NUKEM2.EXE",
+      "genre": "platform",
+      "coverage_targets": {
+        "video": [
+          "ega"
+        ],
+        "extender": "none",
+        "music": [
+          "opl"
+        ],
+        "mouse": false,
+        "joystick": true
+      },
+      "audio": "both",
+      "enter": [
+        "ret",
+        "ret",
+        "ret"
+      ],
+      "play": [
+        "up",
+        "ctrl"
+      ],
+      "quit": [
+        "esc",
+        "q",
+        "y"
+      ],
+      "lan": null,
+      "calibration": null,
+      "installed": {
+        "directory": "build/downloads/dos-titles/duke2-installed",
+        "files": []
+      },
+      "terms_reviewed": false,
+      "music": "opl"
+    },
+    {
+      "id": "raptor",
+      "name": "Raptor",
+      "target": "RAPTOR",
+      "executable": "RAP.EXE",
+      "genre": "vertical shooter",
+      "coverage_targets": {
+        "video": [
+          "modex"
+        ],
+        "extender": "dos4gw",
+        "music": [
+          "opl"
+        ],
+        "mouse": true,
+        "joystick": true
+      },
+      "audio": "both",
+      "enter": [
+        "esc",
+        "ret",
+        "ret",
+        "ret"
+      ],
+      "play": [
+        "up",
+        "ctrl"
+      ],
+      "quit": [
+        "esc",
+        "up",
+        "ret",
+        "y"
+      ],
+      "lan": null,
+      "calibration": null,
+      "installed": {
+        "directory": "build/downloads/dos-titles/raptor-installed",
+        "files": []
+      },
+      "terms_reviewed": false,
+      "music": "opl"
+    },
+    {
+      "id": "hocus",
+      "name": "Hocus Pocus",
+      "target": "HOCUS",
+      "executable": "HOCUS.EXE",
+      "genre": "platform",
+      "coverage_targets": {
+        "video": [
+          "mode13h"
+        ],
+        "extender": "none",
+        "music": [
+          "opl"
+        ],
+        "mouse": false,
+        "joystick": true
+      },
+      "audio": "both",
+      "enter": [
+        "ret",
+        "ret",
+        "ret"
+      ],
+      "play": [
+        "up",
+        "ctrl"
+      ],
+      "quit": [
+        "esc",
+        "q",
+        "y"
+      ],
+      "lan": null,
+      "calibration": null,
+      "installed": {
+        "directory": "build/downloads/dos-titles/hocus-installed",
+        "files": []
+      },
+      "terms_reviewed": false,
+      "music": "opl"
+    },
+    {
+      "id": "biomenace",
+      "name": "Bio Menace",
+      "target": "BIOMEN",
+      "executable": "BMENACE1.EXE",
+      "genre": "platform",
+      "coverage_targets": {
+        "video": [
+          "ega"
+        ],
+        "extender": "none",
+        "music": [
+          "opl"
+        ],
+        "mouse": false,
+        "joystick": true
+      },
+      "audio": "opl",
+      "enter": [
+        "ret",
+        "ret",
+        "ret"
+      ],
+      "play": [
+        "up",
+        "ctrl"
+      ],
+      "quit": [
+        "esc",
+        "q",
+        "y"
+      ],
+      "lan": null,
+      "calibration": null,
+      "installed": {
+        "directory": "build/downloads/dos-titles/biomenace-installed",
+        "files": []
+      },
+      "terms_reviewed": false,
+      "music": "opl"
+    },
+    {
+      "id": "blakestone",
+      "name": "Blake Stone",
+      "target": "BLAKE",
+      "executable": "BLAKE.EXE",
+      "genre": "fps",
+      "coverage_targets": {
+        "video": [
+          "mode13h"
+        ],
+        "extender": "none",
+        "music": [
+          "opl"
+        ],
+        "mouse": true,
+        "joystick": true
+      },
+      "audio": "both",
+      "enter": [
+        "esc",
+        "ret",
+        "ret",
+        "ret"
+      ],
+      "play": [
+        "up",
+        "ctrl"
+      ],
+      "quit": [
+        "f10",
+        "y"
+      ],
+      "lan": null,
+      "calibration": null,
+      "installed": {
+        "directory": "build/downloads/dos-titles/blakestone-installed",
+        "files": []
+      },
+      "terms_reviewed": false,
+      "music": "opl"
+    },
+    {
+      "id": "terminal",
+      "name": "Terminal Velocity",
+      "target": "TV",
+      "executable": "TV.EXE",
+      "genre": "flight",
+      "coverage_targets": {
+        "video": [
+          "mode13h",
+          "vesa"
+        ],
+        "extender": "dos4gw",
+        "music": [
+          "opl",
+          "general-midi"
+        ],
+        "mouse": true,
+        "joystick": true
+      },
+      "audio": "both",
+      "enter": [
+        "esc",
+        "ret",
+        "ret",
+        "ret"
+      ],
+      "play": [
+        "up",
+        "ctrl"
+      ],
+      "quit": [
+        "esc",
+        "q",
+        "y"
+      ],
+      "lan": {
+        "host_args": null,
+        "join_args": null,
+        "host_input": null,
+        "join_input": null,
+        "host_executable": null,
+        "join_executable": null
+      },
+      "calibration": null,
+      "installed": {
+        "directory": "build/downloads/dos-titles/terminal-installed",
+        "files": []
+      },
+      "terms_reviewed": false,
+      "music": "opl"
+    },
+    {
+      "id": "jazz",
+      "name": "Jazz Jackrabbit",
+      "target": "JAZZ",
+      "executable": "JAZZ.EXE",
+      "genre": "platform",
+      "coverage_targets": {
+        "video": [
+          "modex"
+        ],
+        "extender": "native",
+        "music": [
+          "digital"
+        ],
+        "mouse": false,
+        "joystick": true
+      },
+      "audio": "digital",
+      "enter": [
+        "ret",
+        "ret",
+        "ret"
+      ],
+      "play": [
+        "up",
+        "ctrl"
+      ],
+      "quit": [
+        "esc",
+        "q",
+        "y"
+      ],
+      "lan": null,
+      "calibration": null,
+      "installed": {
+        "directory": "build/downloads/dos-titles/jazz-installed",
+        "files": []
+      },
+      "terms_reviewed": false,
+      "music": "digital"
+    }
+  ]
+}

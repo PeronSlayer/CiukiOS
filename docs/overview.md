@@ -138,8 +138,9 @@ not yet run in the guest).
 - **DOS games.** DOOM 1.9, Wolfenstein 3D 1.4 and Quake 1.06, shareware
   releases, are pre-installed on `C:\GAMES\CIUKIGAM.IMG` and start from
   Programs > Games in a DOS window with the kernel DPMI host and Sound
-  Blaster 16/OPL3 emulation; Alt+Enter switches to full screen on the real
-  VGA hardware, as Windows 98 did. Since the owner decision of 21 October
+  Blaster 16/OPL3 emulation; a game switches to full screen on the real
+  VGA hardware at its first graphics mode and Alt+Enter returns it to the
+  window (remembered per program), as Windows 98 did. Since the owner decision of 21 October
   the **unified DOS kernel** (the CiukiDOS fork of FreeDOS kernel 2043 with
   the native file-system binding) is the sole DOS kernel for games and the
   interactive shell. The DOS Box has no configuration panel. The

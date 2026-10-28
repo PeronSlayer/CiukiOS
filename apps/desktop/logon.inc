@@ -1,5 +1,12 @@
 /* SPDX-License-Identifier: MIT
- * Opaque desktop-owned gate; never pass password input to application windows. */
+ * Opaque desktop-owned gate; never pass password input to application windows.
+ * sec-user-03: a desktop launched by the trusted LOGON service (logon_session)
+ * never opens this gate. Logon, unlock and the Ctrl+Alt+Del screen belong to
+ * LOGON_UI; here Lock asks LOGON (SESSION_LOCK) and a passwordless owner is
+ * told to set a password (contract 4.3) instead of a false lock. The G32 gate
+ * below stays for the interim desktop of images without LOGON. */
+#include "../logon/logon_proto.h"
+#include "session_prefs.h"   /* sec-user-04 */
 static struct desk_box logon_box(const struct desktop *d)
 {
     int w=(int)d->width-16; if (w>420) w=420;
@@ -13,7 +20,7 @@ static void logon_clear(struct desktop *d)
 }
 void desk_logon_open(struct desktop *d,int mode)
 {
-    if (!d->shell || (mode!=1 && mode!=2)) return;
+    if (!d->shell || d->logon_session || (mode!=1 && mode!=2)) return;
     desk_v3_revoke(d); desk_v3_pointer_release(d); desk_shell_drag_cancel(d); desk_menu_close(d);
     d->saver_active=d->saver_preview=0;
     d->sh.user_previous_focus=d->focus;
@@ -29,13 +36,73 @@ void desk_logon_open(struct desktop *d,int mode)
     else if (d->sh.users.count) snprintf(d->sh.user_request.name,USERS_NAME,"%s",d->sh.users.names[0]);
     desk_cursor_update(d); damage_all(d);
 }
+static void logon_set_password_guidance(struct desktop *d)
+{
+    desk_shell_message(d,"Lock Computer","Set a password to lock this account.\n"
+                       "Without a password, anyone can use this computer while you are away.\n"
+                       "Passwords in Control Panel opens so that you can set one.",0);
+    launch_named(d,"control","--panel=passwords");
+}
 void desk_session_lock(struct desktop *d)
 {
+    if (d->logon_session) {
+        int r=d->session_lock ? d->session_lock(d) : -ENOSYS;
+        if (r==LGN_STATUS_NO_PASSWORD) logon_set_password_guidance(d);
+        else if (r<0) desk_shell_notify_error(d,"The computer could not be locked",-r);
+        return;
+    }
     if (!d->sh.user_gate && (d->sh.users.flags&USERS_LOCK) && d->sh.profile.name[0]) desk_logon_open(d,2);
 }
 void desk_session_resume(struct desktop *d)
 {
+    /* sec-user-04: a LOGON session arms password-on-resume before Stand by
+     * (desk_session_arm_resume); a resume it did not arm (firmware-initiated
+     * suspend) locks at once through LOGON (SECURE_ENTER RESUME), before the
+     * desktop repaints. A password-less owner has nothing to unlock with:
+     * no lock and no guidance here. */
+    if (d->logon_session) {
+        if (desk_secure_pref(d->sh.cfg.extra,DESK_SECURE_RESUME) && d->session_secure)
+            (void)d->session_secure(d,LGN_NOTICE_STANDBY,NULL);
+        return;
+    }
     if (!d->sh.user_gate && d->sh.power_cfg.password && d->sh.profile.name[0]) desk_logon_open(d,2);
+}
+/* --- sec-user-04 (contract 4.3): trusted saver dismissal and resume lock. */
+int desk_session_saver_lock(struct desktop *d)
+{
+    if (!d->logon_session || !desk_secure_pref(d->sh.cfg.extra,DESK_SECURE_SAVER)) return 0;
+    unsigned flags=0;
+    int e=d->session_secure ? d->session_secure(d,LGN_NOTICE_SAVER,&flags) : -ENOSYS;
+    return e;   /* a failure keeps the saver: fail closed, the next input retries */
+}
+int desk_session_arm_resume(struct desktop *d)
+{
+    if (!d->logon_session || !desk_secure_pref(d->sh.cfg.extra,DESK_SECURE_RESUME)) return 1;
+    if (!d->session_secure) return -ENOSYS;
+    unsigned flags=0;
+    int e=d->session_secure(d,d->resume_arming ? LGN_NOTICE_QUERY : LGN_NOTICE_STANDBY,&flags);
+    if (!d->resume_arming) { d->resume_arming=1; d->resume_arm_until=d->now_ns+3000000000ull; }
+    if (e) { d->resume_arming=0; return e; }
+    if ((flags&LGN_EVENT_BLANK) || (flags&LGN_EVENT_LOCKED)) { d->resume_arming=0; return 1; }
+    if (d->now_ns>=d->resume_arm_until) { d->resume_arming=0; return -ETIMEDOUT; }
+    return 0;   /* the gate's fence is still draining: Stand by waits */
+}
+int desk_session_password_set(struct desktop *d)
+{
+    return d->logon_session && d->session_secure ? d->session_secure(d,LGN_NOTICE_PASSWORD,NULL) : 0;
+}
+/* --- end sec-user-04 --- */
+void desk_session_action(struct desktop *d,unsigned action)
+{
+    if (!d->logon_session || d->sh.gate) return;
+    switch (action) {
+    case LGN_ACT_LOGOFF: d->sh.want_power=3; break;      /* G3 query/veto, then LOGON collects */
+    case LGN_ACT_SHUTDOWN: d->sh.want_power=2; break;
+    case LGN_ACT_RESTART: d->sh.want_power=1; break;
+    case LGN_ACT_TASKMGR: launch_named(d,"tasks",NULL); break;
+    case LGN_ACT_SET_PASSWORD: launch_named(d,"control","--panel=passwords"); break;
+    default: break;
+    }
 }
 void desk_logon_done(struct desktop *d)
 {

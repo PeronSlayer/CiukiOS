@@ -158,7 +158,7 @@ void msconfig_attach(struct msconfig_app *a, struct du_ui *u)
     w = add(u, DU_LISTVIEW, MC_T_REG_LIST, 20, 68, 440, 92, "No registry backup yet.");
     w->view = DU_DETAILS; w->items = a->backup_items; w->column_count = 4; memcpy(w->columns, backup_columns, sizeof(backup_columns));
     add(u, DU_BUTTON, MC_T_REG_BACKUP, 20, 168, 96, 23, "&Back Up Now");
-    add(u, DU_LABEL, MC_T_REG_LABEL, 124, 166, 336, 30, "To restore a backup, start with Command prompt only and type SCANREG /RESTORE.");
+    add(u, DU_LABEL, MC_T_REG_LABEL, 124, 166, 336, 30, "To restore a backup, type SCANREG /RESTORE in the Terminal, then restart.");
     add(u, DU_GROUP, MC_T_SFC_GROUP, 12, 204, 456, 150, "System File Checker");
     w = add(u, DU_LISTVIEW, MC_T_SFC_LIST, 20, 222, 440, 94, "Click Scan Files to check the system files.");
     w->view = DU_DETAILS; w->column_count = 2; memcpy(w->columns, sfc_columns, sizeof(sfc_columns));
@@ -226,7 +226,8 @@ static void tool(struct msconfig_app *a, int id)
         struct rc_backup made;
         int e = rc_backup("", "System Configuration", (int64_t)time(NULL),
                           a->have_status && (a->status.flags & CIUKI_RECOVERY_COMPLETE), &made);
-        if (e) snprintf(a->message, sizeof(a->message), "Registry Checker could not back up the registry: %s.", strerror(-e));
+        if (e == -EPERM) snprintf(a->message, sizeof(a->message), "Only administrators can back up the registry."); /* sec-sysvc2 */
+        else if (e) snprintf(a->message, sizeof(a->message), "Registry Checker could not back up the registry: %s.", strerror(-e));
         else snprintf(a->message, sizeof(a->message), "The registry and configuration files were backed up to C:\\SYSTEM\\SYSBCKUP\\%s.", made.name);
         backups_refresh(a);
         du_message(u, MC_DLG_INFO, "Registry Checker", a->message, e ? DU_DLG_ICON_ERROR : DU_DLG_ICON_INFO, NULL, 0, 0, 0);

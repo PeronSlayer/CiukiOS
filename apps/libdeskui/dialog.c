@@ -490,8 +490,20 @@ static void refilter(struct du_ui *u)
             } else snprintf(f->kind_text[n], sizeof(f->kind_text[n]), "File");
         }
         row->text[1] = f->size_text[n]; row->text[2] = f->kind_text[n];
-        row->icon16 = du_icon_argb(du_icon_file(e->name, e->directory, 0), 16);
-        row->icon32 = du_icon_argb(du_icon_file(e->name, e->directory, 0), 32);
+        const char *fallback = du_icon_file(e->name, e->directory, 0);
+        const uint32_t *own16 = NULL, *own32 = NULL;
+        if (!e->directory && du_file_icon_candidate(e->name, 0)) {
+            char path[DU_TEXT_MAX];
+            int n = snprintf(path, sizeof(path), "%s%s%s", d->folder,
+                             d->folder[0] && d->folder[strlen(d->folder) - 1] == '/' ? "" : "/", e->name);
+            if (n > 0 && (size_t)n < sizeof(path)) {
+                unsigned flags = DU_FILE_ICON_DEFAULT | (du_file_icon_shortcut(e->name) ? DU_FILE_ICON_LINK : 0);
+                own16 = du_file_icon_flags(path, 0, 16, flags);
+                own32 = du_file_icon_flags(path, 0, 32, flags);
+            }
+        }
+        row->icon16 = own16 ? own16 : du_icon_argb(fallback, 16);
+        row->icon32 = own32 ? own32 : du_icon_argb(fallback, 32);
         n++;
     }
     f->shown = n; f->anchor = -1; f->selection_input = 0;

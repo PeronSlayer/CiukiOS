@@ -13,6 +13,8 @@
 #define ACCT_ENABLED 1u
 #define ACCT_BUILTIN 2u
 #define ACCT_PASSWORD_SET 4u
+/* AUTH LIST hint only; authentication remains authoritative. */
+#define ACCT_PUBLIC_BLANK_LOGON 4u
 #define ACCT_READY_BLANK 8u
 #define ACCT_CHANGE_REQUIRED 16u
 #define ACCT_ADMIN 3u
@@ -121,7 +123,8 @@ enum acct_operation {
     ACCT_LIST = 1, ACCT_AUTH, ACCT_UNLOCK, ACCT_CREATE, ACCT_DELETE,
     ACCT_RENAME, ACCT_ENABLE, ACCT_ROLE, ACCT_PASSWORD, ACCT_PICTURE,
     ACCT_ENROLL_VERIFY, ACCT_UPDATE, ACCT_LOOKUP, ACCT_CHALLENGE,
-    ACCT_AUTOLOGON, ACCT_ENROLL_PLAN, ACCT_STATUS, ACCT_RESERVE, ACCT_PROFILE
+    ACCT_AUTOLOGON, ACCT_ENROLL_PLAN, ACCT_STATUS, ACCT_RESERVE, ACCT_PROFILE,
+    ACCT_ENROLL_SOURCE /* sec-user-04: AUTH op 8, LOGON only (contract amendment) */
 };
 struct acct_challenge {
     uint32_t action, uid, session, console, authentication_epoch;
@@ -231,6 +234,7 @@ int acct_work(struct acct_service *, struct acct_response *);
 #define ACCT_ROLE_UI 2u
 #define ACCT_ROLE_ACCOUNT 3u
 #define ACCT_ROLE_OWNER 4u
+#define ACCT_ROLE_REGISTRY 5u
 #define ACCT_ROLE_DESKTOP 6u
 #define ACCT_ROLE_W32SRV 7u
 #define ACCT_ENDPOINT_AUTH 1u
@@ -263,6 +267,13 @@ void acct_attempts_clear(struct acct_service *);
 int acct_enrollment_recover(struct acct_service *);
 int acct_enrollment_source(struct acct_service *, const void *, size_t);
 int acct_enrollment_execute(struct acct_service *, struct acct_job *, struct acct_response *);
+/* sec-user-04: AUTH ENROLL_SOURCE reply (32-byte header + 48-byte rows, the
+ * layout of apps/logon/logon_proto.h lgn_source) from the response that
+ * acct_enrollment_execute filled: count rows in records[] (uid = old id,
+ * flags = row flags, groups = staged uid, name), generation = plan
+ * generation, change_required = header flags, authenticated_uid = staged
+ * mask. Names and ids only. */
+int acct_source_encode(const struct acct_response *, void *, size_t, size_t *);
 int acct_auth_result(struct acct_service *, struct acct_job *, struct acct_response *, int,
                      unsigned disposition, const struct acct_record *);
 int acct_verify(const struct acct_record *, const char *);

@@ -61,6 +61,9 @@ int ciuki_host_regional_file(const char *data)
     return -1;
 }
 static struct host_fd fds[128]={{1,-1,0,O_RDONLY,0},{1,-2,0,O_WRONLY,0},{1,-2,0,O_WRONLY,0}};
+static unsigned console_writes[128];
+/* fx-autorun: write() calls that reached a console descriptor (fd 1 or 2). */
+unsigned ciuki_host_writes(int fd) { return fd>=0&&fd<128?console_writes[fd]:0; }
 static int fd_slot(void) { for(int f=0;f<128;++f)if(!fds[f].used)return f;return -EMFILE; }
 static uint64_t mono,cpu;
 static struct ciuki_thread_args worker;
@@ -164,7 +167,7 @@ uint32_t __wrap_ciuki_syscall(uint32_t nr,uint32_t b,uint32_t c,uint32_t d,uint3
         unsigned access=fd->flags&O_ACCMODE;
         if(wr?access==O_RDONLY:access==O_WRONLY)return -EBADF;
         if(fd->file==-1)return wr?d:0;
-        if(fd->file==-2) { output((void *)(uintptr_t)c,d);return d; }
+        if(fd->file==-2) { console_writes[b]++;output((void *)(uintptr_t)c,d);return d; }
         if(!file)return -EISDIR;
         uint64_t off=positioned?(uint64_t)scalar(s,i):wr&&(fd->flags&O_APPEND)?file->size:fd->position;
         unsigned count=d;

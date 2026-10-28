@@ -216,8 +216,67 @@ static int execute_inner(struct acct_service *s, struct acct_job *job, struct ac
     if(!e) { en->generation=0; e=acct_auth_result(s,job,out,0,3,NULL); }
     acct_wipe(final,sizeof(*final)); return e;
 }
+/* --- sec-user-04: AUTH ENROLL_SOURCE (contract amendment "G32 enrollment
+ * source"). The trusted enrollment UI must submit every protected G32
+ * record exactly (A2-1); this read-only LOGON route lists them: old ids in
+ * ascending order and names, a replacement-label flag for reserved, invalid
+ * or duplicate names, and, once a plan is staged, its generation, the uid
+ * each record received and the staged mask. Never salts or verifiers. An
+ * installation that is not waiting for enrollment answers ENOENT. --- */
+struct source_frame { uint8_t raw[1400]; struct users_db old; };
+static int source_inner(struct acct_service *s, struct acct_response *out, struct source_frame *f)
+{
+    if(s->available) return -ENOENT;
+    size_t n=0; int e=source(s,f->raw,&n);
+    if(e) return e;
+    if(n && users_decode(&f->old,f->raw,n)) return -EIO;
+    if(!n) f->old.count=0;
+    if(f->old.count>16) return -EIO;
+    for(unsigned i=1;i<f->old.count;++i) {
+        struct users_record record=f->old.records[i]; unsigned j=i;
+        while(j && f->old.records[j-1].id>record.id) { f->old.records[j]=f->old.records[j-1]; --j; }
+        f->old.records[j]=record; acct_wipe(&record,sizeof(record));
+    }
+    const struct acct_enrollment *en=&s->enrollment;
+    out->count=f->old.count; out->generation=en->generation;
+    out->change_required=en->generation?1u:0u; out->authenticated_uid=en->generation?en->staged:0u;
+    for(unsigned i=0;i<f->old.count;++i) {
+        const struct users_record *r=&f->old.records[i]; struct acct_public *p=&out->records[i];
+        if(i && f->old.records[i-1].id==r->id) return -EIO;
+        p->uid=r->id; memcpy(p->name,r->name,31); p->name[31]=0;
+        if(!p->name[0]) return -EIO;
+        int replace=!acct_name_valid(p->name) || acct_reserved_name(p->name);
+        for(unsigned j=0;j<i;++j) if(acct_name_equal(out->records[j].name,p->name)) replace=1;
+        p->flags=replace?1u:0u;
+        for(unsigned j=0;en->generation && j<en->map_count;++j) if(en->map[j].old_id==r->id) p->groups=en->map[j].uid;
+    }
+    return 0;
+}
+static int source_list(struct acct_service *s, struct acct_response *out)
+{
+    struct source_frame *f=acct_frame_alloc(&s->store.kernel,sizeof(*f)); if(!f) return -ENOMEM;
+    int e=source_inner(s,out,f);
+    if(e) { out->count=0; out->generation=0; out->change_required=0; out->authenticated_uid=0; }
+    acct_frame_free(&s->store.kernel,f,sizeof(*f)); return e;
+}
+int acct_source_encode(const struct acct_response *r, void *v, size_t cap, size_t *n)
+{
+    if(!r || !v || !n || r->count>16 || cap<32u+48u*r->count) return -EINVAL;
+    uint8_t *p=v; *n=32u+48u*r->count; memset(p,0,*n);
+    /* acct_work fills a zero completion generation with the database's:
+     * without a plan the header generation stays zero. */
+    w32(p,1); w32(p+4,r->count); w32(p+8,r->change_required&1u);
+    w32(p+12,(r->change_required&1u)?r->authenticated_uid:0); w64(p+16,(r->change_required&1u)?r->generation:0);
+    for(unsigned i=0;i<r->count;++i) {
+        uint8_t *b=p+32+48*i; w32(b,r->records[i].uid); w32(b+4,r->records[i].flags); w32(b+8,r->records[i].groups);
+        memcpy(b+16,r->records[i].name,32);
+    }
+    return 0;
+}
+/* --- end sec-user-04 --- */
 int acct_enrollment_execute(struct acct_service *s, struct acct_job *job, struct acct_response *out)
 {
+    if(job->request.operation==ACCT_ENROLL_SOURCE) return source_list(s,out); /* sec-user-04 */
     if(job->request.operation==ACCT_ENROLL_PLAN) return plan(s,job,out);
     struct execute_frame *f=acct_frame_alloc(&s->store.kernel,sizeof(*f)); if(!f) return -ENOMEM;
     int e=execute_inner(s,job,out,f);

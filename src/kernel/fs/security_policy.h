@@ -35,9 +35,14 @@ struct policy_rule {
     uint16_t parent;
     uint8_t kind, anchor;
 };
+struct owner_vfs;
 struct policy_volume {
     uint64_t id, mount, epoch;
     struct owner_store *owners;
+    /* sec-k03: the OWNER destination lease (owner_vfs_reserved) consulted by
+     * every subject-attributed namespace mutation. Set by the integration
+     * that installs the OWNER backend for this volume; NULL = no batch lease. */
+    const struct owner_vfs *lease;
     struct policy_rule rules[POLICY_RULES];
     unsigned count;
     bool system, removable, readonly, ready;

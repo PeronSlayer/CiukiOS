@@ -276,7 +276,9 @@ clang -std=c17 -O1 -g -Wall -Wextra -Werror -fsanitize=address,undefined \
     -I "$root/src/kernel/include" "$root/tests/host/power_test.c" -o "$out/power_test"
 "$out/power_test"
 clang -std=c17 -O1 -g -Wall -Wextra -Werror -fsanitize=address,undefined \
-    -I "$root/src/kernel/include" "$root/tests/host/power_runtime_test.c" -o "$out/power_runtime_test"
+    -ffunction-sections -fdata-sections -Wl,--gc-sections \
+    -I "$root/src/kernel/include" "$root/tests/host/power_runtime_test.c" \
+    "$root/tests/host/security/subject_fixture.c" -o "$out/power_runtime_test"
 "$out/power_runtime_test"
 # fx-acpioff: the ACPI S5 register fallback (SCI_EN handshake, status/GPE
 # clearing, PM1a/PM1b writes, bounds, registry owner refusal, hint states).
@@ -452,6 +454,9 @@ read -r -a vm_profile_args <<< "$vm_profile"
 # dosvm_test.c (game_launch_kernel.c), with a scripted DOS guest. Modes:
 # the first DOOM frame reaches the window; DOOM quits to DOS and "Close on
 # exit" closes the window; the desktop closes a plain DOS Box at C:\>.
+# fx-dosfull: frame and exit refuse full screen (QEMU, f3-29: one request,
+# the game continues in its window); fullscreen accepts it (the game enters
+# at mode 13h, the user's Alt+Enter returns and is remembered as Window).
 launch="$out/game-launch"
 mkdir -p "$launch/include/ciuki"
 for name in dosvm.h channel.h surface.h; do cp "$root/sdk/sysroot-overlay/include/ciuki/$name" "$launch/include/ciuki/"; done
@@ -470,10 +475,10 @@ clang -std=c17 -O1 -g -Wall -Wextra -Werror -Wno-pointer-to-int-cast -fsanitize=
     "$root/src/kernel/vm/vga_x86.c" "$root/src/kernel/vm/vga_presenter.c" \
     "$out/dosvm_audio_vm_source.o" "$out/dosvm_audio_opl3.o" "$out/dosvm_audio_mixer.o" \
     "$launch/app.o" "$launch/protocol.o" "$pool" -pthread -Wl,-u,pool_fixture_start -o "$launch/game-launch"
-for mode in frame exit close; do
+for mode in frame exit close fullscreen; do
     rm -rf "$launch/prefs"
     result="$(ASAN_OPTIONS=detect_leaks=0 "$launch/game-launch" "$mode")" || { printf '%s\n' "$result"; exit 1; }
-    grep -E '^PASS DOS (game launch|game exit|Box close)' <<< "$result"
+    grep -E '^PASS DOS (game launch|game exit|Box close|game full screen|game refused full screen)' <<< "$result"
 done
 
 # F4-28: optimized VM-source callback cost (the sanitized full suite above
@@ -565,8 +570,53 @@ clang -std=c17 -O1 -g -Wall -Wextra -Werror -fsanitize=address,undefined \
 
 # sec-k01 H01: immutable production subjects and call-101 transactions.
 python3 -B -m unittest discover -s "$root/tests/host/security" -p test_credentials.py
+# sec-k04 H05: production device/admin authority, raw disk and dispatch.
+python3 -B -m unittest discover -s "$root/tests/host/security" -p test_devices.py
+# end sec-k04 registration
 # sec-k02 H02: OWNER batches/checkpoints and resolved FAT path policy.
 python3 -B -m unittest discover -s "$root/tests/host/security" -p test_owner_policy.py
+# ---- sec-k03 H04 (one block): every native/Win32/legacy-table file, handle,
+# exec and mapping entry point enforces the retained subject; frontend census.
+python3 -B -m unittest discover -s "$root/tests/host/security" -p test_file_enforcement.py
+# ---- end sec-k03 ----
+# --- sec-k05 block (begin) ---
+# H06: DOS VM identity, credential-filtered D:/E: through the live IFS and
+# per-user stores. Its VM-lifecycle/INT 13h and title-store cases run in
+# this suite's dosvm_test (default sequence) and run_persistent_saves.sh.
+python3 -B -m unittest discover -s "$root/tests/host/security" -p test_dos_identity.py -k test_identity_views_and_stores
+# --- sec-k05 block (end) ---
+# ---- sec-own H15 (one block): system-volume OWNER binding, gated first-boot
+# store, kernel OWNER queries, ready-seed publication through the production
+# ACCOUNT service, bound policy, reboot and SID-without-store refusal.
+python3 -B -m unittest discover -s "$root/tests/host/security" -p test_system_owner.py
+# ---- end sec-own ----
+# --- sec-k07 block (begin) ---
+# H09: trusted gate with the real secure-console backend, physical secure
+# attention through the production merged input queue (PS/2, USB, firmware),
+# session drain/teardown and the real session console on the fd table.
+python3 -B -m unittest discover -s "$root/tests/host/security" -p test_secure_gate.py
+# --- sec-k07 block (end) ---
+# --- sec-user-03 block: H10, the production LOGON coordinator and the
+# account service on the k01/k07 kernel harness (ready autologon, Welcome,
+# lock/unlock, secure attention menu, Log Off/shutdown collection, Safe Mode
+# recovery account, service restarts) and the LOGON_UI model/view goldens. ---
+python3 -B -m unittest discover -s "$root/tests/host/security" -p test_logon.py
+# --- sec-user-03 block (end) ---
+# ---- sec-sysvc H16 (one block): SYSTEM services of call 99 (boot
+# configuration, system/user logs, driver packs) for administrator, standard
+# user and Guest, with the direct routes refused by the bound policy.
+python3 -B -m unittest discover -s "$root/tests/host/security" -p test_system_services.py
+# ---- end sec-sysvc ----
+# ---- sec-sysvc2 (one block): H16 above also covers the SYSTEM jobs and the
+# sealed boot settings; H07 Registry Checker in the SYSTEM registry broker
+# (administrator-only tools, the daily SYSTEM job, the next-start restore).
+python3 -B -m unittest discover -s "$root/tests/host/security" -p test_registry_checker.py
+# ---- end sec-sysvc2 ----
+# --- sec-user-04 block: H12, User Accounts (Control Panel client against the
+# production account service), saver/resume locks, an administrator's log-off
+# of a locked session and the G32 upgrade enrollment, on H10's harness. ---
+python3 -B -m unittest discover -s "$root/tests/host/security" -p test_account_controls.py
+# --- sec-user-04 block (end) ---
 
 # F2 production parser, mappings, wait queues, stack and lifecycle with fake
 # physical memory/scheduling; no guest execution or host runner lock.
@@ -694,11 +744,17 @@ clang -std=c17 -O1 -g -Wall -Wextra -Werror -fsanitize=address,undefined \
     -o "$out/fs/test_storage_power_flush"
 "$out/fs/test_storage_power_flush"
 for storage_test in test_storage_namespace test_storage test_log_recovery test_powercuts; do
+    # sec-k04: the namespace harness links media_dev.c, which asks the
+    # production credential predicates (proc/security.c via the subject fixture).
+    storage_extra=()
+    if [[ $storage_test == test_storage_namespace ]]; then
+        storage_extra=("$root/tests/host/security/subject_fixture.c")
+    fi
     clang -std=c17 -O1 -g -Wall -Wextra -Werror -fsanitize=address,undefined \
         -ffunction-sections -fdata-sections -Wl,--gc-sections \
         -DFS_HOST -D_POSIX_C_SOURCE=200809L -pthread \
         -I "$root/src/kernel/include" -I "$root/src/kernel/fs" \
-        "${storage_sources[@]}" "$root/tests/host/fs/$storage_test.c" \
+        "${storage_sources[@]}" "${storage_extra[@]}" "$root/tests/host/fs/$storage_test.c" \
         -o "$out/fs/$storage_test"
     "$out/fs/$storage_test" "$out/fs/fat32.img" "$out/fs/fat12.img" "$out/fs/fat16.img"
     # The storage fixture's baseline SYSTEM directory is intentionally
@@ -778,6 +834,17 @@ clang++ -std=c++17 -O1 -g -Wall -Wextra -Werror -fsanitize=address,undefined -I 
     "$root/tests/host/opl3_ref_test.cpp" "$out/dbopl/dbopl.o" "$out/dbopl/opl3_port.o" -o "$out/opl3_ref_test"
 "$out/opl3_ref_test"
 python3 "$root/tests/host/test_opl3_tables.py"
+
+# sec-k06: production Win32 isolation, SYSTEM registry and restart journals.
+python3 -B -m unittest discover -s "$root/tests/host/security" -p test_win32_broker.py
+# end sec-k06
+# --- sec-user-05 block (begin) ---
+# H11: ADVAPI32 token/SID/name/privilege facade over the kernel token objects,
+# Win32 profile environment/console/shell folders, native passwd adapters and
+# per-user mixer preferences (the per-session joystick store runs in the
+# joystick runner above).
+python3 -B -m unittest discover -s "$root/tests/host/security" -p test_identity_facades.py
+# --- sec-user-05 block (end) ---
 
 # F5 personality mechanisms, fixture parity and core selector wiring.
 python3 -B -m unittest discover -s "$root/tests/host/win32" -p test_kernel_core.py

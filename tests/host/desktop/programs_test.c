@@ -50,7 +50,8 @@ static int exists(const char *rel)
 {char p[1024];snprintf(p,sizeof(p),"%s%s",store.root,rel);return !access(p,F_OK);}
 int main(int argc,char **argv)
 {
-    assert(argc==2);store=(struct cp_program_store){.root=argv[1],.registry_list=registry,.registry_run=run,.registry_check=check_key,.game=game,.log=log_line,.forget_icon=forget,.persist=persist};
+    assert(argc==2);store=(struct cp_program_store){.root=argv[1],.registry_list=registry,.registry_run=run,.registry_check=check_key,.game=game,.log=log_line,.forget_icon=forget,.persist=persist,
+        .profile="/Windows/Profiles/u000003e8"}; /* sec-user-04 */
     /* External-only launch record: no internal record may mask discovery. */
     link_file("/Games/External.ciuki","External DOS launch","C:\\Games\\Test\\GAME.EXE","");
     link_file("/Windows/Start Menu/Programs/DosUser.lnk","User DOS","C:\\Programs\\DosUser\\RUN.BAT","");
@@ -61,11 +62,14 @@ int main(int argc,char **argv)
     link_file("/Windows/Desktop/Native.lnk","Native shortcut","/Programs/UserNative","");
     link_file("/Documents/Desktop/Native.lnk","Native shortcut","/Programs/UserNative","");
     file("/Programs/UserNative","\177ELF",4);file("/Programs/control","\177ELF",4);file("/Programs/hwreport","\177ELF",4);
+    file("/Programs/sectest","\177ELF",4);
     struct desk_uninstall_entry limited[4];
     assert(cp_program_list(&store,limited,4)==4 && limited[0].inventory_more);
     for(unsigned j=0;j<4;j++)assert(limited[j].system_component);
     unsigned i=find("External DOS launch");assert(entries[i].kind==DESK_PROGRAM_DOS && entries[i].disk_bytes);
     int n=cp_program_list(&store,entries,96);assert(n>=10);
+    for(int j=0;j<n;j++)assert(strcasecmp(entries[j].name,"sectest"));
+    assert(exists("/Programs/sectest"));
     for(int j=1;j<n;j++)assert(strcasecmp(entries[j-1].name,entries[j].name)<=0);
     i=find("hwreport");assert(entries[i].system_component && cp_program_remove(&store,&entries[i])==-EPERM && exists("/Programs/hwreport"));
     i=find("control");assert(entries[i].system_component && cp_program_remove(&store,&entries[i])==-EPERM && exists("/Programs/control"));
@@ -80,7 +84,15 @@ int main(int argc,char **argv)
     char removal[1024];snprintf(removal,sizeof(removal),"%s/Windows/Start Menu/Programs/Remove Zulu Win32.lnk",store.root);assert(!unlink(removal));
     snprintf(removal,sizeof(removal),"%s/Windows/Start Menu/Programs/Zulu Win32 Readme.lnk",store.root);assert(!unlink(removal));
     i=find("Zulu Win32");assert(!strcmp(entries[i].location,"/Programs/Win"));keep_key=1;assert(cp_program_remove(&store,&entries[i])==-EAGAIN && exists("/Windows/Start Menu/Programs/Win.lnk"));
+    /* sec-user-04: the session's own Start Menu and Desktop shortcuts
+     * (Windows XP per-user scope) are cleaned with the machine ones. */
+    link_file("/Windows/Profiles/u000003e8/Start Menu/Programs/Win personal.lnk","Win personal","C:\\Programs\\Win\\APP.EXE","");
+    link_file("/Windows/Profiles/u000003e8/Documents/Desktop/Win.lnk","Win","C:\\Programs\\Win\\APP.EXE","");
+    link_file("/Windows/Profiles/u000003e8/Documents/Desktop/Keep.lnk","Keep","C:\\Programs\\Other\\APP.EXE","");
     keep_key=0;assert(!cp_program_remove(&store,&entries[i]) && runs==2 && key_checks==2 && !exists("/Windows/Start Menu/Programs/Win.lnk"));
+    assert(!exists("/Windows/Profiles/u000003e8/Start Menu/Programs/Win personal.lnk") && !exists("/Windows/Profiles/u000003e8/Documents/Desktop/Win.lnk"));
+    assert(exists("/Windows/Profiles/u000003e8/Documents/Desktop/Keep.lnk"));
+    puts("PASS sec-user-04 Add/Remove: per-user Start Menu and Desktop shortcuts removed with the machine ones");
     i=find("External DOS launch");assert(!cp_program_remove(&store,&entries[i]));
     assert(!exists("/Games/Test") && !exists("/Windows/Desktop/DOS.lnk") && exists("/Windows/Desktop/Other.lnk"));
     assert(!exists("/Games/External.ciuki"));

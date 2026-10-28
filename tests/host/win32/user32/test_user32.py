@@ -44,7 +44,7 @@ def build_fixture(out, gl=False):
     # name USER also defines (FillRect, FrameRect...) stays private to them.
     engine=[ROOT/'sdk/win32/gdi32'/n for n in gdi32.SOURCES if not n.startswith('compiler')]
     engine+=[ROOT/'sdk/win32/ddraw'/n for n in ddraw.SOURCES]
-    engine+=[ROOT/'tests/host/win32/ddraw/shim.c',HERE/'gdi_host.c',HERE.parent/'gdi_support.c',HERE/'ddraw_seam.c']
+    engine+=[ROOT/'tests/host/win32/ddraw/shim.c',HERE/'gdi_host.c',HERE.parent/'gdi_support.c',HERE.parent/'no_environment.c',HERE/'ddraw_seam.c']
     if gl:
         import importlib.util
         spec=importlib.util.spec_from_file_location('q3gl',ROOT/'sdk/libgl/build.py')

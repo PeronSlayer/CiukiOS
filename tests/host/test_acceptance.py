@@ -4,12 +4,14 @@ ISO generators and the guest record formats the suite matches. Host evidence
 only: no QEMU (tests/host/fake_qemu.py stands in), no image.
 """
 import copy
+import hashlib
 import http.client
 import json
 import os
 from pathlib import Path
 import re
 import shutil
+import struct
 import subprocess
 import sys
 import tempfile
@@ -33,6 +35,10 @@ D = '[user 7] [desktop]'
 SCRATCH = ROOT / 'build/host/acceptance'
 SCRATCH.mkdir(parents=True, exist_ok=True)
 HAVE_XORRISO = shutil.which('xorriso') is not None
+
+
+def struct_unpack(fmt, data, offset):
+    return struct.unpack_from(fmt, data, offset)
 
 
 def ppm(colour, width=320, height=320):
@@ -129,10 +135,15 @@ class KeysAndValidationTests(Base):
         self.assertEqual(normal[0]['actions'], [{'keys': 'n'}])
         self.assertTrue(all(s['check'] == 'boot' for s in normal))
         self.assertIn('safe=0$', normal[3]['wait'])
+        # sec-user-06: PID 1's desktop or the one LOGON's SESSION_LAUNCH published.
+        for line in ('[supervisor] desktop pid=3 pgid=3', '[security] session 1 desktop pid=8 pgid=8 uid=1000 gid=545 groups=544,545'):
+            self.assertRegex(line, normal[2]['wait'])
         safe = acceptance.expand_steps([{'template': 'boot-safe', 'prefix': 's1'}])
         self.assertEqual(safe[0]['actions'], [{'keys': 'f5'}])
         self.assertEqual(safe[1]['wait'][0], r'^L:STARTUP=3$')
-        self.assertIn('safe=1$', safe[3]['wait'])
+        # Safe mode never logs on automatically: the blank CiukiUser logs on at Welcome.
+        self.assertEqual([s['name'] for s in safe], ['s1-loader', 's1-kernel', 's1-welcome', 's1-typed', 's1-auth', 's1-desktop', 's1-display'])
+        self.assertIn('safe=1$', safe[-1]['wait'])
         for bad in ({'template': 'boot', 'prefix': 'B1'}, {'template': 'nope', 'prefix': 'b1'},
                     {'template': 'boot', 'prefix': 'b1', 'name': 'x'}, {'template': 'boot', 'prefix': 'b1', 'timeout': 10}):
             with self.subTest(step=bad), self.assertRaises(res.Refusal):
@@ -223,10 +234,19 @@ class SessionTests(Base):
 
     def test_safe_template_and_wrong_menu_choice(self):
         c = case(steps=[{'template': 'boot-safe', 'prefix': 's1', 'settle': 0.1}])
-        lines = ['L:STARTUP=3'] + boot_lines('mode=274 640x480x32 saved=0 safe=1')
-        s, qmp = self.session(c, on_key={'f5': lines})
-        drive(s, qmp, lines=[(0.0, 'SELECT_READY')])
-        self.assertTrue(s.done); self.assertEqual(qmp.pressed(), ['f5'])
+        # sec-user-06: LOGON does not log on automatically in Safe mode.
+        lines = ['L:STARTUP=3', 'L:SELECT_SOURCE=menu', 'Ciuki VMM F0 build f5242070d0b4 - CiukiOS',
+                 '[supervisor] bootstrap: trusted logon pid=4', '[user 5] [logon] automatic logon not applicable safe=1',
+                 '[user 10] [logon-ui] view mode=welcome view=list items=3 accounts=1 status=none']
+        logon = ['[user 5] [logon] authenticated uid=1000; starting session', '[user 5] [logon] session 1 created uid=1000',
+                 '[security] session 1 desktop pid=8 pgid=8 uid=1000 gid=545 groups=544,545',
+                 '[user 5] [logon] session 1 running uid=1000 start_ms=700', D + ' display start mode=274 640x480x32 saved=0 safe=1']
+        s, qmp = self.session(c, on_key={'f5': lines, 'ret#1': ['[user 10] [logon-ui] view mode=welcome view=typed items=5 accounts=1 status=none'],
+                                         'ret#3': logon})
+        drive(s, qmp, until=60, lines=[(0.0, 'SELECT_READY')])
+        self.assertTrue(s.done, s.state)
+        self.assertEqual(qmp.pressed()[:4], ['f5', 'up', 'up', 'ret'])
+        self.assertEqual(qmp.pressed().count('ret'), 3)   # list, name (empty password follows), submit
         c = case(steps=[{'template': 'boot', 'prefix': 'b1', 'settle': 0.1}])
         s, qmp = self.session(c, on_key={'n': ['L:SAFE=1'] + boot_lines()})
         drive(s, qmp, lines=[(0.0, 'SELECT_READY')])
@@ -353,6 +373,116 @@ class SessionTests(Base):
         self.assertTrue(all(e['idle'] >= 6 for e in log))
         self.assertGreaterEqual(log[2]['t'], 40)
         self.assertFalse((self.dir / acceptance.PACE_FILE).exists())
+
+    def quake3_wizard(self):
+        suite = json.loads((ROOT / 'tests/suites/acc-t23.json').read_text())
+        quake = next(c for c in suite['cases'] if c['id'] == 'acc-quake3')
+        return copy.deepcopy(next(s['wizard'] for s in quake['steps'] if s.get('name') == 'install'))
+
+    def page_case(self, wizard):
+        return case(steps=[{'name': 'start', 'wait': '^\\[win32\\] start pid=(?P<setup>\\d+) '},
+                           {'name': 'install', 'wait': '^\\[win32\\] exit pid=<<setup>> code=\\S+ reason=normal ', 'timeout': 3000,
+                            'wizard': wizard}])
+
+    WINDOW = D + ' window pid=%d window=%d owner=%d modal=%d state=%s title=%s'
+    FOCUS = D + ' focus pid=%d window=%d titled=%d internal=0 app=%s'
+
+    def page(self, window, title, focus=True, modal=1, owner=3):
+        """A DialogBox page as Installer VISE shows it (run c634b7c6): created
+        untitled, hidden, titled in WM_INITDIALOG, then shown."""
+        W = self.WINDOW
+        lines = [W % (12, window, owner, modal, 'shown', '-'), W % (12, window, owner, modal, 'hidden', '-'),
+                 W % (12, window, owner, modal, 'hidden', title), W % (12, window, owner, modal, 'shown', title)]
+        return lines + ([self.FOCUS % (12, window, 1, title)] if focus else [])
+
+    def test_page_wizard_follows_the_installer_pages_by_title(self):
+        """fx-acc1 (acceptance run c634b7c6): the Welcome page stayed 3000 s
+        because the focus-driven wizard pressed only while an untitled
+        window held the focus; the page, titled before it was shown, never
+        did (the focus was on the setup frame). The suite's own Quake III
+        page specs: Enter, Y on the licence, Enter, nothing on the progress
+        window, Alt+F4 on a Files window, Enter on Finished."""
+        W, F = self.WINDOW, self.FOCUS
+        closed = lambda window, title: W % (12, window, 3, 1, 'closed', title)
+        s, qmp = self.session(self.page_case(self.quake3_wizard()), frames=[ppm((10, 10, 10)), ppm((20, 20, 20))], on_key={
+            # Welcome -> licence: the page closes, the frame holds the focus, the next page appears.
+            'ret#1': [closed(4, 'Welcome'), F % (12, 3, 1, 'Quake_3_Arena_Demo_Setup'), *self.page(5, 'Software_License_Agreement')],
+            'y#1': [closed(5, 'Software_License_Agreement'), *self.page(6, 'Choose_Destination_Location')],
+            'ret#2': [closed(6, 'Choose_Destination_Location'), *self.page(7, 'Start_Installation')],
+            # The progress window: owned, modeless, titled at creation.
+            'ret#3': [closed(7, 'Start_Installation'), W % (12, 8, 3, 0, 'shown', 'IDS_TITLE'), F % (12, 8, 1, 'IDS_TITLE'),
+                      W % (12, 8, 3, 0, 'shown', 'Setup')],
+            'alt#1': [F % (12, 3, 1, 'Quake_3_Arena_Demo_Setup'), *self.page(9, 'Finished')],
+            'ret#4': ['[win32] exit pid=12 code=00000000 reason=normal peak_commit=1']})
+        lines = [(0.0, '[win32] start pid=12 exe=C:\\Q3ADemo.exe pe=1:2 shims='),
+                 (0.5, W % (12, 2, 0, 0, 'shown', 'IDS_TITLE')), (1.0, W % (12, 2, 0, 0, 'closed', 'IDS_TITLE')),
+                 (1.5, W % (12, 3, 0, 0, 'shown', 'Quake_3_Arena_Demo_Setup')), (1.5, F % (12, 3, 1, 'Quake_3_Arena_Demo_Setup')),
+                 # The welcome page; the old image left the focus on the frame (window 3), same process.
+                 *[(2.0, line) for line in self.page(4, 'Welcome', focus=False)],
+                 # The copy ends: the progress window closes, VISE opens a Files window over the setup.
+                 (300.0, W % (12, 8, 3, 0, 'closed', 'Setup')), (300.5, F % (14, 20, 1, 'files'))]
+        drive(s, qmp, until=600, lines=lines)
+        self.assertTrue(s.done, (s.failed, s.state[1]))
+        self.assertEqual(qmp.pressed(), ['ret', 'y', 'ret', 'ret', 'alt', 'f4', 'ret'])
+        log = s.state[1]['wizard']
+        self.assertEqual([(e['kind'], e['page']) for e in log],
+                         [('press', 'welcome'), ('press', 'licence'), ('press', 'destination'), ('press', 'page'),
+                          ('close', None), ('press', 'finished')])
+        self.assertTrue(all(e['idle'] >= 6 for e in log))
+        pages = [(e['page'], e['title']) for e in s.state[1]['pages']]
+        self.assertIn(('welcome', 'Welcome'), pages)
+        # The progress window retitled in the same turn stays one page.
+        self.assertEqual([p for p in pages if p[0] == 'copy'], [('copy', 'Setup')])
+        self.assertEqual(pages[-1], ('finished', 'Finished'))
+        self.assertGreaterEqual(log[4]['t'], 300)   # nothing pressed while the progress window was up
+
+    def test_page_wizard_names_the_page_it_stopped_on(self):
+        s, qmp = self.session(self.page_case(self.quake3_wizard()), frames=[ppm((10, 10, 10))])
+        lines = [(0.0, '[win32] start pid=12 exe=C:\\Q3ADemo.exe pe=1:2 shims='),
+                 (1.0, self.WINDOW % (12, 3, 0, 0, 'shown', 'Quake_3_Arena_Demo_Setup')),
+                 (1.0, self.FOCUS % (12, 3, 1, 'Quake_3_Arena_Demo_Setup')),
+                 *[(2.0, line) for line in self.page(4, 'Welcome', focus=False)]]
+        drive(s, qmp, until=400, lines=lines)
+        self.assertTrue(s.failed)
+        self.assertIn('wizard stopped on page welcome (title Welcome, window 4) for 30', s.state[1]['reason'])
+        self.assertEqual(s.state[1]['failure_kind'], 'timeout')
+        # One press, then the retries 60 s apart (max_retries 2).
+        self.assertEqual(qmp.pressed(), ['ret', 'ret', 'ret'])
+        times = [e['t'] for e in s.state[1]['wizard']]
+        self.assertGreaterEqual(times[1] - times[0], 60)
+
+    def test_page_wizard_presses_only_while_the_installer_holds_the_focus(self):
+        """The desktop (pid 0) or another program holding the focus gets no
+        installer key; a page past its timeout with no page at all is named
+        by the page before it."""
+        wizard = self.quake3_wizard()
+        s, qmp = self.session(self.page_case(wizard), frames=[ppm((10, 10, 10))])
+        lines = [(0.0, '[win32] start pid=12 exe=C:\\Q3ADemo.exe pe=1:2 shims='),
+                 *[(2.0, line) for line in self.page(4, 'Welcome', focus=False)],
+                 (2.1, self.FOCUS % (0, 0, 0, 'desktop'))]
+        drive(s, qmp, until=200, lines=lines)
+        self.assertEqual(qmp.pressed(), [])
+        s, qmp = self.session(self.page_case(wizard), frames=[ppm((10, 10, 10))],
+                              on_key={'ret#1': [self.WINDOW % (12, 4, 3, 1, 'closed', 'Welcome')]})
+        lines = [(0.0, '[win32] start pid=12 exe=C:\\Q3ADemo.exe pe=1:2 shims='),
+                 *[(2.0, line) for line in self.page(4, 'Welcome')]]
+        drive(s, qmp, until=400, lines=lines)
+        self.assertTrue(s.failed)
+        self.assertIn('no installer page shown after page welcome (title Welcome, window 4)', s.state[1]['reason'])
+
+    def test_page_wizard_validation(self):
+        wizard = self.quake3_wizard()
+        for change, message in (({'pid': None}, 'pid'), ({'pid': 'other'}, 'not captured'), ({'keys': ['ret']}, 'replace'),
+                                ({'pages': []}, 'page specs'), ({'pages': [{'name': 'a', 'title': '('}]}, 'title expression'),
+                                ({'pages': [{'name': 'a', 'title': 'x', 'keys': ['nokey']}]}, 'unknown key'),
+                                ({'pages': [{'name': 'a', 'title': 'x'}, {'name': 'a', 'title': 'y'}]}, 'unique'),
+                                ({'retry': 1}, 'retry'), ({'max_retries': 9}, 'max_retries')):
+            spec = {**wizard, **change}
+            spec = {k: v for k, v in spec.items() if v is not None}
+            with self.subTest(change=change):
+                with self.assertRaises(res.Refusal) as caught:
+                    acceptance.validate_case(self.page_case(spec))
+                self.assertIn(message, str(caught.exception))
 
     def test_wizard_waits_for_a_still_screen(self):
         steps = [{'name': 'install', 'wait': '^done$', 'timeout': 60,
@@ -511,18 +641,56 @@ class SuiteTests(unittest.TestCase):
         cls.suite = runner.load_suite('acc-t23')
         cls.raw = json.loads((ROOT / 'tests/suites/acc-t23.json').read_text())
 
+    def test_runtime_session_startup_and_first_win32_predicates(self):
+        case = next(c for c in self.raw['cases'] if c['id'] == 'acc-desktop-cd')
+        acceptance.validate_case(case)
+        assertions = {a['name']: a for a in case['assertions']}
+        records = {
+            'boot-logon-session': '[user 35] [logon] session 1 running uid=1000 start_ms=1224',
+            'boot-startup-snapshot': '[console] startup: snapshot ready entries=2',
+            'boot-first-win32': '[win32] start pid=52 exe=C:\\WINDOWS\\CDPLAYER.EXE pe=00000000:00010000 shims=',
+        }
+        for name, line in records.items():
+            pattern = assertions[name]['pattern'].replace('<<boot_win32>>', '52')
+            self.assertIsNotNone(re.search(pattern, line), name)
+        self.assertIsNone(re.search(assertions['boot-startup-snapshot']['pattern'], '[console] startup: snapshot failed: 32'))
+        steps = {s.get('name'): s for s in case['steps']}
+        self.assertEqual(steps['b1-session-startup']['since'], 'boot')
+        self.assertEqual(steps['b1-win32-command']['actions'][0]['text'], r'C:\WINDOWS\CDPLAYER.EXE')
+        self.assertEqual(steps['b1-win32-window']['actions'], [{'keys': 'alt+f4'}])
+
+    def test_accounts_autologon_keeps_the_first_boot_runtime_checks(self):
+        boot = next(c for c in self.raw['cases'] if c['id'] == 'acc-desktop-cd')
+        accounts = next(c for c in self.raw['cases'] if c['id'] == 'acc-accounts')
+        acceptance.validate_case(accounts)
+        steps = {s.get('name'): s for s in accounts['steps']}
+        for step in boot['steps']:
+            if step.get('name', '').startswith(('b1-session-', 'b1-win32-')):
+                self.assertEqual(steps[step['name']], {**step, 'check': 'autologon'})
+        assertions = {a['name']: a for a in accounts['assertions']}
+        for name in ('boot-logon-session', 'boot-startup-snapshot', 'boot-first-win32'):
+            self.assertEqual(assertions[name]['check'], 'autologon')
+        pattern = assertions['boot-logon-session']['pattern'].replace('<<b1_session>>', '1')
+        self.assertRegex('[user 35] [logon] session 1 running uid=1000 start_ms=1224', pattern)
+        self.assertNotRegex('[user 35] [logon] session 2 running uid=1001 start_ms=2400', pattern)
+
     def test_the_owner_list_in_order(self):
         self.assertTrue(self.suite['acceptance'])
         self.assertNotIn('prerequisites', self.raw)
         ids = [c['id'] for c in self.suite['cases']]
-        self.assertEqual(ids, ['acc-desktop-cd', 'acc-quake3', 'acc-dos-games', 'acc-netsurf-site-1', 'acc-netsurf-site-2',
-                               'acc-safe-restart-shutdown', 'acc-installshield5'])
+        original = ['acc-desktop-cd', 'acc-quake3', 'acc-dos-games', 'acc-netsurf-site-1', 'acc-netsurf-site-2',
+                    'acc-safe-restart-shutdown', 'acc-installshield5']
+        self.assertEqual(ids[:len(original)], original)
+        additions = ids[len(original):]
+        self.assertIn('acc-accounts', additions)
+        self.assertEqual(len([i for i in additions if i.startswith('acc-dos-')]), 20)
+        self.assertGreaterEqual(len([i for i in additions if i.startswith('acc-ipx-')]), 6)
         covered = set()
         for c in self.suite['cases']:
             covered |= {int(n) for n in c.get('items', {str(c['item']): []})}
             self.assertEqual(c['profile'], 'qemu-t23')
             self.assertTrue(c['title'])
-        self.assertEqual(covered, set(range(1, 10)))
+        self.assertEqual(covered, set(range(1, 19)))   # sec-user-06: items 10..18 are the account trials
         self.assertEqual(self.suite['cases'][0]['gate'], 'boot')
 
     def test_cases_are_valid_and_bounded(self):
@@ -532,6 +700,12 @@ class SuiteTests(unittest.TestCase):
                 kind = runner.case_kind(c)
                 total += c['timeout']
                 if kind == 'acceptance':
+                    if 'guests' in c:
+                        self.assertEqual(len(c['guests']), 2)
+                        for guest in c['guests']:
+                            self.assertEqual(runner.case_kind(guest), 'acceptance')
+                            self.assertEqual(guest['steps'][0]['template'], 'boot')
+                        continue
                     steps = acceptance.expand_steps(c['steps'])
                     self.assertEqual(bool(steps), not c.get('pending'))
                     if steps:
@@ -549,7 +723,10 @@ class SuiteTests(unittest.TestCase):
                     self.assertEqual((parsed['phase'], parsed['probe']), (6, 'browser'))
                     self.assertTrue(runner.browser_case(c))
                     self.assertEqual(c['device_exceptions'], {'network': 'i82559er'})
-        self.assertLessEqual(total, 7200 * 4)
+        # fx-games20 adds twenty independent games and their bounded LAN pairs.
+        extra = [c for c in self.suite['cases'] if 'dos_game' in c or 'guests' in c]
+        self.assertTrue(all(c['timeout'] <= 2400 for c in extra))
+        self.assertLessEqual(total, 7200 * 4 + 2400 * len(extra))
 
     def test_no_site_host_names_in_tracked_files(self):
         # The owner's site list is private: snapshots are served by number.
@@ -571,10 +748,13 @@ class SuiteTests(unittest.TestCase):
             source = q3.read_text()
             self.assertIn(exe['sha256'], source)
             self.assertIn(str(next(f for f in quake['disk']['files'] if f['path'].endswith('pak0.pk3'))['size']), source)
+        # sec-user-02 (A1-5): the installer lives in the protected installer
+        # store; the desktop folder holds only shortcuts to it (sec-user-06).
         bundled = (ROOT / 'scripts/q3a_demo.py').read_text()
-        self.assertIn('C:\\\\Documents\\\\Desktop\\\\Quake III Arena Demo\\\\Q3ADemo.exe', bundled)
+        self.assertIn('STORE_WINDOWS = "C:\\\\Programs\\\\Installers\\\\Quake III Arena Demo"', bundled)
+        self.assertIn('"Install Quake III Arena Demo.lnk": ("Install Quake III Arena Demo", "Q3ADemo.exe")', bundled)
         typed = next(a['text'] for s in quake['steps'] if s.get('name') == 'run-installer' for a in s['actions'] if 'text' in a)
-        self.assertEqual(typed, '"C:\\Documents\\Desktop\\Quake III Arena Demo\\Q3ADemo.exe"')
+        self.assertEqual(typed, '"C:\\Programs\\Installers\\Quake III Arena Demo\\Q3ADemo.exe"')
 
     def test_games_follow_the_catalogue(self):
         catalog = (ROOT / 'apps/desktop/catalog.h').read_text()
@@ -632,8 +812,22 @@ class RecordFormatTests(unittest.TestCase):
         self.assertEqual(focus, '[user 7] [desktop] focus pid=12 window=1 titled=0 internal=0 app=files')
         suite = json.loads((ROOT / 'tests/suites/acc-t23.json').read_text())
         wizard = next(s['wizard'] for c in suite['cases'] for s in c.get('steps', []) if 'wizard' in s)
-        self.assertRegex(focus, acceptance.PLACEHOLDER.sub('12', wizard['press_when']))
         self.assertRegex(focus.replace('titled=0', 'titled=1'), wizard['close_when'])
+        self.assertEqual(acceptance.FOCUS_RECORD.match(focus)['pid'], '12')
+        # fx-acc1: the program-window record the page wizard follows.
+        window = '[user 7] ' + self.render('apps/desktop/input.c', 'window pid=', order=['pid', 'w', 'owner', 'modal', 'state', 'title'],
+                                            pid=12, w=4, owner=3, modal=1, state='shown', title='Welcome')
+        self.assertEqual(window, '[user 7] [desktop] window pid=12 window=4 owner=3 modal=1 state=shown title=Welcome')
+        record = acceptance.WINDOW_RECORD.match(window)
+        self.assertEqual((record['pid'], record['window'], record['owner'], record['modal'], record['state'], record['title']),
+                         ('12', '4', '3', '1', 'shown', 'Welcome'))
+        states = re.findall(r'"(hidden|minimized|shown|closed)"', (ROOT / 'apps/desktop/input.c').read_text() +
+                            (ROOT / 'apps/desktop/client.c').read_text())
+        self.assertEqual(set(states), {'hidden', 'minimized', 'shown', 'closed'})
+        self.assertFalse(acceptance.WINDOW_RECORD.match(window.replace('title=Welcome', 'title=Two words')))
+        welcome = acceptance.Session._page_spec(wizard, {'title': 'Welcome', 'modal': True})
+        self.assertEqual(welcome['name'], 'welcome')
+        self.assertEqual(acceptance.Session._page_spec(wizard, {'title': 'IDS_TITLE', 'modal': False})['name'], 'copy')
         hung = '[user 7] ' + self.render('apps/desktop/client.c', 'not-responding pid=', order=['pid', 'w', 'state'], pid=12, state=1)
         self.assertRegex(hung, r'^\[user \d+\] \[desktop\] not-responding pid=12 window=\d+ state=1 ')
         notice = '[user 7] ' + self.render('apps/desktop/shell.c', '[desktop] %s icon=%s title=', order=['kind', 'icon'],
@@ -651,6 +845,68 @@ class RecordFormatTests(unittest.TestCase):
         self.assertRegex(files, r'^\[user \d+\] \[desktop\] launch name=files pid=(?P<cd_files>[1-9]\d*) error=0 ')
         dialog = '[console] ' + self.render('apps/desktop/client.c', 'end task dialog kind=', order=['kind', 'pid'], kind='dos', pid=40)
         self.assertRegex(dialog, r'^\[console\] \[desktop\] end task dialog kind=dos pid=40 ')
+
+    def test_desktop_console_records_are_single_lines(self):
+        """fx-acc1 (acceptance run f63df5ab, serial lines 1402-1408): every
+        write() of a program is its own [console] line, and newlib's
+        unbuffered stderr wrote each fprintf conversion separately, so
+        "end task dialog kind=dos pid=6 session=0" arrived as seven lines and
+        the DOS games' close step never matched it. fx-autorun: the SDK C
+        runtime makes stderr line buffered for every native program before
+        main (the desktop's own setvbuf is gone); every record the desktop
+        writes ends with a newline, so none is held back."""
+        crt = (ROOT / 'sdk/crt/start.c').read_text()
+        start = crt[crt.index('void __ciuki_start(uint32_t *stack) {'):]
+        self.assertLess(start.index('__sinit(&main_reent);'), start.index('stdio_line_buffering();'))
+        self.assertLess(start.index('stdio_line_buffering();'), start.index('exit(main(argc,argv,environ));'))
+        self.assertIn('stderr->_flags=(short)((stderr->_flags&~__SNBF)|__SLBF);', crt)
+        self.assertNotIn('setvbuf(stderr', (ROOT / 'apps/desktop/desktop.c').read_text())
+        unterminated, other = [], []
+        for path in sorted((ROOT / 'apps/desktop').glob('*.c')):
+            text = path.read_text()
+            for match in re.finditer(r'fprintf\(\s*stderr\s*,\s*((?:"(?:[^"\\]|\\.)*"\s*)+)', text):
+                literal = ''.join(re.findall(r'"((?:[^"\\]|\\.)*)"', match[1]))
+                if not literal.endswith('\\n'):
+                    unterminated.append((path.name, literal[:60]))
+            other += [(path.name, m[0]) for m in re.finditer(r'\b(?:fputs|fwrite|vfprintf|perror|fputc|putc)\s*\([^;]*\bstderr\b', text)]
+        self.assertEqual(unterminated, [])
+        # settings_io.c writes whole records it formatted with a final newline.
+        self.assertEqual(sorted({name for name, _ in other}), ['settings_io.c'])
+        settings = (ROOT / 'apps/desktop/settings_io.c').read_text()
+        self.assertIn('"[desktop] stage=%s us=%llu%s\\n"', settings)
+
+    def test_dosbox_full_screen_records(self):
+        """fx-dosfull: the DOS Box's automatic full screen, its refusal and the
+        remembered usage are one console line each (stderr line buffered as
+        the desktop's, fx-acc1), and the acc-dos-games patterns match them."""
+        source = (ROOT / 'apps/dosbox/dosbox.c').read_text()
+        body = source[source.index('int main(int argc, char **argv)\n{'):]
+        head = body[:body.index('int channel = 3')]
+        self.assertIn('#ifdef __i386__', head)
+        self.assertIn('setvbuf(stderr, NULL, _IOLBF, BUFSIZ);', head)
+        for match in re.finditer(r'fprintf\(\s*stderr\s*,\s*((?:"(?:[^"\\]|\\.)*"\s*)+)', source):
+            self.assertTrue(''.join(re.findall(r'"((?:[^"\\]|\\.)*)"', match[1])).endswith('\\n'), match[0])
+        refused = '[console] ' + self.render('apps/dosbox/dosbox.c', 'result=refused error=%d continuation=windowed',
+                                             order=['vm', 'gen', 'usage', 'graphics', 'error'], usage='graphics', graphics=1, error=0)
+        self.assertEqual(refused, '[console] dosbox: fullscreen auto vm=1 generation=1 usage=graphics graphics=1 result=refused error=0 continuation=windowed')
+        usage = '[console] ' + self.render('apps/dosbox/dosbox.c', 'dosbox: screen usage vm=',
+                                           order=['vm', 'gen', 'usage', 'origin', 'saved'], usage='window', origin='alt-enter', saved=1)
+        self.assertEqual(usage, '[console] dosbox: screen usage vm=1 generation=1 usage=window source=alt-enter saved=1')
+        entered = '[console] ' + self.render('apps/dosbox/dosbox.c', 'result=entered',
+                                             order=['vm', 'gen', 'usage', 'graphics'], usage='graphics', graphics=1)
+        games = next(c for c in json.loads((ROOT / 'tests/suites/acc-t23.json').read_text())['cases'] if c['id'] == 'acc-dos-games')
+        steps = {s['name']: s for s in games['steps'] if 'name' in s}
+        for g in ('doom', 'wolf3d', 'war2', 'duke3d', 'quake'):
+            with self.subTest(game=g):
+                self.assertMatches(steps[g + '-fs-auto-fallback']['wait'], refused)
+                self.assertMatches(steps[g + '-fs-auto-return']['wait'][1], usage)
+                self.assertMatches(steps[g + '-fs-auto-fallback']['fail'], usage)
+                self.assertNotRegex(entered, steps[g + '-fs-auto-fallback']['wait'].replace('<<%s_vm>>' % g, '1').replace('<<%s_gen>>' % g, '1'))
+                assertion = next(a for a in games['assertions'] if a['name'] == g + '-fs-auto-refused-once')
+                self.assertMatches(assertion['pattern'], refused)
+                # The automatic request precedes the window record (QEMU) or replaces it until the return (hardware).
+                self.assertEqual(steps[g + '-graphics']['since'], 'boot')
+                self.assertEqual(steps[g + '-fs-auto-fallback']['unless'], [g + '-fs-auto-entered'])
 
     def test_kernel_records(self):
         cases = (
@@ -753,6 +1009,162 @@ class IsoFixtureTests(unittest.TestCase):
             done = subprocess.run([sys.executable, str(ROOT / 'scripts/test/iso_fixtures.py'), '--out', str(out), '--volume-sequence', '0'],
                                   capture_output=True, text=True, check=True)
             self.assertEqual(json.loads(done.stdout)['volume_sequence'], 0)
+
+
+class InstallShield5MediumTests(unittest.TestCase):
+    """fx-acc1 item 9: the generated InstallShield 5 test medium of
+    acc-installshield5 (iso_fixtures.is5_files): authored bytes only, admitted
+    and decoded by the production bootstrap code (sdk/win32/is5boot)."""
+    CHECK = r'''
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include "private.h"
+static unsigned char *load(const char *path, unsigned *n) {
+    FILE *f = fopen(path, "rb"); if (!f) return 0;
+    fseek(f, 0, SEEK_END); long size = ftell(f); rewind(f);
+    unsigned char *p = malloc(size ? (size_t)size : 1);
+    if (p && fread(p, 1, (size_t)size, f) != (size_t)size) { free(p); p = 0; }
+    fclose(f); *n = (unsigned)size; return p;
+}
+int main(int argc, char **argv) {
+    unsigned n = 0, size = 0;
+    unsigned char *stub = load(argv[1], &n);
+    if (!stub || !is5_ne(stub, n)) { puts("FAIL stub"); return 1; }
+    unsigned char *raw = load(argv[2], &size); struct is5_archive a;
+    if (!raw || !is5_directory(raw, size, &a)) { puts("FAIL directory"); return 1; }
+    if ((int)a.count * 3 != argc - 3) { puts("FAIL count"); return 1; }
+    for (unsigned i = 0; i < a.count; i++) {
+        struct is5_member *m = a.member + i; unsigned want = 0;
+        unsigned char *expected = load(argv[5 + 3 * i], &want), *out = malloc(want ? want : 1);
+        if (!expected || strcmp(m->original, argv[3 + 3 * i]) || strcmp(m->runtime, argv[4 + 3 * i]) || m->expanded != want ||
+            !is5_dcl(raw + m->offset, m->packed, out, want) || memcmp(out, expected, want)) { printf("FAIL member %u\n", i); return 1; }
+        free(out); free(expected);
+    }
+    printf("PASS %u members\n", a.count);
+    free(raw); free(stub); return 0;
+}
+'''
+
+    def test_admitted_and_decoded_by_the_production_bootstrap(self):
+        SCRATCH.mkdir(parents=True, exist_ok=True)
+        with tempfile.TemporaryDirectory(dir=SCRATCH) as temp:
+            temp = Path(temp)
+            files = iso_fixtures.is5_files()
+            for name, data in files.items():
+                (temp / name).write_bytes(data)
+            members = [('INSTALL.EXE', '_INS0000._MP', iso_fixtures.is5_engine_pe()),
+                       ('zdata.dll', 'ZDataI51.dll', b'CiukiOS IS5 test support file 1\r\n'),
+                       ('WUTL95i.DLL', '_WUTL951.DLL', b'CiukiOS IS5 test support file 2\r\n')]
+            arguments = []
+            for k, (name, runtime, data) in enumerate(members):
+                (temp / ('member%d' % k)).write_bytes(data)
+                arguments += [name, runtime, str(temp / ('member%d' % k))]
+            (temp / 'check.c').write_text(self.CHECK)
+            binary = temp / 'check'
+            subprocess.run(['clang', '-std=c17', '-O1', '-Wall', '-Wextra', '-Werror', '-fsanitize=address,undefined',
+                            '-I', str(ROOT / 'sdk/win32/is5boot'), str(ROOT / 'sdk/win32/is5boot/archive.c'),
+                            str(temp / 'check.c'), '-o', str(binary)], check=True)
+            done = subprocess.run([str(binary), str(temp / 'SETUP.EXE'), str(temp / '_INST32I.EX_'), *arguments],
+                                  capture_output=True, text=True)
+            self.assertEqual(done.returncode, 0, done.stdout + done.stderr)
+            self.assertIn('PASS 3 members', done.stdout)
+            # A corrupted stream or a library NE header is refused by the same code.
+            broken = bytearray(files['_INST32I.EX_']); broken[-1] ^= 0xff
+            (temp / 'broken').write_bytes(broken)
+            self.assertNotEqual(subprocess.run([str(binary), str(temp / 'SETUP.EXE'), str(temp / 'broken'), *arguments],
+                                               capture_output=True).returncode, 0)
+            library = bytearray(files['SETUP.EXE']); library[0x80 + 13] |= 0x80
+            (temp / 'library').write_bytes(library)
+            self.assertNotEqual(subprocess.run([str(binary), str(temp / 'library'), str(temp / '_INST32I.EX_'), *arguments],
+                                               capture_output=True).returncode, 0)
+        # The kernel admission (is5boot.h is5_redirect) reads the same header
+        # fields and needs SETUP.INS and _INST32I.EX_ beside the stub.
+        admission = (ROOT / 'src/kernel/proc/win32/is5boot.h').read_text()
+        for needle in ('"SETUP.INS","_INST32I.EX_"', 'ne[54]!=2', '(is5_word(ne+12)&0x8000)'):
+            self.assertIn(needle, admission)
+        self.assertEqual(sorted(files), ['SETUP.EXE', 'SETUP.INI', 'SETUP.INS', 'SETUP.LID', '_INST32I.EX_'])
+        self.assertIn(b'[Startup]', files['SETUP.INI'])
+        self.assertIn(b'[Languages]', files['SETUP.LID'])
+        self.assertEqual(iso_fixtures.is5_files(), files)   # deterministic
+
+    def test_engine_pe_layout(self):
+        pe = iso_fixtures.is5_engine_pe()
+        self.assertEqual(len(pe), 1536)
+        self.assertEqual(pe[:2], b'MZ')
+        self.assertEqual(pe[0x40:0x44], b'PE\0\0')
+        machine, sections = struct_unpack('<HH', pe, 0x44)
+        self.assertEqual((machine, sections), (0x14c, 1))
+        magic = struct_unpack('<H', pe, 0x58)[0]
+        entry, = struct_unpack('<I', pe, 0x58 + 16)
+        subsystem, = struct_unpack('<H', pe, 0x58 + 68)
+        self.assertEqual((magic, subsystem), (0x10b, 2))
+        self.assertTrue(0x1000 <= entry < 0x1400)
+        for name in (b'kernel32.dll', b'CreateFileA', b'GetCurrentDirectoryA', b'WriteFile', b'CloseHandle', b'ExitProcess',
+                     iso_fixtures.IS5_ENGINE_LOG.encode()):
+            self.assertIn(name, pe)
+        self.assertIn(b'\x6a' + bytes([iso_fixtures.IS5_ENGINE_EXIT]) + b'\xff\x15', pe)   # push 42; call [ExitProcess]
+
+    @unittest.skipUnless(os.environ.get('CIUKI_IS5_WINE') and shutil.which('wine'), 'set CIUKI_IS5_WINE=1 to run the engine under Wine')
+    def test_engine_runs_under_wine(self):
+        SCRATCH.mkdir(parents=True, exist_ok=True)
+        with tempfile.TemporaryDirectory(dir=SCRATCH) as temp:
+            temp = Path(temp)
+            (temp / 'engine.exe').write_bytes(iso_fixtures.is5_engine_pe('C:\\windows\\temp\\is5engine.txt'))
+            env = dict(os.environ, WINEPREFIX=str(temp / 'prefix'), WINEDEBUG='-all')
+            done = subprocess.run(['wine', 'engine.exe'], cwd=temp, env=env, capture_output=True, text=True, timeout=600)
+            self.assertEqual(done.returncode, iso_fixtures.IS5_ENGINE_EXIT, done.stderr[-2000:])
+            written = (temp / 'prefix/drive_c/windows/temp/is5engine.txt').read_text()
+            self.assertTrue(written.endswith(temp.name), written)
+
+    @unittest.skipUnless(HAVE_XORRISO, 'xorriso absent')
+    def test_medium_iso(self):
+        SCRATCH.mkdir(parents=True, exist_ok=True)
+        with tempfile.TemporaryDirectory(dir=SCRATCH) as temp:
+            manifest = iso_fixtures.generate({'level': 3, 'label': 'CIUKI_IS5', 'content': 'is5'}, temp, media_name='is5')
+            self.assertEqual(manifest['root_entries'], ['/README.TXT', '/SETUP.EXE', '/SETUP.INI', '/SETUP.INS', '/SETUP.LID', '/_INST32I.EX_'])
+            files = iso_fixtures.is5_files()
+            for entry in manifest['entries']:
+                name = entry['path'][1:]
+                if name in files:
+                    self.assertEqual(entry['sha256'], hashlib.sha256(files[name]).hexdigest(), name)
+            self.assertEqual(manifest['content'], 'is5')
+            with self.assertRaises(ValueError):
+                iso_fixtures.generate({'level': 3, 'content': 'other'}, temp, media_name='other')
+
+    def test_case_records(self):
+        suite = json.loads((ROOT / 'tests/suites/acc-t23.json').read_text())
+        c = next(c for c in suite['cases'] if c['id'] == 'acc-installshield5')
+        self.assertFalse(c.get('pending'))
+        self.assertEqual(c['media']['is5']['content'], 'is5')
+        acceptance.validate_case(c)
+        steps = {s['name']: s for s in acceptance.expand_steps(c['steps'])}
+        start = RecordFormatTests.render('src/kernel/proc/win32/diagnostics.c', '[win32] start pid=%u exe=%s pe=%08x:%08x shims=%s',
+                                         order=['pid', 'exe'], pid=21, exe='C:\\System\\Win32\\is5boot.exe')
+        self.assertRegex(start, steps['is5-helper']['wait'])
+        self.assertRegex(start.replace('C:\\System\\Win32\\is5boot.exe', '/System/Win32/is5boot.exe'), steps['is5-helper']['wait'])
+        self.assertNotRegex(start.replace('is5boot.exe', 'SETUP.EXE'), steps['is5-helper']['wait'])
+        engine = start.replace('pid=21', 'pid=22').replace('C:\\System\\Win32\\is5boot.exe', 'C:\\WINDOWS\\TEMP\\_INS1234._MP')
+        self.assertRegex(engine, steps['is5-engine']['wait'])
+        exit_line = RecordFormatTests.render('src/kernel/proc/win32/diagnostics.c', '[win32] exit pid=', order=['pid', 'code', 'reason'],
+                                             pid=22, code='0000002a', reason='normal')
+        variables = {'is5_engine': '22', 'is5_helper': '21'}
+        fill = lambda p: acceptance.PLACEHOLDER.sub(lambda m: variables[m[1]], p)
+        self.assertRegex(exit_line, fill(steps['is5-engine-exit']['wait']))
+        self.assertTrue(any(re.match(fill(p), exit_line.replace('0000002a', '00000000')) for p in steps['is5-engine-exit']['fail']))
+        self.assertFalse(any(re.match(fill(p), exit_line) for p in steps['is5-engine-exit']['fail']))
+        self.assertRegex(exit_line.replace('pid=22', 'pid=21'), fill(steps['is5-helper-exit']['wait']))
+        box = '[user 7] ' + RecordFormatTests.render('apps/desktop/input.c', 'window pid=', order=['pid', 'w', 'owner', 'modal', 'state', 'title'],
+                                                     pid=21, w=9, owner=0, modal=0, state='shown', title='CiukiOS_IS5_Test')
+        self.assertTrue(any(re.match(fill(p), box) for p in steps['is5-helper-exit']['fail']))
+        self.assertEqual(c['disk']['files'][0]['sha256'], hashlib.sha256(b'D:\\').hexdigest())
+        self.assertEqual(c['disk']['files'][0]['path'], iso_fixtures.IS5_ENGINE_LOG)
+        self.assertIs(c['disk']['menu_links'], False)
+        self.assertEqual(steps['run-setup']['actions'][0]['text'], 'D:\\SETUP.EXE')
+        # A disk check without Start-menu links passes on its files alone.
+        delta = {'added': [{'path': 'C:/Documents/is5engine.txt', 'kind': 'file', 'size': 3, 'sha256': c['disk']['files'][0]['sha256']}]}
+        self.assertEqual(acceptance.disk_check(c['disk'], delta)['status'], 'pass')
+        self.assertEqual(acceptance.disk_check({k: v for k, v in c['disk'].items() if k != 'menu_links'}, delta)['status'], 'fail')
 
 
 class SiteFixtureTests(unittest.TestCase):
@@ -1041,7 +1453,7 @@ class MainTests(unittest.TestCase):
         out = SCRATCH / 'main-root'
         (out / 'build/test-runs').mkdir(parents=True, exist_ok=True)
         image = out / 'image.raw'; image.write_bytes(b'image')
-        for gate_fails, expected in ((False, 7), (True, 1)):
+        for gate_fails, expected in ((False, len(SUITE['cases'])), (True, 1)):
             self.gate_fails = gate_fails; calls.clear()
             (out / 'build/test-runs/acc-t23').mkdir(parents=True, exist_ok=True)
             with patch.object(runner, 'ROOT', out), patch.object(runner, 'run_case', fake_run), \
@@ -1060,7 +1472,7 @@ class MainTests(unittest.TestCase):
             page = (out / 'build/test-runs/acc-t23/summary.txt').read_text()
             self.assertIn('verdict BLOCKED', page)
             data = json.loads((out / 'build/test-runs/acc-t23/summary.json').read_text())
-            self.assertEqual(len(data['cases']), 7)
+            self.assertEqual(len(data['cases']), len(SUITE['cases']))
             if gate_fails:
                 self.assertEqual(data['cases'][1]['reason'], 'gate acc-desktop-cd failed')
                 self.assertEqual(data['cases'][1]['item'], 2)

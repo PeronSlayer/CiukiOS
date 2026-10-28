@@ -26,7 +26,7 @@ enum {
     D_DELETE = 200, D_REPLACE, D_ERROR, D_PROPERTIES, D_INFO, D_PROGRESS, D_CANCEL_JOB, D_BIN_PURGE, D_BIN_EMPTY, D_BIN_PROPS, D_BIN_ITEM, D_INSERT, D_FIND = 228,
     C_GO_DOCUMENTS = 300, C_GO_GAMES, C_GO_CONTROL, C_GO_DESKTOP, C_MUSIC, C_GO_RECYCLE, C_RESTORE, C_EMPTY_BIN, C_BIN_PROPS, C_DELETE_NOW,
     C_OPTIONS = 310, C_ATTRIBUTES = 311,
-    C_CLEANUP = 312, C_FORMAT = 313, C_COPY_DISK = 314, C_BACKUP = 315, C_DEFRAG = 316, C_CONVERT = 317,
+    C_CLEANUP = 312, C_FORMAT = 313, C_COPY_DISK = 314, C_BACKUP = 315, C_DEFRAG = 316, C_CONVERT = 317, C_AUTOPLAY = 318,
     T_JOB = 1, T_MEDIA, T_BROWSER, T_DRAG_REFRESH
 };
 #define PANE_TOP 92
@@ -60,6 +60,7 @@ static void scan_poll(struct files_app *);
 static void scan_stop(struct files_app *);
 static void open_item(struct files_app *, unsigned, int);
 static int operation_open(struct files_app *,const char *);
+static int operation_spawn_record(struct files_app *,struct desk_launch_record *);
 static void open_with(struct files_app *,const char *);
 static int operations_command(struct files_app *,int);
 static int operations_result(struct files_app *,const struct du_event *);
@@ -537,14 +538,39 @@ static int labels_refresh(struct files_app *a, const struct files_scan *s)
         int same=label->valid && label->generation==a->media.generation[d] &&
             !strcmp(label->key.volume,key.volume) && label->key.size==key.size &&
             label->key.ino==key.ino && label->key.modified==key.modified && label->key.inf_status==key.inf_status;
-        if (same || !a->media_label) continue;
-        char text[33]={0};
-        if (a->media_label(d,text)) continue;
+        if (same || (!a->media_label && !a->media_autoplay)) continue;
+        char text[33]={0}; int autoplay=0;
+        if (a->media_autoplay ? a->media_autoplay(d,text,&autoplay,&label->autoplay_record) : a->media_label(d,text)) continue;
         text[32]=0;
-        memcpy(label->text,text,sizeof(text)); label->key=key;
+        memcpy(label->text,text,sizeof(text)); label->key=key; label->autoplay=autoplay;
         label->generation=a->media.generation[d]; label->valid=1; changed=1;
     }
     return changed;
+}
+/* fx-autorun: the drive of My Computer row index whose cached AUTORUN.INF
+ * open= program the AutoPlay verb starts, else -1. Microsoft "Enabling and
+ * Disabling AutoRun": the drive's shortcut menu includes an AutoPlay command
+ * and "To run AutoRun manually, either right-click the drive icon and select
+ * AutoPlay from the shortcut menu or double-click the drive icon"; "Autorun.inf
+ * Entries", shell: without shell=, "the default menu item text will be
+ * "AutoPlay", which launches the application specified by the open entry". */
+static int autoplay_drive(const struct files_app *a,unsigned index)
+{
+    if (a->model.path[0] || a->model.searching || index>=a->model.count) return -1;
+    const struct fm_entry *e=&a->model.entries[index];
+    if (e->name[0]<'D' || e->name[0]>'Z' || e->name[1]!=':') return -1;
+    int d=e->name[0]-'A';
+    if (!(a->media.removable_mask & (1u<<d))) return -1;
+    const struct files_drive_label *l=&a->drive_labels[d];
+    return l->valid && l->autoplay && l->generation==a->media.generation[d] ? d : -1;
+}
+static void autoplay_run(struct files_app *a,int d)
+{
+    if (d<0 || d>=26) return;
+    struct desk_launch_record *r=malloc(sizeof(*r));
+    int e=r ? 0 : -ENOMEM;
+    if (r) { *r=a->drive_labels[d].autoplay_record; e=operation_spawn_record(a,r); free(r); }
+    if (e<0) files_launch_failed(a,e);
 }
 static const char *drive_label(const struct files_app *a,int drive)
 {
@@ -1103,6 +1129,7 @@ static int scan_submit(struct files_app *a, enum scan_kind kind, const char *pat
     memcpy(b->leaf, a->leaf, sizeof(b->leaf)); b->leaf_count = a->leaf_count;
     b->media = a->media; memcpy(b->drive_labels, a->drive_labels, sizeof(b->drive_labels));
     b->media_read = a->media_read; b->media_label_key = a->media_label_key; b->media_label = a->media_label;
+    b->media_autoplay = a->media_autoplay;
     b->ntfs_status=a->ntfs_status; b->ntfs_notified=a->ntfs_notified;
     memcpy(b->ntfs_notice,a->ntfs_notice,sizeof(b->ntfs_notice));
     b->media_load = a->media_load; b->model.drive_slots = a->model.drive_slots;
@@ -1423,6 +1450,15 @@ static int fold_drive(char c) { return (c >= 'A' && c <= 'Z' ? c - 'A' : c - 'a'
  * the job owns the stable source paths until this modal sheet closes. */
 static const struct du_item property_pages[] = {{.text={"General"}}, {.text={"Tools"}}};
 static const struct du_item version_pages[] = {{.text={"General"}}, {.text={"Version"}}};
+static const struct du_item screen_pages[] = {{.text={"General"}}, {.text={"Screen"}}};
+/* fx-dosfull: the Screen page's Usage group (slot 8) and its choices (slots
+ * 9-12, Windows 98 order: full screen first), as DOSBOX_SCREEN_* values:
+ * graphics full screen (the default), whole session, exclusive, window. */
+#define PROPERTY_USAGE 420
+#define PROPERTY_USAGE_SLOT 8u
+static const unsigned property_usages[4] = {3, 1, 2, 0};
+static const char property_screen_text[] = "How this MS-DOS program uses the screen in its DOS window.\n"
+    "Alt+Enter switches between full screen and a window;\nthe DOS window remembers the last choice for this program.";
 static const struct du_item option_pages[] = {{.text={"View"}}};
 static const uint32_t property_bits[] = {CIUKI_ATTR_READONLY, CIUKI_ATTR_HIDDEN, CIUKI_ATTR_ARCHIVE, CIUKI_ATTR_SYSTEM};
 /* Runs on the transfer worker before its recursive count. The completion
@@ -1441,6 +1477,7 @@ static int property_prepare(void *ctx)
     a->property_have_info=have; a->property_common=common; a->property_either=either;
     a->property_drive=j->count==1 && fm_drive_root(path) ? (!strcmp(path,"/") ? 2 : fold_drive(path[5])) : -1;
     a->property_have_space=0; a->property_have_version=0; a->property_label[0]=0;
+    a->property_have_dos=0; a->property_dos_usage=0;
     if (a->property_drive>=0) {
         a->property_have_space=a->media_space && !a->media_space((unsigned)a->property_drive,&a->property_space);
         if (a->volume_label || a->media_label) {
@@ -1449,8 +1486,11 @@ static int property_prepare(void *ctx)
                 snprintf(a->property_label,sizeof(a->property_label),"%.11s",label);
         }
         j->property_meta.type=FM_DIR; j->state=FM_DONE; /* capacity does not enumerate a drive */
-    } else if (j->count==1 && a->version_info && !(info->attributes & CIUKI_ATTR_DIRECTORY))
-        a->property_have_version=!a->version_info(path,a->property_version,sizeof(a->property_version));
+    } else if (j->count==1 && !(info->attributes & CIUKI_ATTR_DIRECTORY)) {
+        unsigned usage=0;
+        if (a->dos_usage && !a->dos_usage(path,&usage) && usage<=3) { a->property_have_dos=1; a->property_dos_usage=usage; }
+        else if (a->version_info) a->property_have_version=!a->version_info(path,a->property_version,sizeof(a->property_version));
+    }
     return 0;
 }
 
@@ -1459,17 +1499,23 @@ static void property_page(struct files_app *a)
 {
     struct du_dialog *d=&a->ui->dialog;
     int tools=a->property_drive>=0 && d->items[3].active==1;
-    int version=a->property_drive<0 && d->items[3].active==1;
-    /* G14: Check Now lives on a drive sheet's Tools page only; every other control hides there. */
-    for (unsigned i=4;i<d->count;i++)
-        d->items[i].hidden=(uint8_t)(a->property_drive>=0 && d->items[i].id==PROPERTY_CHECK_NOW ? !tools : tools || version);
+    int screen=a->property_drive<0 && a->property_have_dos && d->items[3].active==1;
+    int version=a->property_drive<0 && !a->property_have_dos && d->items[3].active==1;
+    /* G14: Check Now lives on a drive sheet's Tools page only; every other control hides there.
+     * fx-dosfull: the Usage group lives on a DOS program's Screen page only. */
+    for (unsigned i=4;i<d->count;i++) {
+        int usage=a->property_have_dos && d->items[i].id>=PROPERTY_USAGE && d->items[i].id<=PROPERTY_USAGE+4;
+        d->items[i].hidden=(uint8_t)(usage ? !screen : a->property_drive>=0 && d->items[i].id==PROPERTY_CHECK_NOW ? !tools : tools || version || screen);
+    }
     if (a->property_drive>=0) {
         struct du_widget *button=du_property_control(a->ui,9,DU_BUTTON,C_DEFRAG,(struct du_rect){24,252,190,25},"&Defragment Now...");
         button->hidden=!tools; button->disabled=!a->media_defrag;
     }
     if (a->property_drive>=0 && a->backup_call && d->count>6) d->items[6].hidden=(uint8_t)!tools;
     snprintf(d->text,sizeof(d->text),"%s",tools ?
-        (a->backup_call ? "Error-checking\nCheck Now checks this drive for errors with ScanDisk.\n\nBackup\n\n\nDefragmentation\nUse Defragment Now below." : "Error-checking\nCheck Now checks this drive for errors with ScanDisk.\n\nBackup\nBackup Now: Backup is not installed.\n\nDefragmentation\nUse Defragment Now below.") : version ? a->property_version : a->property_drive>=0 ? "" : a->property_text);
+        (a->backup_call ? "Error-checking\nCheck Now checks this drive for errors with ScanDisk.\n\nBackup\n\n\nDefragmentation\nUse Defragment Now below." : "Error-checking\nCheck Now checks this drive for errors with ScanDisk.\n\nBackup\nBackup Now: Backup is not installed.\n\nDefragmentation\nUse Defragment Now below.") : version ? a->property_version :
+        screen ? property_screen_text :
+        a->property_drive>=0 ? "" : a->property_text);
 }
 static void property_changed(struct du_ui *u,const struct du_event *e,void *ctx)
 {
@@ -1611,22 +1657,33 @@ static int property_accept(struct du_ui *u,int button,void *ctx)
                 error=a->set_label ? a->set_label((unsigned)a->property_drive,label) : -ENOSYS;
                 if (!error) { snprintf(a->property_label,sizeof(a->property_label),"%.11s",label); a->drive_labels[a->property_drive].valid=0; }
             }
-        } else if (a->set_attributes && !u->dialog.items[4].disabled) {
-            uint32_t attributes=0,mask=0;
-            for (unsigned i=0;i<4;i++) {
-                int value=u->dialog.items[4+i].value;
-                if (value!=2 && value!=a->property_attributes[i]) mask|=property_bits[i];
-                if (value==1) attributes|=property_bits[i];
+        } else {
+            if (a->set_attributes && !u->dialog.items[4].disabled) {
+                uint32_t attributes=0,mask=0;
+                for (unsigned i=0;i<4;i++) {
+                    int value=u->dialog.items[4+i].value;
+                    if (value!=2 && value!=a->property_attributes[i]) mask|=property_bits[i];
+                    if (value==1) attributes|=property_bits[i];
+                }
+                for (unsigned k=0;mask && !error && k<a->job.count;k++) {
+                    struct ciuki_file_info current;
+                    error=a->file_info(a->job.sources[k],&current);
+                    if (!error) error=a->set_attributes(a->job.sources[k],(current.attributes & CIUKI_ATTR_SETTABLE & ~mask) | (attributes & mask));
+                }
+                if (!error) for (unsigned i=0;i<4;i++) a->property_attributes[i]=u->dialog.items[4+i].value;
             }
-            for (unsigned k=0;mask && !error && k<a->job.count;k++) {
-                struct ciuki_file_info current;
-                error=a->file_info(a->job.sources[k],&current);
-                if (!error) error=a->set_attributes(a->job.sources[k],(current.attributes & CIUKI_ATTR_SETTABLE & ~mask) | (attributes & mask));
+            if (!error && a->property_have_dos && a->set_dos_usage) {
+                unsigned usage=a->property_dos_usage;
+                for (unsigned k=0;k<4;k++) if (u->dialog.items[PROPERTY_USAGE_SLOT+1+k].value) usage=property_usages[k];
+                if (usage!=a->property_dos_usage) {
+                    error=a->set_dos_usage(a->job.sources[0],usage);
+                    if (!error) a->property_dos_usage=usage;
+                }
             }
-            if (!error) for (unsigned i=0;i<4;i++) a->property_attributes[i]=u->dialog.items[4+i].value;
         }
         if (error) {
-            snprintf(u->dialog.text,sizeof(u->dialog.text),"%.850s\nCannot apply changes: %s",a->property_text,strerror(-error));
+            int screen=a->property_have_dos && u->dialog.items[3].active==1;
+            snprintf(u->dialog.text,sizeof(u->dialog.text),"%.850s\nCannot apply changes: %s",screen ? property_screen_text : a->property_text,strerror(-error));
             return 1;
         }
         scan_submit(a,SCAN_REFRESH,NULL,0);
@@ -1659,8 +1716,9 @@ static void properties_dialog(struct files_app *a)
         j->count==1 ? fm_basename(path) : "Multiple items",kind,parent,size,(unsigned long long)j->bytes,allocated,
         (unsigned long long)j->files,(unsigned long long)j->folders,
         have && j->count==1 && (info->mask & CIUKI_FILE_INFO_SHORT_NAME) ? info->short_name : "-",created,modified,accessed);
-    int version=a->property_have_version;
-    du_property_sheet(a->ui,D_PROPERTIES,title,520,362,version ? version_pages : property_pages,a->property_drive>=0 || version ? 2 : 1);
+    int version=a->property_have_version, dos=a->property_have_dos;
+    du_property_sheet(a->ui,D_PROPERTIES,title,520,362,dos ? screen_pages : version ? version_pages : property_pages,
+                      a->property_drive>=0 || version || dos ? 2 : 1);
     struct du_dialog *d=&a->ui->dialog;
     d->accept=property_accept; d->accept_ctx=a; d->changed=property_changed; d->paint=property_paint; d->sheet_ctx=a;
     d->items[2].disabled=1;
@@ -1691,6 +1749,17 @@ static void properties_dialog(struct files_app *a)
             a->property_attributes[i]=w->value;
             w->disabled=!have || !a->set_attributes || (info->flags & (CIUKI_FILE_INFO_READ_ONLY_MEDIUM | CIUKI_FILE_INFO_VOLUME_ROOT));
             if (w->disabled) du_set_text(w,names[i]+1);
+        }
+        if (dos) {
+            /* Windows 98 Screen tab, Usage (Resource Kit ch. 25, "Running Games"). */
+            static const char *const usages[]={"Full-screen for &graphics (default)","&Full-screen","E&xclusive full-screen","&Window"};
+            du_property_control(a->ui,PROPERTY_USAGE_SLOT,DU_GROUP,PROPERTY_USAGE,(struct du_rect){24,104,472,136},"Usage");
+            for (unsigned k=0;k<4;k++) {
+                struct du_widget *w=du_property_control(a->ui,PROPERTY_USAGE_SLOT+1+k,DU_RADIO,PROPERTY_USAGE+1+(int)k,
+                                                        (struct du_rect){40,126+(int)k*26,420,22},usages[k]);
+                w->total=PROPERTY_USAGE; w->value=property_usages[k]==a->property_dos_usage;
+                w->disabled=!a->set_dos_usage;
+            }
         }
     }
     property_page(a);
@@ -2095,7 +2164,9 @@ static void context(struct files_app *a, const struct du_event *e)
             du_popup(a->ui, a->popup, a->popup_count, e->x, e->y, e->id);
             return;
         }
-        popup_add(a, "&Open", C_OPEN, DU_ITEM_DEFAULT);
+        int autoplay = n == 1 ? autoplay_drive(a, (unsigned)e->index) : -1;
+        if (autoplay >= 0) popup_add(a, "Auto&Play", C_AUTOPLAY, DU_ITEM_DEFAULT);
+        popup_add(a, "&Open", C_OPEN, autoplay >= 0 ? 0 : DU_ITEM_DEFAULT);
         if (m->searching) popup_add(a, "Open Containing &Folder", C_FIND_FOLDER, 0);
         int target=removal_target(a);
         if (target>=3) popup_add(a, removal_label(a,target), C_SAFE_REMOVE, 0);
@@ -2242,6 +2313,9 @@ static void command(struct files_app *a, int id)
         if (drive>=0) (void)files_disk_open(a,(unsigned)drive,id==C_FORMAT);
         break;
     }
+    case C_AUTOPLAY:
+        if (!a->loading && fm_selected(m, NULL)==1 && m->active < m->count) autoplay_run(a, autoplay_drive(a, m->active));
+        break;
     case C_SAFE_REMOVE: {
         int d=removal_target(a);
         if (d<3) break;
@@ -2737,7 +2811,11 @@ void files_event(struct du_ui *u, const struct du_event *e, void *arg)
         }
         break;
     case DU_EV_OPEN:
-        if (e->id == W_LIST && e->index >= 0) open_item(a, (unsigned)e->index, 0);
+        /* fx-autorun: double-click/Enter runs a drive's default verb, which
+         * is AutoPlay when its AUTORUN.INF names a program (autoplay_drive). */
+        if (e->id == W_LIST && e->index >= 0 && !a->loading && autoplay_drive(a, (unsigned)e->index) >= 0)
+            autoplay_run(a, autoplay_drive(a, (unsigned)e->index));
+        else if (e->id == W_LIST && e->index >= 0) open_item(a, (unsigned)e->index, 0);
         else if (e->id == W_TREE) toggle_node(a, e->index);
         break;
     case DU_EV_SORT: {

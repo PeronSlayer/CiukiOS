@@ -32,7 +32,11 @@ int acct_body_decode(unsigned service, unsigned op, const void *v, size_t n, uin
         t.operation=ACCT_LIST; *q=t; return 0;
     }
     if(service!=1 && service!=2) return -EOPNOTSUPP;
-    if(!op || (service==1?op>7:op>9)) return -EOPNOTSUPP;
+    if(!op || (service==1?op>8:op>9)) return -EOPNOTSUPP; /* sec-user-04: AUTH 8 */
+    if(service==1 && op==8) { /* sec-user-04: ENROLL_SOURCE, empty request */
+        if(n) return -EINVAL;
+        t.operation=ACCT_ENROLL_SOURCE; *q=t; return 0;
+    }
     if(service==1 && op==7) {
         if(!p || n<72 || a32(p)!=1 || !a32(p+4) || a32(p+4)>16 || n!=32+40*a32(p+4) || a32(p+12) || a64(p+24)) return -EINVAL;
         t.operation=ACCT_ENROLL_PLAN; t.plan_count=a32(p+4); t.first_old_id=a32(p+8); t.generation=a64(p+16);
@@ -111,7 +115,7 @@ int acct_public_encode(const struct acct_response *r, void *v, size_t cap, size_
     uint8_t *p=v; memset(p,0,*n); w32(p,1); w32(p+4,r->count); w64(p+8,r->generation);
     for(unsigned i=0;i<r->count;++i) {
         const struct acct_public *r0=&r->records[i]; uint8_t *b=p+16+144*i;
-        w32(b,r0->uid); w32(b+4,r0->groups); w32(b+8,r0->flags&3);
+        w32(b,r0->uid); w32(b+4,r0->groups); w32(b+8,r0->flags&(3u|ACCT_PUBLIC_BLANK_LOGON));
         memcpy(b+16,r0->name,32); memcpy(b+48,r0->picture,96);
     }
     return 0;
@@ -237,6 +241,7 @@ int acct_reply_body(unsigned service, unsigned operation, const struct acct_resp
     if(!r || !n || r->error>0) return -EINVAL;
     *n=0;
     if(r->error) return 0;
+    if(service==1 && operation==8) return acct_source_encode(r,v,cap,n); /* sec-user-04 */
     if(r->body_bytes) {
         if(!v || r->body_bytes>sizeof(r->body) || cap<r->body_bytes) return -ENOSPC;
         memcpy(v,r->body,r->body_bytes); *n=r->body_bytes; return 0;

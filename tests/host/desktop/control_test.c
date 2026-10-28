@@ -139,6 +139,7 @@ static int remove_program(void *ctx,const struct desk_uninstall_entry *r)
 static int install_program(void *ctx,const char *path)
 {(void)ctx;assert(!strcmp(path,"/mnt/d/SETUP.EXE"));program_installs++;return 0;}
 static void programs_changed(void *ctx){(void)ctx;program_changes++;}
+static int standard_user(void *ctx) { (void)ctx; return 0; }   /* sec-user-04 */
 static void programs_page(void)
 {
     attach(CP_HOME);
@@ -161,6 +162,13 @@ static void programs_page(void)
     program_overflow=1;cp_open(&a,CP_UNINSTALL);
     assert(a.uninstall_count==2 && strstr(du_get(&u,985)->text,"More programs exist"));
     program_overflow=0;
+    cp_detach(&a);du_release(&u);
+    /* sec-user-04: a Standard user sees the all-users bundled game but cannot remove it. */
+    attach(CP_HOME);
+    a.host.uninstall_list=installed_programs;a.host.program_remove=remove_program;a.host.self_admin=standard_user;
+    cp_open(&a,CP_UNINSTALL);
+    assert(a.machine_locked && du_get(&u,983)->disabled && !strcmp(du_get(&u,985)->text,"You must be an administrator to change this setting."));
+    unsigned removes=program_removes; at_click_widget(&u,983); assert(!du_dialog_id(&u) && program_removes==removes);
     cp_detach(&a);du_release(&u);
 }
 static struct ciuki_joystick_control joystick_pending;
@@ -416,6 +424,150 @@ static void users_controls(void)
     puts("PASS G32 Users and Passwords: list, masked secret canvases, create, delete Cancel, options, old/new/confirm, asynchronous failure");
 }
 
+/* --- sec-user-04 block: User Accounts over the account service (accounts.inc),
+ * the Passwords alias, per-user saver/resume preferences and the machine
+ * fields of Power for a Standard user. The service itself is H12. --- */
+static struct cpa_request acct_pending; static struct cpa_view acct_view;
+static int acct_ready, acct_error, acct_admin=1; static unsigned acct_begins, password_notices;
+static int acct_begin(void *ctx,const struct cpa_request *q)
+{ (void)ctx; acct_pending=*q; acct_ready=1; acct_begins++; return 0; }
+static int acct_poll(void *ctx,struct cpa_view *v,int *e)
+{ (void)ctx; if (!acct_ready) return 0; acct_ready=0; *v=acct_view; *e=acct_error; return 1; }
+static int acct_self_admin(void *ctx) { (void)ctx; return acct_admin; }
+static int acct_apply(void *ctx,unsigned r,int v,int m)
+{ (void)ctx; (void)v; (void)m; if (r==DESK_SETTINGS_PASSWORD_SET) password_notices++; else { assert(r==DESK_SETTINGS_RELOAD); applies++; } return 0; }
+static void acct_record(unsigned i,uint32_t uid,const char *name,uint32_t flags,uint32_t groups)
+{ acct_view.records[i]=(struct cpa_record){.uid=uid,.flags=flags,.groups=groups}; snprintf(acct_view.records[i].name,32,"%s",name); }
+static void acct_type(int id,const char *text) { for (const char *p=text;*p;p++) user_key(id,(unsigned char)*p); }
+/* CIUKI_ACCOUNTS_FRAMES=<dir> keeps the User Accounts renders for review. */
+static void accounts_frame(const char *name)
+{ const char *dir=getenv("CIUKI_ACCOUNTS_FRAMES"); if (dir) { render_settled(&u); at_save(dir,name,&u); } }
+static void accounts_controls(void)
+{
+    memset(&acct_view,0,sizeof(acct_view)); acct_view.valid=1; acct_view.self_uid=1000; acct_view.self_admin=1; acct_view.count=3;
+    acct_record(0,500,"CiukiAdministrator",CPA_ADMIN,3); acct_record(1,501,"Guest",0,4); acct_record(2,1000,"Alice",CPA_ENABLED|CPA_ADMIN,3);
+    attach(CP_HOME); a.host.accounts_begin=acct_begin; a.host.accounts_poll=acct_poll; a.host.self_admin=acct_self_admin; a.host.apply=acct_apply;
+    assert(cp_page_index("users")==CP_USERS && cp_page_index("passwords")==CP_PASSWORDS);
+    unsigned listed=0; for (unsigned k=0;k<CP_APPLETS;k++) listed+=cp_applets[k].page==CP_USERS || cp_applets[k].page==CP_PASSWORDS;
+    assert(listed==1);   /* one User Accounts applet; "passwords" stays a launch alias */
+    cp_open(&a,CP_USERS); assert(acct_pending.action==CPA_READ && a.account_busy);
+    cp_tick(&a); assert(!a.account_busy && du_get(&u,1620)->count==3 && a.account_uid==1000);
+    /* The account in use: create is offered, delete/type/turn off are not. */
+    assert(!du_get(&u,1630)->disabled && du_get(&u,1634)->disabled && du_get(&u,1635)->disabled && du_get(&u,1636)->disabled);
+    assert(strstr(du_get(&u,1652)->text,"account you are using"));
+    accounts_frame("accounts-admin");
+    at_click_widget(&u,1630); assert(a.account_task==1 && du_get(&u,1642) && du_get(&u,1647) && du_get(&u,1649));
+    du_set_text(du_get(&u,1642),"Bob"); acct_type(1647,"bobpass12"); acct_type(1649,"bobpass12"); du_render(&u);
+    assert(!strcmp(a.account_request.password,"bobpass12") && !du_get(&u,1647)->text[0]);   /* masked canvas, no widget text */
+    accounts_frame("accounts-create");
+    at_click_widget(&u,1650);
+    assert(acct_pending.action==CPA_CREATE && !strcmp(acct_pending.name,"Bob") && !strcmp(acct_pending.password,"bobpass12") &&
+           !strcmp(acct_pending.confirm,"bobpass12") && acct_pending.enable && !acct_pending.admin);
+    assert(!a.account_request.password[0] && !a.account_request.confirm[0] && a.account_busy);
+    acct_record(3,1001,"Bob",CPA_ENABLED,2); acct_view.count=4;
+    cp_tick(&a); assert(!a.account_task && strstr(a.account_note,"created") && du_get(&u,1620)->count==4);
+    struct du_event pick={.type=DU_EV_SELECT,.id=1620,.index=3}; u.event(&u,&pick,u.user);
+    assert(a.account_uid==1001 && !du_get(&u,1636)->disabled && !du_get(&u,1634)->disabled);
+    at_click_widget(&u,1636); assert(a.account_task==7); at_click_widget(&u,1650);
+    assert(acct_pending.action==CPA_DELETE && acct_pending.uid==1001);
+    acct_error=-EBUSY; cp_tick(&a); assert(strstr(a.account_note,"logged on") && a.account_task==7); acct_error=0;
+    at_click_widget(&u,1651); assert(!a.account_task);
+    /* Built-in Guest: no rename/type; password reset and turn on offered. */
+    struct du_event guest={.type=DU_EV_SELECT,.id=1620,.index=1}; u.event(&u,&guest,u.user);
+    assert(du_get(&u,1631)->disabled && du_get(&u,1634)->disabled && !du_get(&u,1632)->disabled && !du_get(&u,1635)->disabled);
+    assert(!strcmp(du_get(&u,1632)->text,"Reset the password") && !strcmp(du_get(&u,1635)->text,"Turn on the account"));
+    cp_detach(&a);
+    puts("PASS sec-user-04 User Accounts (administrator): one applet, account list, task gating for the account in use and "
+         "built-ins, masked create form, request then wipe, result notes");
+
+    /* A Standard user: only his own account; the reason is shown. */
+    acct_view.self_uid=1001; acct_view.self_admin=0;
+    attach(CP_HOME); a.host.accounts_begin=acct_begin; a.host.accounts_poll=acct_poll; a.host.self_admin=acct_self_admin; a.host.apply=acct_apply;
+    cp_open(&a,CP_USERS); cp_tick(&a);
+    assert(du_get(&u,1620)->count==1 && a.account_uid==1001 && du_get(&u,1630)->disabled && du_get(&u,1631)->disabled &&
+           !du_get(&u,1632)->disabled && !du_get(&u,1633)->disabled && du_get(&u,1634)->disabled);
+    assert(!strcmp(a.account_note,"You must be an administrator to change this setting."));
+    accounts_frame("accounts-standard");
+    cp_detach(&a);
+    /* --panel=passwords: the own password task; success tells the desktop. */
+    attach(CP_HOME); a.host.accounts_begin=acct_begin; a.host.accounts_poll=acct_poll; a.host.self_admin=acct_self_admin; a.host.apply=acct_apply;
+    cp_open(&a,CP_PASSWORDS); cp_tick(&a);
+    assert(a.account_task==3 && a.account_uid==1001 && du_get(&u,1645) && du_get(&u,1647) && du_get(&u,1649));
+    accounts_frame("accounts-password");
+    acct_type(1645,"oldpass12"); acct_type(1647,"newpass12"); acct_type(1649,"newpass12");
+    at_click_widget(&u,1650);
+    assert(acct_pending.action==CPA_PASSWORD && acct_pending.uid==1001 && !strcmp(acct_pending.old_password,"oldpass12"));
+    acct_error=-EACCES; cp_tick(&a); assert(strstr(a.account_note,"current password is incorrect") && !password_notices); acct_error=0;
+    acct_type(1645,"oldpass12"); acct_type(1647,"newpass12"); acct_type(1649,"newpass12"); at_click_widget(&u,1650);
+    cp_tick(&a); assert(password_notices==1 && strstr(a.account_note,"password was changed") && !a.account_task);
+    cp_detach(&a);
+    puts("PASS sec-user-04 User Accounts (Standard user, Passwords alias): own account only with the administrator reason, "
+         "old/new/confirm password task, wrong password note, success notifies the desktop once");
+
+    /* Per-user saver and resume preferences; machine power fields locked. */
+    saved_n=0; acct_admin=0;
+    attach(CP_HOME); a.host.accounts_begin=acct_begin; a.host.accounts_poll=acct_poll; a.host.self_admin=acct_self_admin; a.host.apply=acct_apply;
+    cp_open(&a,CP_DISPLAY); a.display_tab=CP_SCREEN_SAVER;
+    struct du_event tab={.type=DU_EV_SELECT,.id=CP_DISPLAY_TABS_ID,.index=CP_SCREEN_SAVER}; u.event(&u,&tab,u.user); cp_tick(&a);
+    assert(du_get(&u,CP_SAVER_PASSWORD)->value && !du_get(&u,CP_SAVER_PASSWORD)->disabled && !strcmp(du_get(&u,CP_SAVER_PASSWORD)->text,"On resume, password protect"));
+    unsigned begins_before=acct_begins;
+    at_click_widget(&u,CP_SAVER_PASSWORD); assert(strstr(saved,"secure_saver=0\n") && acct_begins==begins_before);   /* a preference, not an account change */
+    cp_open(&a,CP_POWER);
+    assert(a.machine_locked && du_get(&u,1870+PP_STANDBY)->disabled && !du_get(&u,1870+PP_MONITOR)->disabled && du_get(&u,1870+PP_DISKS)->disabled);
+    assert(!strcmp(du_get(&u,1861)->text,"You must be an administrator to change this setting."));
+    int advanced=-1; for (int k=0;k<a.pw_tab_count;k++) if (a.pw_tabs_map[k]==3) advanced=k;
+    struct du_event power_tab={.type=DU_EV_SELECT,.id=1850,.index=advanced}; u.event(&u,&power_tab,u.user);
+    assert(a.pw_tab==3 && du_get(&u,1906)->value==1 && du_get(&u,1910)->disabled);
+    at_click_widget(&u,1906); assert(strstr(saved,"secure_resume=0\n") && strstr(saved,"secure_saver=0\n"));
+    cp_detach(&a); acct_admin=1; saved_n=0;
+    puts("PASS sec-user-04 preferences: On resume, password protect and the resume prompt are per user (secure_saver/"
+         "secure_resume), power buttons and the standby/disk timers stay with administrators");
+}
+/* --- end sec-user-04 block --- */
+/* --- sec-k08 block (lead decision U4-6): in a LOGON session the power
+ * button and lid are the machine's power.cfg, saved through the SYSTEM
+ * setting service; the user's own desktop.cfg lines neither show nor change
+ * them. The service itself is H16. --- */
+static char machine_text[160]; static size_t machine_n; static int machine_saves, machine_error;
+static int machine_load(void *ctx,char *t,size_t cap,size_t *n)
+{ (void)ctx; if (!machine_n) return -ENOENT; assert(machine_n<cap); memcpy(t,machine_text,machine_n); *n=machine_n; return 0; }
+static int machine_save(void *ctx,const char *t,size_t n)
+{ (void)ctx; if (machine_error) return machine_error; assert(n<sizeof(machine_text)); memcpy(machine_text,t,n); machine_text[n]=0; machine_n=n; machine_saves++; return 0; }
+static void machine_power_buttons(void)
+{
+    power_events_record=(struct ciuki_power_events){.version=1,.size=sizeof(power_events_record),.standby_reason=CIUKI_POWER_STANDBY_AVAILABLE};
+    power_events_ok=1; saved_n=0; saves=applies=0; machine_saves=0; machine_error=0; acct_admin=1;
+    /* The user's own file says Stand by; the machine file says Shut down. */
+    strcpy(saved,"power_button=standby\npower_lid=standby\n"); saved_n=strlen(saved);
+    strcpy(machine_text,"power_button=shutdown\npower_lid=none\n"); machine_n=strlen(machine_text);
+    attach(CP_HOME); a.host.power_status=apm_t23_fixture; a.host.power_events=power_events;
+    a.host.accounts_begin=acct_begin; a.host.accounts_poll=acct_poll; a.host.self_admin=acct_self_admin; a.host.apply=acct_apply;
+    a.host.power_machine_load=machine_load; a.host.power_machine_save=machine_save;
+    cp_open(&a,CP_POWER); power_emit(DU_EV_SELECT,PW_TABS,3,NULL);
+    assert(!strcmp(du_get(&u,PW_BUTTON)->text,"Shut down") && !strcmp(du_get(&u,PW_LID)->text,"None"));
+    /* An administrator: the choice goes to the SYSTEM service, not to desktop.cfg. */
+    at_click_widget(&u,PW_BUTTON); power_pick("Stand by");
+    assert(machine_saves==1 && !strcmp(machine_text,"power_button=standby\npower_lid=none\n") && !saves && applies==1);
+    at_click_widget(&u,PW_LID); power_pick("Shut down");
+    assert(machine_saves==2 && !strcmp(machine_text,"power_button=standby\npower_lid=shutdown\n") && !saves);
+    assert(!strcmp(du_get(&u,PW_BUTTON)->text,"Stand by") && !strcmp(du_get(&u,PW_LID)->text,"Shut down"));
+    cp_detach(&a);
+    /* A Standard user: controls disabled; a forced change is refused by the
+     * service and the page shows the machine's values again. */
+    acct_admin=0; machine_error=-EPERM;
+    attach(CP_HOME); a.host.power_status=apm_t23_fixture; a.host.power_events=power_events;
+    a.host.accounts_begin=acct_begin; a.host.accounts_poll=acct_poll; a.host.self_admin=acct_self_admin; a.host.apply=acct_apply;
+    a.host.power_machine_load=machine_load; a.host.power_machine_save=machine_save;
+    cp_open(&a,CP_POWER); power_emit(DU_EV_SELECT,PW_TABS,3,NULL);
+    assert(du_get(&u,PW_BUTTON)->disabled && du_get(&u,PW_LID)->disabled && !strcmp(du_get(&u,PW_BUTTON)->text,"Stand by"));
+    at_click_widget(&u,PW_BUTTON); assert(!u.popup_count);
+    power_emit(DU_EV_ACTIVATE,PW_ITEM,PW_BUTTON,NULL);   /* a forged menu choice */
+    assert(machine_saves==2 && !saves && !strcmp(machine_text,"power_button=standby\npower_lid=shutdown\n"));
+    cp_detach(&a); acct_admin=1; machine_error=0; saved_n=0; machine_n=0;
+    puts("PASS sec-k08 machine power buttons: power.cfg shown over the user's own lines, administrators save through the SYSTEM "
+         "setting service (desktop reloads), Standard users see them disabled and the service refusal keeps the machine's values");
+}
+/* --- end sec-k08 block --- */
 #include "regional_control_test.h"
 static void internet_page(void)
 {
@@ -477,6 +629,8 @@ int main(int argc, char **argv)
 {
     if(argc==2 && !strcmp(argv[1],"--internet-only")) { setvbuf(stdout,NULL,_IONBF,0);internet_page();return 0; }
     users_controls();
+    accounts_controls();   /* sec-user-04 */
+    machine_power_buttons();   /* sec-k08 */
     assert(argc == 3 || argc == 4);
     FILE *f = fopen(argv[1], "rb"); assert(f && fread(portrait, 4, 256 * 256, f) == 256 * 256); fclose(f);
     folder = argv[2];

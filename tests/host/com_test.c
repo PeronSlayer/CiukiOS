@@ -7,6 +7,7 @@
 #include <string.h>
 #define CIUKI_CPU_H
 #include <ciuki/kernel.h>
+#include "security/subject_fixture.h"
 #include <ciuki/com.h>
 #include <ciuki/desktop.h>
 #include <ciuki/task.h>
@@ -445,7 +446,14 @@ static void native(void)
     assert(!com_devctl(&user_process,5,COM_GET_OWNER,0x1000,sizeof(owner)));
     memcpy(&owner,user_bytes,sizeof(owner)); assert(owner.kind==CIUKI_COM_OWNER_NATIVE && owner.id==42 && owner.generation==d.com_generation);
     struct ciuki_com_mouse mouse={1,sizeof(mouse),CIUKI_SERIAL_MOUSE_LOGITECH,0};
-    memcpy(user_bytes,&mouse,sizeof(mouse)); assert(!com_devctl(&user_process,5,COM_SET_MOUSE,0x1000,sizeof(mouse)));
+    memcpy(user_bytes,&mouse,sizeof(mouse));
+    unsigned mouse_writes=writes;
+    security_fixture_identity(&user_process,1001,1,false,0);
+    assert(com_devctl(&user_process,5,COM_SET_MOUSE,0x1000,sizeof(mouse))==-EPERM && writes==mouse_writes);
+    security_fixture_identity(&user_process,501,1,false,0);
+    assert(com_devctl(&user_process,5,COM_SET_MOUSE,0x1000,sizeof(mouse))==-EPERM && writes==mouse_writes);
+    security_fixture_identity(&user_process,500,1,true,0);
+    assert(!com_devctl(&user_process,5,COM_SET_MOUSE,0x1000,sizeof(mouse)));
     mouse.protocol=0; memcpy(user_bytes,&mouse,sizeof(mouse));
     assert(!com_devctl(&user_process,5,COM_SET_MOUSE,0x1000,sizeof(mouse)));
     assert(com_devctl(&user_process,6,COM_GET_STATUS,0x1000,sizeof(s))==-EBADF);
@@ -493,4 +501,4 @@ static void peripheral_leases(void)
     r.flags=0; assert(!com_open(0,&g)); assert(com_firmware_assigned(&r)==-EBUSY); com_close(0,g);
     printf("COM peripheral leases, firmware routes and input: PASS\n");
 }
-int main(void) { setvbuf(stdout,0,_IONBF,0); generations(); arbitration(); faults_and_abi(); aggregate_budget(); discovery(); native(); peripheral_leases(); reset(); return 0; }
+int main(void) { security_fixture_identity(&user_process,1000,1,true,0); setvbuf(stdout,0,_IONBF,0); generations(); arbitration(); faults_and_abi(); aggregate_budget(); discovery(); native(); peripheral_leases(); reset(); return 0; }

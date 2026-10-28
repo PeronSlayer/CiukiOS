@@ -1,5 +1,6 @@
 /* SPDX-License-Identifier: MIT. Clipboard Viewer, native shared clipboard. */
 #include "acc.h"
+#include "../desktop/profile.h" /* sec-user-04: My Documents is per user */
 #include "../libdeskui/clipboard.h"
 #include "../libdeskui/clipstore.h"
 #include "../libdeskui/clipfile.h"
@@ -165,7 +166,7 @@ static void event(struct du_ui *ui, const struct du_event *event, void *ctx)
     struct viewer *v=ctx; int e=0;
     if (event->type==DU_EV_ACTIVATE) {
         if (event->id==EXIT) du_window_close(&v->window);
-        else if (event->id==OPEN || event->id==SAVE) du_file_dialog(ui,event->id==OPEN ? OPEN_DIALOG : SAVE_DIALOG,event->id==SAVE,event->id==OPEN ? "Open Clipboard" : "Save Clipboard","/Documents","clipboard.clp",list,NULL);
+        else if (event->id==OPEN || event->id==SAVE) du_file_dialog(ui,event->id==OPEN ? OPEN_DIALOG : SAVE_DIALOG,event->id==SAVE,event->id==OPEN ? "Open Clipboard" : "Save Clipboard",profile_home(),"clipboard.clp",list,NULL);
         else if (event->id==DELETE) { e=du_clip_open(); if (!e) { e=du_clip_empty(); du_clip_close(); } }
         else if (event->id>=FORMAT && (unsigned)(event->id-FORMAT)<v->formats.count) { v->selected=v->formats.formats[event->id-FORMAT]; preview(v); }
     } else if (event->type==DU_EV_DIALOG && !event->index && event->text) {

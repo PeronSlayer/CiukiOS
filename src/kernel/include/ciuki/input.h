@@ -40,6 +40,21 @@ void input_serial_event(uint16_t type, uint16_t code, int32_t value, gen_t gener
 void input_hid_event(uint16_t type, uint16_t code, int32_t value, uint32_t device,
                      gen_t generation, uint64_t tick);
 
+/* --- sec-k07 (begin): trusted console input domain ---
+ * INPUT_ATTENTION is queued only by the kernel's physical secure attention
+ * filter and only while the queue feeds the trusted domain; code is the
+ * CIUKI_SECURITY_SECURE_* reason. Grants deliver it to LOGON_UI alone. */
+enum { INPUT_ATTENTION = 13 };
+bool input_secure_trusted(void);
+void input_secure_domain(bool trusted, uint32_t attention);
+void input_secure_stats(uint64_t *discarded, uint64_t *attentions);
+/* sec-user-06: the T boot's security.lock_latency only (drivers/i8042.c);
+ * -EPERM outside a self-test boot, -ENOENT before the LOGON role. */
+int input_selftest_attention(void);
+struct input_event;
+bool input_read_domain(struct input_event *out, bool trusted);
+/* --- sec-k07 (end) --- */
+
 #define INPUT_KEY_A 0x1Eu
 #define INPUT_KEY_PAUSE 0x200u
 

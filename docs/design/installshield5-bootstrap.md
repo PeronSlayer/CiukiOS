@@ -200,3 +200,41 @@ install; there the game's own imports stop it (gdi32 `GetBoundsRect` for the
 executable; kernel32 `OpenFileMappingA` and user32 `WindowFromDC` for the GL
 renderer DLL). That is Half-Life runtime compatibility, outside the
 bootstrap and installer path.
+
+## Desktop launch routing (fx-autorun, 2026-10-27)
+
+A QEMU run of the canonical image with the Half-Life CD showed that the
+desktop never reached the admission above: `desk_w32_identify`
+(`apps/desktop/win32_launch.c`) sent every MZ image without "PE\0\0" to the
+DOS Box, so `D:\SETUP.EXE` opened a FreeDOS prompt. The desktop now
+classifies MZ images as the Windows loader does (`apps/desktop/exe_kind.h`,
+Wine 10.0 `server/mapping.c` `get_image_params`): PE and NE with target OS 2
+(Windows) go to the Win32 personality; NE for OS/2/BOSS, LE/LX and plain MZ
+stay MS-DOS programs. Start > Run, Files/My Computer, desktop shortcuts, the
+Startup folder and AutoPlay all use it.
+
+The native Win32 launcher (`apps/desktop/win32_launcher.c`) used to pass the
+POSIX path (`/mnt/d/SETUP.EXE`) as argv[0], which becomes the image path and
+the admission's `source`. The kernel loader namespace reads an absolute
+`/...` name relative to the current drive (`w32_loader_open`), and the helper
+starts in the program's folder (D:), so `SETUP.INS` would have been looked up
+as `/mnt/D/mnt/d/SETUP.INS`, and the bootstrap would have derived
+`-f/mnt/d/SETUP.INS`. The launcher now names the image in Windows form
+(`D:\SETUP.EXE`, `C:\...` for the root namespace; `desk_w32_windows_path`) in
+argv[0] and in the command line, as Explorer starts programs; the kernel
+still opens the native path. A program started that way also sees its own
+drive in GetModuleFileName, and the kernel's CreateProcess search for a bare
+name tries the caller's image folder first (`src/kernel/proc/win32/process.c`
+`executable`), so a disc's autorun program that starts `SETUP.EXE` by name
+gets the full `D:\SETUP.EXE` the admission needs (with the POSIX image path
+that first candidate missed and the resolved name stayed relative, which
+the bootstrap refuses).
+
+Any other 16-bit Windows program is refused by `w32_spawn` with the new
+reason `W32_REFUSE_WIN16` (`[win32] load check=win16-application error=193`,
+`[win32] refuse win16`), shown by the desktop as "NAME is a 16-bit Windows
+program. It needs 16-bit Windows support, which this version of CiukiOS does
+not include." (Windows 98 runs these in its Win16 subsystem; CiukiOS's Win16
+subsystem follows the 1.0 Beta.) A DLL started as a program is now refused
+with the ordinary "not a valid Win32 application" dialog as well, so a spawn
+that fails with `-ENOEXEC` is always explained to the user.

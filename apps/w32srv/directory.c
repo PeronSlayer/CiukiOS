@@ -82,6 +82,7 @@ int wr_directory_init(struct wr_server *s)
 }
 uint32_t wr_new_id(struct wr_server *s)
 {
+    if(s->secured)return s->next_id<0x7fffffffu?++s->next_id:0;
     if(s->next_id>=s->reserved_id){
         if(s->reserved_id>0x7fffebffu)return 0;uint32_t old=s->reserved_id;s->reserved_id+=1024;
         if(save(s)){s->reserved_id=old;return 0;}

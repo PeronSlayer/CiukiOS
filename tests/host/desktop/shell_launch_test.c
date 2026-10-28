@@ -1129,15 +1129,18 @@ __attribute__((noinline)) static void test_menu_icons(void)
     static struct desktop d;
     uint8_t elf[52]={0x7f,'E','L','F',1,1,1}; elf[16]=2; elf[18]=3; elf[20]=1; elf[40]=52;
     static const char *const bin[]={"calc","charmap","ciukide","ciuknote","clock","control","demo","dosbox","files","hello","help",
-                                    "libc_smoke","lua","mixer","netsurf","tasks","tcc","viewer","newtool"};
+                                    "libc_smoke","lua","mixer","netsurf","tasks","tcc","viewer","newtool","sectest"};
     fake_reset(); desk_init(&d,&fake_ops,1024,768); desk_shell_enable(&d);
     for (unsigned i=0;i<sizeof(bin)/sizeof(bin[0]);i++) desk_program_add(&d,bin[i],elf,sizeof(elf));
+    assert(d.program_count==sizeof(bin)/sizeof(bin[0]));
+    assert(!strcmp(desk_program_category("sectest"),"hidden"));
     d.sh.cfg.recent_count=1; snprintf(d.sh.cfg.recent[0],sizeof(d.sh.cfg.recent[0]),"/notes.txt");
     static const int kinds[]={SH_MENU_START,SH_MENU_PROGRAMS,SH_MENU_ACCESSORIES,SH_MENU_GAMES,SH_MENU_DEVELOPER,SH_MENU_DOCUMENTS,
                               SH_MENU_SETTINGS,SH_MENU_HELP,SH_MENU_DESKTOP,SH_MENU_ICON,SH_MENU_TASK};
     for (unsigned k=0;k<sizeof(kinds)/sizeof(kinds[0]);k++) {
         d.sh.menu_owner=0; desk_menu_open(&d,kinds[k],0,0);
         const struct sh_menu *m=&d.sh.menus[0];
+        assert(item_at(m,"Security Test")<0 && item_at(m,"sectest")<0);
         assert(m->icon==(kinds[k]==SH_MENU_START && !d.sh.cfg.start_small ? 32 : 16));
         for (int a=0;a<m->count;a++) for (int b=a+1;b<m->count;b++) {
             const struct sh_item *x=&m->items[a], *y=&m->items[b];

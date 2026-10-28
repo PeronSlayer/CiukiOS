@@ -214,4 +214,7 @@ and report bind failure at mount. No public ABI extension is needed. Profile
 publication acknowledgement and cache update share a mutex with restart's
 snapshot and spawn. Rebind inherited shell folder defaults only when a profile
 hive is first created; persisted redirections and deletions remain authoritative.
-No kernel user-security contract or future SYSTEM-service policy is implemented.
+The kernel user-security contract and the SYSTEM services now supersede the profile-only rules
+above (sec-k01..sec-k07, sec-user-01..sec-user-05 on the security integration branch); this
+section keeps G32's recorded history. Runtime cases: `tests/suites/sec-users.json` and acc-t23
+items 10-18 (sec-user-06).

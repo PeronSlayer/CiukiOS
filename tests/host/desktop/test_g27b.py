@@ -30,7 +30,7 @@ class G27BTests(unittest.TestCase):
                    'apps/files/model.c', 'apps/files/transfer.c',
                    'apps/accessories/mixer_view.c', 'tests/host/desktop/fake.c',
                    'src/kernel/drivers/video/swdib.c', 'src/kernel/drivers/video/batch.c',
-                   'sdk/libreg/registry.c', 'sdk/libreg/storage.c', 'sdk/libreg/hardware.c',
+                   'sdk/libreg/registry.c', 'sdk/libreg/storage.c', 'sdk/libreg/hardware.c','sdk/libreg/transport.c',
                    'tests/host/desktop/g27b_window_test.c']
         self.run_case('g27b-window', sources,
                       ['-include', str(ROOT/'tests/host/desktop/replay_base.h'),
