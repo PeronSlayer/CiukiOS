@@ -679,6 +679,16 @@ static void test_k08_settings(void)
         CHECK(setting(refused[i],CIUKI_SYSTEM_SETTING_CLOCK,clock,sizeof(clock)-1)==-EPERM);
         CHECK(setting(refused[i],CIUKI_SYSTEM_SETTING_POWER,power,sizeof(power)-1)==-EPERM);
     }
+    /* sec-k08b K8-7: a Standard/Guest desktop's disk-timer authority cannot
+     * authorize machine button/lid changes through SETTING POWER. */
+    for(unsigned i=0;i<3;i++) {
+        struct security_subject *subject=refused[i]->p->subject;
+        uint32_t role=subject->role;
+        subject->role=CIUKI_SECURITY_ROLE_DESKTOP;
+        CHECK(security_process_live(refused[i]->p) && subject->credential.session_id);
+        CHECK(setting(refused[i],CIUKI_SYSTEM_SETTING_POWER,power,sizeof(power)-1)==-EPERM);
+        subject->role=role;
+    }
     CHECK(!kernel_read("C:/System/Settings/clock.cfg",text,sizeof(text),&n) && n==37);
     CHECK(!kernel_read("C:/System/Settings/power.cfg",text,sizeof(text),&n) && n==22);
     CHECK(!setting(&admin,CIUKI_SYSTEM_SETTING_CLOCK,clock,sizeof(clock)-1));

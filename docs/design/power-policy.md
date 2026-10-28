@@ -340,7 +340,7 @@ At G11 allocation the highest call-73 action on `main` was STATUS (4). G11 adds:
 | Action | Value | Arguments | Result |
 | --- | --- | --- | --- |
 | `CIUKI_POWER_STANDBY` | 5 | none | 0 on resume; ENOTSUP while not qualified; desktop only |
-| `CIUKI_POWER_POLICY` | 6 | C = `struct ciuki_power_policy`, D = its size | 0, EINVAL, EFAULT, ENODEV (no ATA disk); desktop only |
+| `CIUKI_POWER_POLICY` | 6 | C = `struct ciuki_power_policy`, D = its size | 0, EPERM, EINVAL, EFAULT, ENODEV (no ATA disk); administrator or live session desktop, including Standard/Guest (sec-k08b K8-7); machine button/lid settings keep call-99 SETTING POWER administrator checks |
 | `CIUKI_POWER_EVENTS` | 7 | C = `struct ciuki_power_events`, D = its size | 0; any native client, cached, no firmware call |
 | `CIUKI_POWER_CANCEL_STANDBY` (G11B) | 8 | none | 0 if no pending BIOS request; rejects it otherwise; desktop only; EBUSY during sleep/shutdown |
 | `CIUKI_POWER_FORCE_REBOOT` (T23 c42f556e) | 9 | none | the forced end of a shutdown that cannot finish, after the user's Force: a 3 s best-effort flush, UNCERTAIN, reset; allowed beside a blocked REBOOT/OFF; desktop only; does not return |

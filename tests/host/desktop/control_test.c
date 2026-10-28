@@ -513,15 +513,15 @@ static void accounts_controls(void)
     unsigned begins_before=acct_begins;
     at_click_widget(&u,CP_SAVER_PASSWORD); assert(strstr(saved,"secure_saver=0\n") && acct_begins==begins_before);   /* a preference, not an account change */
     cp_open(&a,CP_POWER);
-    assert(a.machine_locked && du_get(&u,1870+PP_STANDBY)->disabled && !du_get(&u,1870+PP_MONITOR)->disabled && du_get(&u,1870+PP_DISKS)->disabled);
-    assert(!strcmp(du_get(&u,1861)->text,"You must be an administrator to change this setting."));
+    assert(a.machine_locked && du_get(&u,1870+PP_STANDBY)->disabled && !du_get(&u,1870+PP_MONITOR)->disabled && !du_get(&u,1870+PP_DISKS)->disabled);
+    assert(strstr(du_get(&u,1861)->text,"Stand by is not available"));
     int advanced=-1; for (int k=0;k<a.pw_tab_count;k++) if (a.pw_tabs_map[k]==3) advanced=k;
     struct du_event power_tab={.type=DU_EV_SELECT,.id=1850,.index=advanced}; u.event(&u,&power_tab,u.user);
     assert(a.pw_tab==3 && du_get(&u,1906)->value==1 && du_get(&u,1910)->disabled);
     at_click_widget(&u,1906); assert(strstr(saved,"secure_resume=0\n") && strstr(saved,"secure_saver=0\n"));
     cp_detach(&a); acct_admin=1; saved_n=0;
     puts("PASS sec-user-04 preferences: On resume, password protect and the resume prompt are per user (secure_saver/"
-         "secure_resume), power buttons and the standby/disk timers stay with administrators");
+         "secure_resume), scheme timers are per user and power buttons stay with administrators");
 }
 /* --- end sec-user-04 block --- */
 /* --- sec-k08 block (lead decision U4-6): in a LOGON session the power
@@ -563,7 +563,38 @@ static void machine_power_buttons(void)
     at_click_widget(&u,PW_BUTTON); assert(!u.popup_count);
     power_emit(DU_EV_ACTIVATE,PW_ITEM,PW_BUTTON,NULL);   /* a forged menu choice */
     assert(machine_saves==2 && !saves && !strcmp(machine_text,"power_button=standby\npower_lid=shutdown\n"));
-    cp_detach(&a); acct_admin=1; machine_error=0; saved_n=0; machine_n=0;
+    cp_detach(&a);
+    /* sec-k08b / K8-2: the page's only role input is self_admin, so Standard
+     * and Guest share the non-admin branch. Both branches may edit every
+     * AC/battery timer without writing the sealed machine settings. */
+    for (int admin=0; admin<=1; admin++) {
+        acct_admin=admin; machine_error=admin ? 0 : -EPERM;
+        attach(CP_HOME); a.host.power_status=apm_t23_fixture; a.host.power_events=power_events;
+        a.host.accounts_begin=acct_begin; a.host.accounts_poll=acct_poll; a.host.self_admin=acct_self_admin; a.host.apply=acct_apply;
+        a.host.power_machine_load=machine_load; a.host.power_machine_save=machine_save;
+        cp_open(&a,CP_POWER);
+        for (int src=0; src<PP_SOURCES; src++) for (int timer=0; timer<PP_TIMERS; timer++) {
+            assert(!du_get(&u,PW_CELL+src*PP_TIMERS+timer)->disabled);
+            unsigned before=saves, applied=applies;
+            at_click_widget(&u,PW_CELL+src*PP_TIMERS+timer); assert(u.popup_count);
+            power_pick("After 25 mins");
+            assert(saves==before+1 && applies==applied+1 && machine_saves==2);
+            struct pp_config stored; assert(!pp_load(&stored,saved));
+            assert(stored.schemes[stored.active].timer[src][timer]==1500);
+        }
+        cp_open(&a,CP_POWER);   /* re-read the user's timers and machine actions */
+        for (int src=0; src<PP_SOURCES; src++) for (int timer=0; timer<PP_TIMERS; timer++)
+            assert(!strcmp(du_get(&u,PW_CELL+src*PP_TIMERS+timer)->text,"After 25 mins"));
+        power_events_record.standby_reason=CIUKI_POWER_STANDBY_NO_FIRMWARE; cp_tick(&a);
+        assert(du_get(&u,PW_CELL+PP_STANDBY)->disabled && du_get(&u,PW_CELL+PP_TIMERS+PP_STANDBY)->disabled);
+        assert(!du_get(&u,PW_CELL+PP_DISKS)->disabled && strstr(du_get(&u,PW_NOTE)->text,"no standby state"));
+        power_events_record.standby_reason=CIUKI_POWER_STANDBY_AVAILABLE; cp_tick(&a);
+        power_emit(DU_EV_SELECT,PW_TABS,3,NULL);
+        assert(du_get(&u,PW_BUTTON)->disabled==!admin && du_get(&u,PW_LID)->disabled==!admin);
+        assert(!strcmp(du_get(&u,PW_BUTTON)->text,"Stand by") && !strcmp(du_get(&u,PW_LID)->text,"Shut down"));
+        cp_detach(&a);
+    }
+    acct_admin=1; machine_error=0; saved_n=0; machine_n=0;
     puts("PASS sec-k08 machine power buttons: power.cfg shown over the user's own lines, administrators save through the SYSTEM "
          "setting service (desktop reloads), Standard users see them disabled and the service refusal keeps the machine's values");
 }
