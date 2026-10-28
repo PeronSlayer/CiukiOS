@@ -18,6 +18,12 @@ if '-machine' in sys.argv and sys.argv[sys.argv.index('-machine')+1].endswith(',
     print('  i8042=<bool> - Enable/disable Intel 8042 PS/2 controller emulation');sys.exit(0)
 scenario_path=Path(os.environ['CIUKI_FAKE_SCRIPT'])
 scenario=json.loads(scenario_path.read_text())
+# Multi-guest LAN cases share one environment but have distinct profile MACs.
+# Keep per-guest serial/QMP scripts independent without changing global env
+# from runner threads.
+if scenario.get('lan_guests'):
+    mac=next(a.split('mac=',1)[1].split(',',1)[0] for a in sys.argv if a.startswith('i82559er,') and 'mac=' in a)
+    scenario=scenario['lan_guests'][mac]
 def exit_early():
     if scenario.get('exit_signal'):
         import resource

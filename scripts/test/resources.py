@@ -51,10 +51,12 @@ def slot_count():
     return int(raw)
 
 
-def slot_paths(base):
+def slot_paths(base, count=None):
     """Slot lock files next to the common lock path (.qemu.lock -> .qemu.slotN)."""
+    if count is not None and (type(count) is not int or not 1 <= count <= SLOT_MAX):
+        raise Refusal(f'slot namespace must contain 1..{SLOT_MAX} locks')
     base=Path(base);stem=base.name[:-5] if base.name.endswith('.lock') else base.name
-    return [base.with_name(f'{stem}.slot{i}') for i in range(slot_count())]
+    return [base.with_name(f'{stem}.slot{i}') for i in range(slot_count() if count is None else count)]
 
 
 class SlotLock(ExclusiveLock):

@@ -1977,8 +1977,10 @@ def manifest_identity(image):
     return {'path':'unknown','sha256':'unknown','revision':'unknown','dirty':'unknown'}
 
 
-def _run_boot(root,suite,case,profile,image,executable,firmware,host=None,keep=False,qemu_img='qemu-img',shared_overlay=None,retain_overlay=False,cancel_event=None):
+def _run_boot(root,suite,case,profile,image,executable,firmware,host=None,keep=False,qemu_img='qemu-img',shared_overlay=None,retain_overlay=False,cancel_event=None,lan_sync=None,lan_index=0):
     """Caller holds the common lock. Every failure after creation has result.json."""
+    if 'lan_fixture' in case and lan_sync is None:
+        raise res.Refusal('authored LAN guest requires the group runner')
     case=json.loads(json.dumps(case))
     host=host or Host();runs=root/'build/test-runs';res.check_budget(runs)
     memory=host.preflight(runs)
@@ -2046,7 +2048,12 @@ def _run_boot(root,suite,case,profile,image,executable,firmware,host=None,keep=F
     launched=None
     process=qmp=cgroup=None;parser=(SweepParser if case.get('sweep') else NormalBootParser if normal else Parser)(run_id,case['probe']);fd=None;dirfd=None;logs=[]
     if accept:
-        accept_session=acceptance.Session(case,run_id,directory,ROOT,read_ppm=read_ppm,observe_screen=observe_normal_boot_screen)
+        if 'lan_fixture' in case:
+            import lan_live
+            accept_session=lan_live.Session(case,run_id,directory,root,read_ppm=read_ppm,observe_screen=observe_normal_boot_screen,
+                                           sync=lan_sync,guest_index=lan_index)
+        else:
+            accept_session=acceptance.Session(case,run_id,directory,ROOT,read_ppm=read_ppm,observe_screen=observe_normal_boot_screen)
         parser=accept_session.parser
     pending=b'';panic_start=None;armed_stats=None;terminal_time=None
     screen_before = directory/'desktop-before.ppm'
@@ -2092,6 +2099,9 @@ def _run_boot(root,suite,case,profile,image,executable,firmware,host=None,keep=F
         if case.get('dos_game'):
             identity=bytes.fromhex(case['_lan']['identity']) if '_lan' in case else None
             result['dos_game_fixture']=dos_games.stage(host,case['dos_game'],image,overlay,directory,root,identity,cancel_event)
+        if 'lan_fixture' in case:
+            import lan_live
+            result['lan_fixture']=lan_live.stage(host,case,image,overlay,directory,root,cancel_event)
         result['fixtures']=prepare_fixtures(host,case,directory,image,result['image']['sha256'])
         if accept:result['acceptance_media']=accept_session.prepare()
         if win32:
@@ -2197,6 +2207,7 @@ def _run_boot(root,suite,case,profile,image,executable,firmware,host=None,keep=F
                 result['qemu']['version']=version
                 pinned=json.loads((ROOT/'config/toolchain.json').read_text())['qemu_major']
                 if version['qemu']['major']!=pinned:raise res.Refusal('QEMU major version differs from pinned toolchain')
+                if lan_sync is not None and lan_index == 0:lan_sync.listener.set()
                 result['initial_blockstats']=writes(qmp.command('query-blockstats'))
                 if case['probe']=='panic':
                     result['blockstats_baseline']='ARM receipt for all I/O; before CPU start for writes'
@@ -2777,6 +2788,9 @@ def check_overlay(host,overlay,directory,checks,result):
 
 def run_case(root,suite,case,profile,image,executable,firmware,host=None,keep=False,qemu_img='qemu-img'):
     if 'guests' in case:
+        if 'lan_live' in case:
+            import lan_live
+            return lan_live.run_group(root,suite,case,profile,image,executable,firmware,host or Host(),keep,qemu_img,_run_boot)
         import lan_runner
         return lan_runner.run_pair(root,suite,case,profile,image,executable,firmware,host or Host(),keep,qemu_img,_run_boot)
     if case.get('sweep'):

@@ -1,0 +1,1176 @@
+{
+  "schema_version": 1,
+  "image": "full",
+  "acceptance": true,
+  "cases": [
+    {
+      "id": "lan-ipx",
+      "kind": "acceptance",
+      "probe": "acceptance",
+      "profile": "qemu-t23",
+      "timeout": 1200,
+      "item": 18,
+      "title": "lan-ipx",
+      "expected": {
+        "evidence_kind": "acceptance"
+      },
+      "lan_live": "stream",
+      "guests": [
+        {
+          "id": "lan-ipx-a",
+          "kind": "acceptance",
+          "probe": "acceptance",
+          "profile": "qemu-t23",
+          "timeout": 1200,
+          "item": 18,
+          "title": "Authored LAN lan-ipx-a",
+          "expected": {
+            "evidence_kind": "acceptance"
+          },
+          "devices": {
+            "network": "i82559er"
+          },
+          "lan_fixture": {
+            "api": "ipx",
+            "transport": "ipx",
+            "role": "host",
+            "address": "192.0.2.1",
+            "frame": "auto",
+            "peers": 2
+          },
+          "forbid": [
+            "^\\[user \\d+\\] FAIL ",
+            "^\\[win32\\] (?:crash|refused) ",
+            "^\\[win32\\] exit pid=\\d+ code=(?!00000000 )",
+            "^\\[win32\\] exit .* reason=(?!normal )"
+          ],
+          "steps": [
+            {
+              "template": "boot",
+              "prefix": "b1",
+              "check": "boot",
+              "settle": 2
+            },
+            {
+              "name": "settings",
+              "check": "settings",
+              "since": "boot",
+              "wait": "^\\[net\\] config boot=saved fallback=none$"
+            },
+            {
+              "name": "lan-launch",
+              "check": "lan",
+              "actions": [
+                {
+                  "keys": "meta_l+r",
+                  "pause": 1
+                }
+              ]
+            },
+            {
+              "name": "lan-command",
+              "check": "lan",
+              "actions": [
+                {
+                  "text": "C:\\TESTS\\LAN\\lan2-ipx.exe host --ciuki-serial"
+                },
+                {
+                  "keys": "ret"
+                }
+              ]
+            },
+            {
+              "name": "lan-start",
+              "check": "lan",
+              "timeout": 120,
+              "wait": "^\\[win32\\] start pid=(?P<lan_pid>[1-9]\\d*) exe=C:\\\\TESTS\\\\LAN\\\\lan2\\-ipx\\.exe pe="
+            },
+            {
+              "name": "lan-pass",
+              "check": "lan",
+              "timeout": 90,
+              "wait": "^\\[user \\d+\\] PASS\\ LAN2\\ Win32\\ AF_IPX\\ broadcast/directed\\ echo$"
+            },
+            {
+              "name": "lan-exit",
+              "check": "lan",
+              "timeout": 30,
+              "wait": "^\\[win32\\] exit pid=<<lan_pid>> code=00000000 reason=normal "
+            }
+          ]
+        },
+        {
+          "id": "lan-ipx-b",
+          "kind": "acceptance",
+          "probe": "acceptance",
+          "profile": "qemu-t23",
+          "timeout": 1200,
+          "item": 18,
+          "title": "Authored LAN lan-ipx-b",
+          "expected": {
+            "evidence_kind": "acceptance"
+          },
+          "devices": {
+            "network": "i82559er"
+          },
+          "lan_fixture": {
+            "api": "ipx",
+            "transport": "ipx",
+            "role": "join",
+            "address": "192.0.2.2",
+            "frame": "auto",
+            "peers": 2
+          },
+          "forbid": [
+            "^\\[user \\d+\\] FAIL ",
+            "^\\[win32\\] (?:crash|refused) ",
+            "^\\[win32\\] exit pid=\\d+ code=(?!00000000 )",
+            "^\\[win32\\] exit .* reason=(?!normal )"
+          ],
+          "steps": [
+            {
+              "template": "boot",
+              "prefix": "b1",
+              "check": "boot",
+              "settle": 2
+            },
+            {
+              "name": "settings",
+              "check": "settings",
+              "since": "boot",
+              "wait": "^\\[net\\] config boot=saved fallback=none$"
+            },
+            {
+              "name": "lan-launch",
+              "check": "lan",
+              "actions": [
+                {
+                  "keys": "meta_l+r",
+                  "pause": 1
+                }
+              ]
+            },
+            {
+              "name": "lan-command",
+              "check": "lan",
+              "actions": [
+                {
+                  "text": "C:\\TESTS\\LAN\\lan2-ipx.exe join --ciuki-serial"
+                },
+                {
+                  "keys": "ret"
+                }
+              ]
+            },
+            {
+              "name": "lan-start",
+              "check": "lan",
+              "timeout": 120,
+              "wait": "^\\[win32\\] start pid=(?P<lan_pid>[1-9]\\d*) exe=C:\\\\TESTS\\\\LAN\\\\lan2\\-ipx\\.exe pe="
+            },
+            {
+              "name": "lan-pass",
+              "check": "lan",
+              "timeout": 90,
+              "wait": "^\\[user \\d+\\] PASS\\ LAN2\\ Win32\\ AF_IPX\\ broadcast/directed\\ echo$"
+            },
+            {
+              "name": "lan-exit",
+              "check": "lan",
+              "timeout": 30,
+              "wait": "^\\[win32\\] exit pid=<<lan_pid>> code=00000000 reason=normal "
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "id": "lan-ipx-swapped",
+      "kind": "acceptance",
+      "probe": "acceptance",
+      "profile": "qemu-t23",
+      "timeout": 1200,
+      "item": 18,
+      "title": "lan-ipx-swapped",
+      "expected": {
+        "evidence_kind": "acceptance"
+      },
+      "lan_live": "stream",
+      "guests": [
+        {
+          "id": "lan-ipx-swapped-b",
+          "kind": "acceptance",
+          "probe": "acceptance",
+          "profile": "qemu-t23",
+          "timeout": 1200,
+          "item": 18,
+          "title": "Authored LAN lan-ipx-swapped-b",
+          "expected": {
+            "evidence_kind": "acceptance"
+          },
+          "devices": {
+            "network": "i82559er"
+          },
+          "lan_fixture": {
+            "api": "ipx",
+            "transport": "ipx",
+            "role": "host",
+            "address": "192.0.2.2",
+            "frame": "auto",
+            "peers": 2
+          },
+          "forbid": [
+            "^\\[user \\d+\\] FAIL ",
+            "^\\[win32\\] (?:crash|refused) ",
+            "^\\[win32\\] exit pid=\\d+ code=(?!00000000 )",
+            "^\\[win32\\] exit .* reason=(?!normal )"
+          ],
+          "steps": [
+            {
+              "template": "boot",
+              "prefix": "b1",
+              "check": "boot",
+              "settle": 2
+            },
+            {
+              "name": "settings",
+              "check": "settings",
+              "since": "boot",
+              "wait": "^\\[net\\] config boot=saved fallback=none$"
+            },
+            {
+              "name": "lan-launch",
+              "check": "lan",
+              "actions": [
+                {
+                  "keys": "meta_l+r",
+                  "pause": 1
+                }
+              ]
+            },
+            {
+              "name": "lan-command",
+              "check": "lan",
+              "actions": [
+                {
+                  "text": "C:\\TESTS\\LAN\\lan2-ipx.exe host --ciuki-serial"
+                },
+                {
+                  "keys": "ret"
+                }
+              ]
+            },
+            {
+              "name": "lan-start",
+              "check": "lan",
+              "timeout": 120,
+              "wait": "^\\[win32\\] start pid=(?P<lan_pid>[1-9]\\d*) exe=C:\\\\TESTS\\\\LAN\\\\lan2\\-ipx\\.exe pe="
+            },
+            {
+              "name": "lan-pass",
+              "check": "lan",
+              "timeout": 90,
+              "wait": "^\\[user \\d+\\] PASS\\ LAN2\\ Win32\\ AF_IPX\\ broadcast/directed\\ echo$"
+            },
+            {
+              "name": "lan-exit",
+              "check": "lan",
+              "timeout": 30,
+              "wait": "^\\[win32\\] exit pid=<<lan_pid>> code=00000000 reason=normal "
+            }
+          ]
+        },
+        {
+          "id": "lan-ipx-swapped-a",
+          "kind": "acceptance",
+          "probe": "acceptance",
+          "profile": "qemu-t23",
+          "timeout": 1200,
+          "item": 18,
+          "title": "Authored LAN lan-ipx-swapped-a",
+          "expected": {
+            "evidence_kind": "acceptance"
+          },
+          "devices": {
+            "network": "i82559er"
+          },
+          "lan_fixture": {
+            "api": "ipx",
+            "transport": "ipx",
+            "role": "join",
+            "address": "192.0.2.1",
+            "frame": "auto",
+            "peers": 2
+          },
+          "forbid": [
+            "^\\[user \\d+\\] FAIL ",
+            "^\\[win32\\] (?:crash|refused) ",
+            "^\\[win32\\] exit pid=\\d+ code=(?!00000000 )",
+            "^\\[win32\\] exit .* reason=(?!normal )"
+          ],
+          "steps": [
+            {
+              "template": "boot",
+              "prefix": "b1",
+              "check": "boot",
+              "settle": 2
+            },
+            {
+              "name": "settings",
+              "check": "settings",
+              "since": "boot",
+              "wait": "^\\[net\\] config boot=saved fallback=none$"
+            },
+            {
+              "name": "lan-launch",
+              "check": "lan",
+              "actions": [
+                {
+                  "keys": "meta_l+r",
+                  "pause": 1
+                }
+              ]
+            },
+            {
+              "name": "lan-command",
+              "check": "lan",
+              "actions": [
+                {
+                  "text": "C:\\TESTS\\LAN\\lan2-ipx.exe join --ciuki-serial"
+                },
+                {
+                  "keys": "ret"
+                }
+              ]
+            },
+            {
+              "name": "lan-start",
+              "check": "lan",
+              "timeout": 120,
+              "wait": "^\\[win32\\] start pid=(?P<lan_pid>[1-9]\\d*) exe=C:\\\\TESTS\\\\LAN\\\\lan2\\-ipx\\.exe pe="
+            },
+            {
+              "name": "lan-pass",
+              "check": "lan",
+              "timeout": 90,
+              "wait": "^\\[user \\d+\\] PASS\\ LAN2\\ Win32\\ AF_IPX\\ broadcast/directed\\ echo$"
+            },
+            {
+              "name": "lan-exit",
+              "check": "lan",
+              "timeout": 30,
+              "wait": "^\\[win32\\] exit pid=<<lan_pid>> code=00000000 reason=normal "
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "id": "lan-directplay-tcp",
+      "kind": "acceptance",
+      "probe": "acceptance",
+      "profile": "qemu-t23",
+      "timeout": 1200,
+      "item": 18,
+      "title": "lan-directplay-tcp",
+      "expected": {
+        "evidence_kind": "acceptance"
+      },
+      "lan_live": "stream",
+      "guests": [
+        {
+          "id": "lan-directplay-tcp-a",
+          "kind": "acceptance",
+          "probe": "acceptance",
+          "profile": "qemu-t23",
+          "timeout": 1200,
+          "item": 18,
+          "title": "Authored LAN lan-directplay-tcp-a",
+          "expected": {
+            "evidence_kind": "acceptance"
+          },
+          "devices": {
+            "network": "i82559er"
+          },
+          "lan_fixture": {
+            "api": "directplay",
+            "transport": "tcp",
+            "role": "host",
+            "address": "192.0.2.1",
+            "frame": "auto",
+            "peers": 2
+          },
+          "forbid": [
+            "^\\[user \\d+\\] FAIL ",
+            "^\\[win32\\] (?:crash|refused) ",
+            "^\\[win32\\] exit pid=\\d+ code=(?!00000000 )",
+            "^\\[win32\\] exit .* reason=(?!normal )"
+          ],
+          "steps": [
+            {
+              "template": "boot",
+              "prefix": "b1",
+              "check": "boot",
+              "settle": 2
+            },
+            {
+              "name": "settings",
+              "check": "settings",
+              "since": "boot",
+              "wait": "^\\[net\\] config boot=saved fallback=none$"
+            },
+            {
+              "name": "lan-launch",
+              "check": "lan",
+              "actions": [
+                {
+                  "keys": "meta_l+r",
+                  "pause": 1
+                }
+              ]
+            },
+            {
+              "name": "lan-command",
+              "check": "lan",
+              "actions": [
+                {
+                  "text": "C:\\TESTS\\LAN\\lan2-directplay.exe host tcp --ciuki-serial"
+                },
+                {
+                  "keys": "ret"
+                }
+              ]
+            },
+            {
+              "name": "lan-start",
+              "check": "lan",
+              "timeout": 120,
+              "wait": "^\\[win32\\] start pid=(?P<lan_pid>[1-9]\\d*) exe=C:\\\\TESTS\\\\LAN\\\\lan2\\-directplay\\.exe pe="
+            },
+            {
+              "name": "lan-pass",
+              "check": "lan",
+              "timeout": 90,
+              "wait": "^\\[user \\d+\\] PASS\\ LAN2\\ DirectPlay\\ COM\\ enumerate/open/player/guaranteed\\ chat/close$"
+            },
+            {
+              "name": "lan-exit",
+              "check": "lan",
+              "timeout": 30,
+              "wait": "^\\[win32\\] exit pid=<<lan_pid>> code=00000000 reason=normal "
+            }
+          ]
+        },
+        {
+          "id": "lan-directplay-tcp-b",
+          "kind": "acceptance",
+          "probe": "acceptance",
+          "profile": "qemu-t23",
+          "timeout": 1200,
+          "item": 18,
+          "title": "Authored LAN lan-directplay-tcp-b",
+          "expected": {
+            "evidence_kind": "acceptance"
+          },
+          "devices": {
+            "network": "i82559er"
+          },
+          "lan_fixture": {
+            "api": "directplay",
+            "transport": "tcp",
+            "role": "join",
+            "address": "192.0.2.2",
+            "frame": "auto",
+            "peers": 2
+          },
+          "forbid": [
+            "^\\[user \\d+\\] FAIL ",
+            "^\\[win32\\] (?:crash|refused) ",
+            "^\\[win32\\] exit pid=\\d+ code=(?!00000000 )",
+            "^\\[win32\\] exit .* reason=(?!normal )"
+          ],
+          "steps": [
+            {
+              "template": "boot",
+              "prefix": "b1",
+              "check": "boot",
+              "settle": 2
+            },
+            {
+              "name": "settings",
+              "check": "settings",
+              "since": "boot",
+              "wait": "^\\[net\\] config boot=saved fallback=none$"
+            },
+            {
+              "name": "lan-launch",
+              "check": "lan",
+              "actions": [
+                {
+                  "keys": "meta_l+r",
+                  "pause": 1
+                }
+              ]
+            },
+            {
+              "name": "lan-command",
+              "check": "lan",
+              "actions": [
+                {
+                  "text": "C:\\TESTS\\LAN\\lan2-directplay.exe join tcp --ciuki-serial"
+                },
+                {
+                  "keys": "ret"
+                }
+              ]
+            },
+            {
+              "name": "lan-start",
+              "check": "lan",
+              "timeout": 120,
+              "wait": "^\\[win32\\] start pid=(?P<lan_pid>[1-9]\\d*) exe=C:\\\\TESTS\\\\LAN\\\\lan2\\-directplay\\.exe pe="
+            },
+            {
+              "name": "lan-pass",
+              "check": "lan",
+              "timeout": 90,
+              "wait": "^\\[user \\d+\\] PASS\\ LAN2\\ DirectPlay\\ COM\\ enumerate/open/player/guaranteed\\ chat/close$"
+            },
+            {
+              "name": "lan-exit",
+              "check": "lan",
+              "timeout": 30,
+              "wait": "^\\[win32\\] exit pid=<<lan_pid>> code=00000000 reason=normal "
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "id": "lan-directplay-ipx",
+      "kind": "acceptance",
+      "probe": "acceptance",
+      "profile": "qemu-t23",
+      "timeout": 1200,
+      "item": 18,
+      "title": "lan-directplay-ipx",
+      "expected": {
+        "evidence_kind": "acceptance"
+      },
+      "lan_live": "stream",
+      "guests": [
+        {
+          "id": "lan-directplay-ipx-a",
+          "kind": "acceptance",
+          "probe": "acceptance",
+          "profile": "qemu-t23",
+          "timeout": 1200,
+          "item": 18,
+          "title": "Authored LAN lan-directplay-ipx-a",
+          "expected": {
+            "evidence_kind": "acceptance"
+          },
+          "devices": {
+            "network": "i82559er"
+          },
+          "lan_fixture": {
+            "api": "directplay",
+            "transport": "ipx",
+            "role": "host",
+            "address": "192.0.2.1",
+            "frame": "auto",
+            "peers": 2
+          },
+          "forbid": [
+            "^\\[user \\d+\\] FAIL ",
+            "^\\[win32\\] (?:crash|refused) ",
+            "^\\[win32\\] exit pid=\\d+ code=(?!00000000 )",
+            "^\\[win32\\] exit .* reason=(?!normal )"
+          ],
+          "steps": [
+            {
+              "template": "boot",
+              "prefix": "b1",
+              "check": "boot",
+              "settle": 2
+            },
+            {
+              "name": "settings",
+              "check": "settings",
+              "since": "boot",
+              "wait": "^\\[net\\] config boot=saved fallback=none$"
+            },
+            {
+              "name": "lan-launch",
+              "check": "lan",
+              "actions": [
+                {
+                  "keys": "meta_l+r",
+                  "pause": 1
+                }
+              ]
+            },
+            {
+              "name": "lan-command",
+              "check": "lan",
+              "actions": [
+                {
+                  "text": "C:\\TESTS\\LAN\\lan2-directplay.exe host ipx --ciuki-serial"
+                },
+                {
+                  "keys": "ret"
+                }
+              ]
+            },
+            {
+              "name": "lan-start",
+              "check": "lan",
+              "timeout": 120,
+              "wait": "^\\[win32\\] start pid=(?P<lan_pid>[1-9]\\d*) exe=C:\\\\TESTS\\\\LAN\\\\lan2\\-directplay\\.exe pe="
+            },
+            {
+              "name": "lan-pass",
+              "check": "lan",
+              "timeout": 90,
+              "wait": "^\\[user \\d+\\] PASS\\ LAN2\\ DirectPlay\\ COM\\ enumerate/open/player/guaranteed\\ chat/close$"
+            },
+            {
+              "name": "lan-exit",
+              "check": "lan",
+              "timeout": 30,
+              "wait": "^\\[win32\\] exit pid=<<lan_pid>> code=00000000 reason=normal "
+            }
+          ]
+        },
+        {
+          "id": "lan-directplay-ipx-b",
+          "kind": "acceptance",
+          "probe": "acceptance",
+          "profile": "qemu-t23",
+          "timeout": 1200,
+          "item": 18,
+          "title": "Authored LAN lan-directplay-ipx-b",
+          "expected": {
+            "evidence_kind": "acceptance"
+          },
+          "devices": {
+            "network": "i82559er"
+          },
+          "lan_fixture": {
+            "api": "directplay",
+            "transport": "ipx",
+            "role": "join",
+            "address": "192.0.2.2",
+            "frame": "auto",
+            "peers": 2
+          },
+          "forbid": [
+            "^\\[user \\d+\\] FAIL ",
+            "^\\[win32\\] (?:crash|refused) ",
+            "^\\[win32\\] exit pid=\\d+ code=(?!00000000 )",
+            "^\\[win32\\] exit .* reason=(?!normal )"
+          ],
+          "steps": [
+            {
+              "template": "boot",
+              "prefix": "b1",
+              "check": "boot",
+              "settle": 2
+            },
+            {
+              "name": "settings",
+              "check": "settings",
+              "since": "boot",
+              "wait": "^\\[net\\] config boot=saved fallback=none$"
+            },
+            {
+              "name": "lan-launch",
+              "check": "lan",
+              "actions": [
+                {
+                  "keys": "meta_l+r",
+                  "pause": 1
+                }
+              ]
+            },
+            {
+              "name": "lan-command",
+              "check": "lan",
+              "actions": [
+                {
+                  "text": "C:\\TESTS\\LAN\\lan2-directplay.exe join ipx --ciuki-serial"
+                },
+                {
+                  "keys": "ret"
+                }
+              ]
+            },
+            {
+              "name": "lan-start",
+              "check": "lan",
+              "timeout": 120,
+              "wait": "^\\[win32\\] start pid=(?P<lan_pid>[1-9]\\d*) exe=C:\\\\TESTS\\\\LAN\\\\lan2\\-directplay\\.exe pe="
+            },
+            {
+              "name": "lan-pass",
+              "check": "lan",
+              "timeout": 90,
+              "wait": "^\\[user \\d+\\] PASS\\ LAN2\\ DirectPlay\\ COM\\ enumerate/open/player/guaranteed\\ chat/close$"
+            },
+            {
+              "name": "lan-exit",
+              "check": "lan",
+              "timeout": 30,
+              "wait": "^\\[win32\\] exit pid=<<lan_pid>> code=00000000 reason=normal "
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "id": "lan-directplay-tcp-three",
+      "kind": "acceptance",
+      "probe": "acceptance",
+      "profile": "qemu-t23",
+      "timeout": 1200,
+      "item": 18,
+      "title": "lan-directplay-tcp-three",
+      "expected": {
+        "evidence_kind": "acceptance"
+      },
+      "lan_live": "mcast",
+      "guests": [
+        {
+          "id": "lan-directplay-tcp-three-a",
+          "kind": "acceptance",
+          "probe": "acceptance",
+          "profile": "qemu-t23",
+          "timeout": 1200,
+          "item": 18,
+          "title": "Authored LAN lan-directplay-tcp-three-a",
+          "expected": {
+            "evidence_kind": "acceptance"
+          },
+          "devices": {
+            "network": "i82559er"
+          },
+          "lan_fixture": {
+            "api": "directplay",
+            "transport": "tcp",
+            "role": "host",
+            "address": "192.0.2.1",
+            "frame": "auto",
+            "peers": 3
+          },
+          "forbid": [
+            "^\\[user \\d+\\] FAIL ",
+            "^\\[win32\\] (?:crash|refused) ",
+            "^\\[win32\\] exit pid=\\d+ code=(?!00000000 )",
+            "^\\[win32\\] exit .* reason=(?!normal )"
+          ],
+          "steps": [
+            {
+              "template": "boot",
+              "prefix": "b1",
+              "check": "boot",
+              "settle": 2
+            },
+            {
+              "name": "settings",
+              "check": "settings",
+              "since": "boot",
+              "wait": "^\\[net\\] config boot=saved fallback=none$"
+            },
+            {
+              "name": "lan-launch",
+              "check": "lan",
+              "actions": [
+                {
+                  "keys": "meta_l+r",
+                  "pause": 1
+                }
+              ]
+            },
+            {
+              "name": "lan-command",
+              "check": "lan",
+              "actions": [
+                {
+                  "text": "C:\\TESTS\\LAN\\lan2-directplay.exe host tcp --peers=3 --ciuki-serial"
+                },
+                {
+                  "keys": "ret"
+                }
+              ]
+            },
+            {
+              "name": "lan-start",
+              "check": "lan",
+              "timeout": 120,
+              "wait": "^\\[win32\\] start pid=(?P<lan_pid>[1-9]\\d*) exe=C:\\\\TESTS\\\\LAN\\\\lan2\\-directplay\\.exe pe="
+            },
+            {
+              "name": "lan-pass",
+              "check": "lan",
+              "timeout": 90,
+              "wait": "^\\[user \\d+\\] PASS\\ LAN2\\ DirectPlay\\ COM\\ enumerate/open/player/guaranteed\\ chat/close$"
+            },
+            {
+              "name": "lan-exit",
+              "check": "lan",
+              "timeout": 30,
+              "wait": "^\\[win32\\] exit pid=<<lan_pid>> code=00000000 reason=normal "
+            }
+          ]
+        },
+        {
+          "id": "lan-directplay-tcp-three-b",
+          "kind": "acceptance",
+          "probe": "acceptance",
+          "profile": "qemu-t23",
+          "timeout": 1200,
+          "item": 18,
+          "title": "Authored LAN lan-directplay-tcp-three-b",
+          "expected": {
+            "evidence_kind": "acceptance"
+          },
+          "devices": {
+            "network": "i82559er"
+          },
+          "lan_fixture": {
+            "api": "directplay",
+            "transport": "tcp",
+            "role": "join",
+            "address": "192.0.2.2",
+            "frame": "auto",
+            "peers": 3
+          },
+          "forbid": [
+            "^\\[user \\d+\\] FAIL ",
+            "^\\[win32\\] (?:crash|refused) ",
+            "^\\[win32\\] exit pid=\\d+ code=(?!00000000 )",
+            "^\\[win32\\] exit .* reason=(?!normal )"
+          ],
+          "steps": [
+            {
+              "template": "boot",
+              "prefix": "b1",
+              "check": "boot",
+              "settle": 2
+            },
+            {
+              "name": "settings",
+              "check": "settings",
+              "since": "boot",
+              "wait": "^\\[net\\] config boot=saved fallback=none$"
+            },
+            {
+              "name": "lan-launch",
+              "check": "lan",
+              "actions": [
+                {
+                  "keys": "meta_l+r",
+                  "pause": 1
+                }
+              ]
+            },
+            {
+              "name": "lan-command",
+              "check": "lan",
+              "actions": [
+                {
+                  "text": "C:\\TESTS\\LAN\\lan2-directplay.exe join tcp --peers=3 --ciuki-serial"
+                },
+                {
+                  "keys": "ret"
+                }
+              ]
+            },
+            {
+              "name": "lan-start",
+              "check": "lan",
+              "timeout": 120,
+              "wait": "^\\[win32\\] start pid=(?P<lan_pid>[1-9]\\d*) exe=C:\\\\TESTS\\\\LAN\\\\lan2\\-directplay\\.exe pe="
+            },
+            {
+              "name": "lan-pass",
+              "check": "lan",
+              "timeout": 90,
+              "wait": "^\\[user \\d+\\] PASS\\ LAN2\\ DirectPlay\\ COM\\ enumerate/open/player/guaranteed\\ chat/close$"
+            },
+            {
+              "name": "lan-exit",
+              "check": "lan",
+              "timeout": 30,
+              "wait": "^\\[win32\\] exit pid=<<lan_pid>> code=00000000 reason=normal "
+            }
+          ]
+        },
+        {
+          "id": "lan-directplay-tcp-three-c",
+          "kind": "acceptance",
+          "probe": "acceptance",
+          "profile": "qemu-t23",
+          "timeout": 1200,
+          "item": 18,
+          "title": "Authored LAN lan-directplay-tcp-three-c",
+          "expected": {
+            "evidence_kind": "acceptance"
+          },
+          "devices": {
+            "network": "i82559er"
+          },
+          "lan_fixture": {
+            "api": "directplay",
+            "transport": "tcp",
+            "role": "join",
+            "address": "192.0.2.3",
+            "frame": "auto",
+            "peers": 3
+          },
+          "forbid": [
+            "^\\[user \\d+\\] FAIL ",
+            "^\\[win32\\] (?:crash|refused) ",
+            "^\\[win32\\] exit pid=\\d+ code=(?!00000000 )",
+            "^\\[win32\\] exit .* reason=(?!normal )"
+          ],
+          "steps": [
+            {
+              "template": "boot",
+              "prefix": "b1",
+              "check": "boot",
+              "settle": 2
+            },
+            {
+              "name": "settings",
+              "check": "settings",
+              "since": "boot",
+              "wait": "^\\[net\\] config boot=saved fallback=none$"
+            },
+            {
+              "name": "lan-launch",
+              "check": "lan",
+              "actions": [
+                {
+                  "keys": "meta_l+r",
+                  "pause": 1
+                }
+              ]
+            },
+            {
+              "name": "lan-command",
+              "check": "lan",
+              "actions": [
+                {
+                  "text": "C:\\TESTS\\LAN\\lan2-directplay.exe join tcp --peers=3 --ciuki-serial"
+                },
+                {
+                  "keys": "ret"
+                }
+              ]
+            },
+            {
+              "name": "lan-start",
+              "check": "lan",
+              "timeout": 120,
+              "wait": "^\\[win32\\] start pid=(?P<lan_pid>[1-9]\\d*) exe=C:\\\\TESTS\\\\LAN\\\\lan2\\-directplay\\.exe pe="
+            },
+            {
+              "name": "lan-pass",
+              "check": "lan",
+              "timeout": 90,
+              "wait": "^\\[user \\d+\\] PASS\\ LAN2\\ DirectPlay\\ COM\\ enumerate/open/player/guaranteed\\ chat/close$"
+            },
+            {
+              "name": "lan-exit",
+              "check": "lan",
+              "timeout": 30,
+              "wait": "^\\[win32\\] exit pid=<<lan_pid>> code=00000000 reason=normal "
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "id": "lan-ipx-auto-raw",
+      "kind": "acceptance",
+      "probe": "acceptance",
+      "profile": "qemu-t23",
+      "timeout": 1200,
+      "item": 18,
+      "title": "lan-ipx-auto-raw",
+      "expected": {
+        "evidence_kind": "acceptance"
+      },
+      "lan_live": "stream",
+      "guests": [
+        {
+          "id": "lan-ipx-auto-raw-a",
+          "kind": "acceptance",
+          "probe": "acceptance",
+          "profile": "qemu-t23",
+          "timeout": 1200,
+          "item": 18,
+          "title": "Authored LAN lan-ipx-auto-raw-a",
+          "expected": {
+            "evidence_kind": "acceptance"
+          },
+          "devices": {
+            "network": "i82559er"
+          },
+          "lan_fixture": {
+            "api": "ipx",
+            "transport": "ipx",
+            "role": "host",
+            "address": "192.0.2.1",
+            "frame": "auto",
+            "peers": 2
+          },
+          "forbid": [
+            "^\\[user \\d+\\] FAIL ",
+            "^\\[win32\\] (?:crash|refused) ",
+            "^\\[win32\\] exit pid=\\d+ code=(?!00000000 )",
+            "^\\[win32\\] exit .* reason=(?!normal )"
+          ],
+          "steps": [
+            {
+              "template": "boot",
+              "prefix": "b1",
+              "check": "boot",
+              "settle": 2
+            },
+            {
+              "name": "settings",
+              "check": "settings",
+              "since": "boot",
+              "wait": "^\\[net\\] config boot=saved fallback=none$"
+            },
+            {
+              "name": "lan-launch",
+              "check": "lan",
+              "actions": [
+                {
+                  "keys": "meta_l+r",
+                  "pause": 1
+                }
+              ]
+            },
+            {
+              "name": "lan-command",
+              "check": "lan",
+              "actions": [
+                {
+                  "text": "C:\\TESTS\\LAN\\lan2-ipx.exe host --ciuki-serial"
+                },
+                {
+                  "keys": "ret"
+                }
+              ]
+            },
+            {
+              "name": "lan-start",
+              "check": "lan",
+              "timeout": 120,
+              "wait": "^\\[win32\\] start pid=(?P<lan_pid>[1-9]\\d*) exe=C:\\\\TESTS\\\\LAN\\\\lan2\\-ipx\\.exe pe="
+            },
+            {
+              "name": "lan-pass",
+              "check": "lan",
+              "timeout": 90,
+              "wait": "^\\[user \\d+\\] PASS\\ LAN2\\ Win32\\ AF_IPX\\ broadcast/directed\\ echo$"
+            },
+            {
+              "name": "lan-exit",
+              "check": "lan",
+              "timeout": 30,
+              "wait": "^\\[win32\\] exit pid=<<lan_pid>> code=00000000 reason=normal "
+            }
+          ]
+        },
+        {
+          "id": "lan-ipx-auto-raw-b",
+          "kind": "acceptance",
+          "probe": "acceptance",
+          "profile": "qemu-t23",
+          "timeout": 1200,
+          "item": 18,
+          "title": "Authored LAN lan-ipx-auto-raw-b",
+          "expected": {
+            "evidence_kind": "acceptance"
+          },
+          "devices": {
+            "network": "i82559er"
+          },
+          "lan_fixture": {
+            "api": "ipx",
+            "transport": "ipx",
+            "role": "join",
+            "address": "192.0.2.2",
+            "frame": "802.3",
+            "peers": 2
+          },
+          "forbid": [
+            "^\\[user \\d+\\] FAIL ",
+            "^\\[win32\\] (?:crash|refused) ",
+            "^\\[win32\\] exit pid=\\d+ code=(?!00000000 )",
+            "^\\[win32\\] exit .* reason=(?!normal )"
+          ],
+          "steps": [
+            {
+              "template": "boot",
+              "prefix": "b1",
+              "check": "boot",
+              "settle": 2
+            },
+            {
+              "name": "settings",
+              "check": "settings",
+              "since": "boot",
+              "wait": "^\\[net\\] config boot=saved fallback=none$"
+            },
+            {
+              "name": "lan-launch",
+              "check": "lan",
+              "actions": [
+                {
+                  "keys": "meta_l+r",
+                  "pause": 1
+                }
+              ]
+            },
+            {
+              "name": "lan-command",
+              "check": "lan",
+              "actions": [
+                {
+                  "text": "C:\\TESTS\\LAN\\lan2-ipx.exe join --ciuki-serial"
+                },
+                {
+                  "keys": "ret"
+                }
+              ]
+            },
+            {
+              "name": "lan-start",
+              "check": "lan",
+              "timeout": 120,
+              "wait": "^\\[win32\\] start pid=(?P<lan_pid>[1-9]\\d*) exe=C:\\\\TESTS\\\\LAN\\\\lan2\\-ipx\\.exe pe="
+            },
+            {
+              "name": "lan-pass",
+              "check": "lan",
+              "timeout": 90,
+              "wait": "^\\[user \\d+\\] PASS\\ LAN2\\ Win32\\ AF_IPX\\ broadcast/directed\\ echo$"
+            },
+            {
+              "name": "lan-exit",
+              "check": "lan",
+              "timeout": 30,
+              "wait": "^\\[win32\\] exit pid=<<lan_pid>> code=00000000 reason=normal "
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}

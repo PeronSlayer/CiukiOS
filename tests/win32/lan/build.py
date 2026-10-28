@@ -12,6 +12,7 @@ INCLUDE=ROOT/'build/win32/upper/objects/include'
 
 def main():
     OUT.mkdir(parents=True,exist_ok=True)
+    (OUT/'build.json').unlink(missing_ok=True)
     results={}
     for name in ('ipx','directplay'):
         obj=OUT/(name+'.obj')
@@ -38,7 +39,9 @@ def main():
         subprocess.run(['lld-link','/machine:x86','/entry:entry@0','/nodefaultlib','/safeseh:no',
             '/timestamp:0','/incremental:no','/base:0x00400000','/subsystem:console,4.0',
             '/osversion:4.0','/out:'+str(pe),str(obj),*libraries],check=True)
-        results[pe.name]={'sha256':hashlib.sha256(pe.read_bytes()).hexdigest(),'bytes':pe.stat().st_size,'imports':{k:sorted(v) for k,v in imports.items()}}
+        sources=[Path(__file__),Path(__file__).with_name(name+'.c'),Path(__file__).with_name('common.h')]
+        results[pe.name]={'sha256':hashlib.sha256(pe.read_bytes()).hexdigest(),'bytes':pe.stat().st_size,'imports':{k:sorted(v) for k,v in imports.items()},
+                          'sources':{str(p.relative_to(ROOT)):hashlib.sha256(p.read_bytes()).hexdigest() for p in sources}}
     (OUT/'build.json').write_text(json.dumps(results,indent=2,sort_keys=True)+'\n')
     print(json.dumps(results,sort_keys=True))
 if __name__=='__main__':main()
