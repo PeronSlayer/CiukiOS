@@ -137,7 +137,10 @@ static void *startup_thread(void *arg)
         if (!desk_w32_ready()) { n=desk_startup_list_at(DESK_STARTUP_FOLDER,REG_DIRECTORY,entries,DESK_STARTUP_MAX); break; }
         struct timespec pause={.tv_sec=0,.tv_nsec=200000000}; nanosleep(&pause,NULL);
     }
-    if (n>=0) (void)desk_startup_execute(entries,(unsigned)n,0,ciuki_win32_startup_consume,startup_launch);
+    if (n>=0) {
+        fprintf(stderr,"startup: snapshot ready entries=%d\n",n);
+        (void)desk_startup_execute(entries,(unsigned)n,0,ciuki_win32_startup_consume,startup_launch);
+    }
     else fprintf(stderr,"startup: snapshot failed: %d\n",-n);
     free(entries); return NULL;
 }

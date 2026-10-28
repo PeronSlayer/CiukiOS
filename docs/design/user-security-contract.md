@@ -857,7 +857,11 @@ operation-id retries retrieve the prior result before any new generation check.
 LIST/LOOKUP replies retain version u32@0=1, count u32@4 (<=18), generation u64@8,
 then count 144-byte public records (uid@0, group_bitmap@4, public enabled/type
 flags@8, reserved@12=0, name[32]@16, picture[96]@48). AUTH LIST hides ineligible
-accounts. Public records never include salts, verifiers or private paths.
+accounts. AUTH LIST additionally exposes flag bit 2 for the existing ready blank-logon
+exception: the Welcome tile submits the empty secret through the normal LOGON
+authentication exchange. This is a UI hint, never unlock or authorization proof.
+Management LIST/LOOKUP keep bits 0–1 only. Public records never include salts,
+verifiers or private paths. See [runtime conformance research](../validation/sec-runtime1.md).
 Successful management mutations return one u64 new database generation.
 
 #### Complete authentication exchange (A2-1)
@@ -1068,7 +1072,10 @@ an unchanged binding; section 3.5 compacts ownership-changing work too.
 PROFILE=8 uses LOOKUP's uid-or-name selector but is authorized separately:
 ordinary callers (including Guest) get only their own committed mapping;
 administrators may query other committed mappings, and retained LOGON/ACCOUNT
-roles may query during authenticated session preparation. Deny another user's
+roles may query during authenticated session preparation. The sealed REGISTRY
+role with uid 0 and session 0 may read committed mappings to select its
+authoritative private user hives (sec-k06); uid 0 alone grants no access.
+Deny another user's
 query EACCES before exposing paths; unknown authorized account ESRCH, inactive
 unpublished/retired owner binding EACCES, changed generation EAGAIN, corrupt store
 EIO. Reply is exactly 272 bytes: version u32@0=1, size u32@4=272, uid u32@8,

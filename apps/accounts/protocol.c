@@ -115,7 +115,7 @@ int acct_public_encode(const struct acct_response *r, void *v, size_t cap, size_
     uint8_t *p=v; memset(p,0,*n); w32(p,1); w32(p+4,r->count); w64(p+8,r->generation);
     for(unsigned i=0;i<r->count;++i) {
         const struct acct_public *r0=&r->records[i]; uint8_t *b=p+16+144*i;
-        w32(b,r0->uid); w32(b+4,r0->groups); w32(b+8,r0->flags&3);
+        w32(b,r0->uid); w32(b+4,r0->groups); w32(b+8,r0->flags&(3u|ACCT_PUBLIC_BLANK_LOGON));
         memcpy(b+16,r0->name,32); memcpy(b+48,r0->picture,96);
     }
     return 0;
