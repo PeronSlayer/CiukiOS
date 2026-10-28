@@ -412,6 +412,10 @@ int cp_wallpaper_set(struct cp_app *, const char *path);
 void cp_detach(struct cp_app *);
 int cp_page_index(const char *name);
 void cp_tick(struct cp_app *);
+/* fx-uaccounts: adopt finished worker results (accounts/users, network,
+ * game properties); cheap when nothing finished. The native loop calls it
+ * after every turn, on every page. */
+void cp_jobs_poll(struct cp_app *);
 void cp_open(struct cp_app *, int page);
 void cp_uninstall_icons(struct cp_app *);   /* fx-exeicons: refresh Add/Remove icons after the icon worker published */
 int cp_snapshot_valid(const struct ciuki_devices_info *);

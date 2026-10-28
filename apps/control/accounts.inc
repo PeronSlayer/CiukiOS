@@ -111,7 +111,7 @@ static void accounts_build(struct cp_app *a)
     list_style(w,"Accounts"); w->items=a->account_items; w->count=a->account_count;
     const struct cpa_record *t=accounts_target(a);
     static char line0[64], line1[64], line2[64];
-    snprintf(line0,sizeof(line0),"%s",t ? t->name : v->valid ? "" : "Reading the accounts...");
+    snprintf(line0,sizeof(line0),"%s",t ? t->name : !v->valid && a->account_busy ? "Reading the accounts..." : "");
     snprintf(line1,sizeof(line1),"%s",t ? account_type(t) : "");
     snprintf(line2,sizeof(line2),"%s",t ? ((t->flags&CPA_ENABLED) ? "The account is on." : "The account is off.") : "");
     add(a,DU_LABEL,UA_LINE0,236,44,300,16,line0);
@@ -249,8 +249,12 @@ static void accounts_poll(struct cp_app *a)
     if (v.valid) { a->accounts=v; a->account_loaded=1; }
     if (e==-EPERM && !a->accounts.valid) e=-EIO;
     if (a->account_action==CPA_READ) {
+        /* fx-uaccounts: a finished READ, failed or not, is not re-submitted
+         * by the rebuild below (that loop kept "Reading the accounts..." on
+         * the page and hid the error); opening the page again retries. */
+        a->account_loaded=1;
         a->account_note[0]=0;
-        if (e) accounts_note(a,"The account service is not available. Try again later.");
+        if (e) { char line[96]; snprintf(line,sizeof(line),"The account service is not available (%d). Try again later.",e); accounts_note(a,line); }
         if (!a->account_uid) a->account_uid=a->accounts.self_uid;
         if (a->account_password_page && !e) {
             /* --panel=passwords: the caller's own password task. */

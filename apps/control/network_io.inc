@@ -8,6 +8,9 @@ struct cp_network_worker {
     pthread_t thread;
     atomic_int done;
     int active;
+    /* fx-uaccounts: completion wake-up of the UI wait set (main.c's
+     * notify_completion); NULL in harnesses that poll. */
+    void (*notify)(void *); void *notify_ctx;
     unsigned operation;
     struct ciuki_net_control request;
     char name[128];
@@ -77,7 +80,9 @@ static void *network_job(void *arg)
     if (!w->result.error && !w->result.message[0]) snprintf(w->result.message,sizeof(w->result.message),"%s",
         w->operation==CP_NET_IPX ? "IPX frame type saved and applied." : w->operation==CIUKI_NETCTL_SET ? "Network settings saved and applied." : w->operation==CIUKI_NETCTL_RENEW ? "DHCP renewal requested." :
         w->operation==CIUKI_NETCTL_RELEASE ? "DHCP lease released." : "Network status refreshed.");
-    atomic_store_explicit(&w->done,1,memory_order_release); return NULL;
+    atomic_store_explicit(&w->done,1,memory_order_release);
+    if (w->notify) w->notify(w->notify_ctx);
+    return NULL;
 }
 static int network_worker_begin(struct cp_network_worker *w,unsigned operation,const struct ciuki_net_control *request,const char *name)
 {

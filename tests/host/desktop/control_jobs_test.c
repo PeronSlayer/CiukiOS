@@ -24,6 +24,7 @@ static int loop_poll(struct pollfd *,nfds_t,int);
 static uint64_t virtual_ns;
 static int stopped, expected_timeout, waits, fail_send, event_mode;
 static struct cp_main *event_panel;
+static int (*adopted)(struct cp_main *);   /* fx-uaccounts: event_mode 2 check; NULL = program inventory */
 static uint32_t pixels[CP_WIDTH*CP_HEIGHT];
 int cp_decoder_fd(void) { return -1; } /* No preview requested by these fixtures. */
 uint64_t du_now(void) { return virtual_ns; }
@@ -49,7 +50,8 @@ static int loop_poll(struct pollfd *fds,nfds_t n,int timeout)
         assert(r==1 && fds[2].revents&POLLIN); event_mode=2; return r;
     }
     if (event_mode==2) {
-        assert(event_panel->programs_ready && event_panel->program_count==1 && !event_panel->program_scan.started);
+        if (adopted) assert(adopted(event_panel));
+        else assert(event_panel->programs_ready && event_panel->program_count==1 && !event_panel->program_scan.started);
         event_mode=0;
     }
     /* An input event after 65 idle seconds, or exactly the real deadline.
@@ -80,6 +82,11 @@ int ciuki_channel_recv(int fd,struct ciuki_message *msg,uint32_t flags)
 /* Native services are outside the fixture; program inventory has one record. */
 int ciuki_dosvm(uint32_t op,struct ciuki_dosvm_command *c)
 { (void)op; (void)c; return -1; }
+/* fx-uaccounts: a machine without network adapters; IPX setting refused. */
+int ciuki_net_control(unsigned op,struct ciuki_net_control *c)
+{ (void)op; (void)c; errno=ENODEV; return -1; }
+int ciuki_system_setting_set(unsigned setting,const char *text,size_t length)
+{ (void)setting; (void)text; (void)length; errno=ENOSYS; return -1; }
 int cp_program_list(struct cp_program_store *store,struct desk_uninstall_entry *out,unsigned cap)
 { (void)store; assert(cap); memset(out,0,sizeof(*out)); strcpy(out->name,"Fixture"); return 1; }
 static int load_config(void *ctx,char *text,size_t cap,size_t *length)
@@ -215,6 +222,43 @@ static void jobs(const char *fonts)
     assert(poll(&fd,1,100)==1 && fd.revents&POLLHUP); finish_panel(&m);
     puts("PASS failed completion publication wakes peer HUP");
 }
+/* fx-uaccounts: pages without a one-second heartbeat adopt their worker's
+ * result on the loop turn after its completion token. User Accounts kept
+ * "Reading the accounts..." on the target because idle() ran cp_tick (the
+ * only adopter) on clock pages alone. The production accounts glue runs here
+ * without an account service seam (ENOSYS): the failed READ is reported once
+ * and not re-submitted by the rebuild. The real ACCOUNTS service path is
+ * tests/host/security/test_control_panel_accounts.py. */
+static int accounts_adopted(struct cp_main *m)
+{
+    char want[96]; snprintf(want,sizeof(want),"The account service is not available (%d). Try again later.",-ENOSYS);
+    return !m->app.account_busy && m->app.account_loaded && !m->accounts_job.started && !m->app.accounts.valid &&
+           !strcmp(m->app.account_note,want);
+}
+static int network_adopted(struct cp_main *m)
+{
+    return !m->app.network_busy && m->app.network_loaded && !m->network_worker.active &&
+           !strcmp(m->app.network_message,"Network status refreshed.");
+}
+static void worker_pages(void)
+{
+    static struct cp_main m;
+    init_panel(&m,CP_HOME); accounts_attach(&m.app.host);
+    cp_open(&m.app,CP_USERS); assert(m.app.account_busy && m.accounts_job.started);
+    event_mode=1; event_panel=&m; adopted=accounts_adopted; expected_timeout=-1;
+    assert(!control_run(&m) && waits==2 && !event_mode);
+    struct du_widget *line=du_get(&m.ui,1622);   /* UA_LINE0: no stale "Reading the accounts..." */
+    assert(line && !line->text[0]);
+    finish_panel(&m);
+    init_panel(&m,CP_HOME);
+    m.network_worker.notify=notify_completion; m.network_worker.notify_ctx=&m;
+    m.app.host.network_begin=network_begin; m.app.host.network_poll=network_poll;
+    cp_open(&m.app,CP_NETWORK); assert(m.app.network_busy && m.network_worker.active);
+    event_mode=1; event_panel=&m; adopted=network_adopted; expected_timeout=-1;
+    assert(!control_run(&m) && waits==2 && !event_mode);
+    network_worker_stop(&m.network_worker); finish_panel(&m); adopted=NULL;
+    puts("PASS User Accounts and Network adopt their worker results on the turn after the completion, without a heartbeat; a failed READ is reported once");
+}
 static struct ciuki_settings input_saved;
 static unsigned input_applied;
 static int input_load(void *ctx,char *text,size_t size,size_t *length)
@@ -247,6 +291,6 @@ int main(int argc,char **argv)
 {
     setvbuf(stdout,NULL,_IONBF,0);
     setvbuf(stdout,NULL,_IONBF,0);
-    assert(argc==2); input_properties();idle_pages(); jobs(argv[1]);
+    assert(argc==2); input_properties();idle_pages(); jobs(argv[1]); worker_pages();
     puts("PASS Control Panel event-driven jobs"); fflush(stdout); return 0;
 }

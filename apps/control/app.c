@@ -596,11 +596,19 @@ void cp_audio_result(struct cp_app *a, int result)
     text(a,C_STATUS,result ? "Audio test failed; see hardware diagnostics." : "Audio test finished; see hardware diagnostics.");
     sync(a);
 }
-void cp_tick(struct cp_app *a)
+/* fx-uaccounts: adopt every finished worker result (User Accounts / Users,
+ * Network, Game properties). The native loop calls this on every turn after
+ * a completion wake-up, on every page: these pages have no one-second
+ * heartbeat, so adoption must never depend on cp_tick. */
+void cp_jobs_poll(struct cp_app *a)
 {
     user_poll(a);
     network_poll(a);
     game_poll(a);
+}
+void cp_tick(struct cp_app *a)
+{
+    cp_jobs_poll(a);
     if (a->page==CP_JOYSTICK) {
         if (a->joystick_save_pending && !a->joystick_busy && !a->joystick_calibrating) {
             struct ciuki_joystick_control c={.version=CIUKI_JOYSTICK_VERSION,.size=sizeof(c),.operation=CIUKI_JOY_SAVE_STATUS};

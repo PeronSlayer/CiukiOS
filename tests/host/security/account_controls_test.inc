@@ -26,7 +26,7 @@ static int cp_self(void *ctx, uint32_t *uid, uint32_t groups[8], unsigned *count
     for (unsigned i = 0; i < *count; i++) groups[i] = c.groups[i];
     return 0;
 }
-static const struct cpa_transport cp_transport = { NULL, cp_call, cp_self };
+static const struct cpa_transport cp_transport = { NULL, cp_call, cp_self, NULL };
 static void cp_connect(void)
 {
     if (cp_link.fd >= 0 && cp_link.sys) lgn_client_close(&cp_link);
@@ -424,9 +424,15 @@ static void scenario_upgrade(void)
          "administrator logs on with its retained profile PASS");
 }
 
+#ifdef CIUKI_CONTROL_PANEL   /* fx-uaccounts: the production Control Panel process */
+#include "control_accounts_test.inc"
+#endif
 static int h12_scenario(const char *name)
 {
     if (!strcmp(name, "accounts")) scenario_accounts();
+#ifdef CIUKI_CONTROL_PANEL
+    else if (!strcmp(name, "control-panel")) scenario_control_panel();
+#endif
     else if (!strcmp(name, "saver")) scenario_saver();
     else if (!strcmp(name, "saver-blank")) scenario_saver_blank();
     else if (!strcmp(name, "override")) scenario_override();
