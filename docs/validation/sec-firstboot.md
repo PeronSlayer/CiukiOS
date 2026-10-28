@@ -50,6 +50,28 @@ remains an inference until the lead repeats boots with the new diagnostics.
 
 ## Recovery decision
 
+Round 2 review (2026-10-28; primary sources above rechecked before editing):
+the local 3.5/3.6 contract also applies while an intent write is refused and
+while OWNER is recovering at mount. Keep the exact sealed in-memory account
+intent on persistence `EAGAIN`; retry it before orphan recovery so no extra
+reservation, salt or generation is allocated. A real process restart without
+that memory still follows the durable-evidence orphan rule below.
+
+OWNER publication may return retryable `EAGAIN` from either read-only proof
+lookup around a successful rename. Earlier completed renames remain fenced;
+the identical COMMIT revalidates their proofs and completes the same vector.
+Rename errors and all durability errors keep admission closed. Mount recovery retains a loaded,
+ready store on reversible validation `EAGAIN`, retries on ACCOUNT operations,
+and withholds policy/service binding until recovery and record verification
+complete. IDENTITY continues to name the volume while recovery waits.
+Non-transient validation errors and uncertain persistence remain closed.
+This preserves the SID/RID uniqueness described by Microsoft and the exact
+salt/verifier output described by RFC 8018; no entropy or KDF policy changes.
+The v6.12 raw-source fetch was unavailable during this recheck; upstream's
+[current getrandom implementation](https://github.com/torvalds/linux/blob/master/drivers/char/random.c)
+and the primary [Linux getrandom(2) manual](https://man7.org/linux/man-pages/man2/getrandom.2.html)
+confirm the same nonblocking readiness refusal.
+
 ACCOUNT retains its unpublished service and lease after promotion `EAGAIN`.
 Each retry runs the same recovery routine used by service open. The server
 admits clients only after recovery and seed promotion complete. OWNER remains
@@ -59,7 +81,8 @@ attached throughout these retries.
 | --- | --- |
 | No SID write | Retry entropy under the same lease. |
 | SID intent, no account intent | Reuse SID; recover any orphan; bootstrap at the next available account generation. |
-| OWNER RESERVE, account intent absent | Validate and abort the orphan; preserve OWNER/account/key allocation highs; use the contract's prepublication uid exception. |
+| OWNER RESERVE, sealed account intent retained in memory | Persist the identical intent before recovery can consider the reservation orphaned. |
+| OWNER RESERVE, account intent absent and no retained sealed intent | Validate and abort the orphan; preserve OWNER/account/key allocation highs; use the contract's prepublication uid exception. |
 | Full immutable account intent | Resume that exact batch, SID, account generation, digests and verifier through STATUS/PREPARE/COMMIT. |
 | CONSUMED and installed database | Open results/enrollment state; remove a residual seed best effort; report successful promotion. |
 
@@ -95,6 +118,26 @@ and in-session orphan recovery that itself encounters repeated tree refusals.
 Every case checks one
 SID, unchanged sealed request where present, retired generations, all profiles,
 seed consumption and clean simulated reboot. `fsck.fat -n` checks each result.
+
+Round 2 extends this to 38 first-boot scenarios plus existing H15. Publication
+faults enter the real `entry_proof`/`vfs_stat` lookup; repeated read refusals
+retain the same COMMIT digest and pending vector at all six proof lookups
+(before/after each profile rename), including after partial publication.
+Rename, publication barrier and permanent lookup errors explicitly check closed
+admission. Intent persistence is refused 776 times (beyond `OWNER_COMPACT_AT`)
+without allocating a second receipt/generation; a partial-write case verifies
+identical sealed bytes on eight retries. Teardown wipes retained work, and a
+following reboot retires its orphan generation.
+
+The backend hook now installs before `owner_open`. Reboot tests cover both an
+orphan RESERVE and a COMMIT_REQUIRED batch, with five recovery tree refusals;
+the loaded receipt, pending records, sequence and fences remain intact, while
+policy and ACCOUNT admission remain withheld. A recovery durability `EAGAIN`
+still fails closed. Allocation-fault assertions cover every OWNER operation
+from both promote/recover diagnostic contexts and check the step before the
+allocator refuses and after `ENOMEM` returns. All scenarios reach their PASS
+markers and zero tracked resources; sanitizer exit restrictions are recorded
+separately in the report.
 
 Sanitizer settings are unchanged; ACCOUNT/OWNER retains default leak detection.
 Exact commands, results and sandbox-only LeakSanitizer failures are recorded in

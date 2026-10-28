@@ -228,8 +228,12 @@ static int backend_publish(void *ctx,const struct owner_request *q,struct owner_
         uint8_t proof[32]; e=entry_proof(b,q->bindings[i].path,proof);
         if(!e) { if(memcmp(proof,records[i].proof,32)) return -EIO; continue; }
         if(e!=-ENOENT) return e;
-        e=vfs_rename(b->table,from,to); if(e) return e;
-        e=entry_proof(b,q->bindings[i].path,proof); if(e || memcmp(proof,records[i].proof,32)) return e?e:-EIO;
+        /* This API combines validation and mutation errors: a failed rename
+         * is uncertain, unlike either read-only proof lookup around it. */
+        e=vfs_rename(b->table,from,to); if(e) return e==-EAGAIN?-EIO:e;
+        e=entry_proof(b,q->bindings[i].path,proof);
+        if(e) return e;
+        if(memcmp(proof,records[i].proof,32)) return -EIO;
     }
     return 0;
 }

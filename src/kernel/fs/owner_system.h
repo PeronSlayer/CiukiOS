@@ -16,7 +16,8 @@
  *  80 char path[64] (ROOT_OCCUPIED, NUL padded)  144 u8 reserved[16]=0
  * Reply:
  *   0 u32 version=1   4 u32 bytes=160   8 u32 operation  12 u32 store state
- *     (0 no store yet, 1 open, 2 unavailable: IDENTITY answers, others EIO)
+ *     (0 no store yet, 1 open, 2 unavailable: IDENTITY answers; others EIO,
+ *      or EAGAIN while reversible mount recovery is still waiting)
  *  16 u64 volume  24 u64 owner generation  32 u64 checkpoint floor
  *  40 u32 receipt count  44 u32 result (ROOT_OCCUPIED: 1 occupied)
  *  48 u64 owner key  56 u64 binding generation  64 u32 uid  68 u32 action
@@ -34,7 +35,8 @@ struct ciuki_security_profile;
 enum owner_query_op { OWNER_IDENTITY=8, OWNER_GENERATION, OWNER_BINDING, OWNER_ROOT_OCCUPIED,
                       OWNER_SNAPSHOT, OWNER_RECOVER_ORPHANS, OWNER_CHECKPOINT_FLOOR };
 #define OWNER_QUERY_BYTES 160u
-enum owner_system_state { OWNER_SYSTEM_NONE, OWNER_SYSTEM_UNPROVISIONED, OWNER_SYSTEM_OPEN, OWNER_SYSTEM_FAILED };
+enum owner_system_state { OWNER_SYSTEM_NONE, OWNER_SYSTEM_UNPROVISIONED, OWNER_SYSTEM_OPEN, OWNER_SYSTEM_FAILED,
+                          OWNER_SYSTEM_RECOVERING };
 /* Boot binding of the mounted system volume (drive, volume identity
  * partition LBA << 32 | FAT serial, 0 = not managed). An existing store
  * (machine.sid present) is opened and the volume's policy and OWNER lease

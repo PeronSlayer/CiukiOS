@@ -60,6 +60,8 @@ struct owner_backend {
      * the saved mapping on restart/COMMIT, not just the pathname's existence.
      * The core assigns locator; backend must never derive it from st_ino. */
     int (*reserve)(void *, const struct owner_request *, struct owner_record *, bool recheck);
+    /* EAGAIN is a read-only validation refusal. Earlier successful renames
+     * remain fenced and repeat idempotently; uncertain writes use another errno. */
     int (*publish)(void *, const struct owner_request *, struct owner_record *);
     int (*release)(void *, const struct owner_request *, bool committed);
     /* Protected account journal: 0 absent/precommit, 1 COMMIT_REQUIRED or
@@ -95,6 +97,9 @@ struct owner_store {
 /* Explicit fresh provisioning is allowed only after the lead's authenticated
  * destination/seed gate. A missing store at ordinary open is EIO. */
 int owner_open(struct owner_store *, const struct owner_backend *, const uint32_t sid[3], uint64_t volume, bool fresh);
+/* Resume a loaded store after reversible open validation EAGAIN. The caller
+ * withholds service/policy binding until this succeeds; never reload it. */
+int owner_open_resume(struct owner_store *);
 void owner_close(struct owner_store *);
 int owner_request_decode(struct owner_request *, unsigned *op, const void *, size_t);
 int owner_request_encode(const struct owner_request *, unsigned op, void *, size_t, size_t *);

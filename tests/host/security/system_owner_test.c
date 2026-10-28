@@ -36,6 +36,18 @@ static unsigned entropy_calls, entropy_fail_call, entropy_fail_count, sid_creati
 static unsigned current_owner_op, fail_tree_op, fail_tree_at, tree_calls, tree_fail_count;
 static unsigned generation_refusals, orphan_refusals;
 static unsigned binding_refusals;
+static unsigned recovery_refusals, publication_refusals, publication_lookups, owner_opens;
+static bool refuse_rename, refuse_barrier;
+static unsigned publication_fail_at=1;
+static bool refuse_publication_barrier;
+static int publication_error=-EAGAIN;
+static bool publishing, fail_frame;
+static struct acct_store *frame_store;
+static enum acct_boot_step frame_step;
+static uint8_t refused_intent_digest[32];
+static size_t refused_intent_bytes;
+static unsigned intent_attempts;
+static bool partial_intent;
 static int binding_error=-EAGAIN;
 static int (*production_binding)(void *, uint64_t, uint32_t, char[64], struct acct_owner_binding *);
 static int retry_binding(void *ctx, uint64_t volume, uint32_t uid, char root[64], struct acct_owner_binding *b)
@@ -47,9 +59,12 @@ static int retry_binding(void *ctx, uint64_t volume, uint32_t uid, char root[64]
 static struct owner_store *live_owner;
 static int (*backend_tree)(void *, uint64_t, uint32_t, uint8_t[32]);
 static int (*backend_current)(void *, uint64_t *, uint8_t[32]);
+static int (*backend_publish)(void *, const struct owner_request *, struct owner_record *);
+static int (*backend_barrier)(void *);
 static int retry_tree(void *ctx, uint64_t g, uint32_t uid, uint8_t digest[32])
 {
     int e=backend_tree(ctx,g,uid,digest);
+    if (!e && recovery_refusals) { recovery_refusals--; return -EAGAIN; }
     if (!e && current_owner_op==fail_tree_op && ++tree_calls>=fail_tree_at && tree_fail_count) {
         tree_fail_count--; return -EAGAIN;
     }
@@ -63,15 +78,62 @@ static int retry_current(void *ctx, uint64_t *g, uint8_t digest[32])
     }
     return e;
 }
-/* Install fault injection at the backend seam before the first RESERVE,
- * after production owner_open; all protocol/state transitions stay real. */
-int __real_owner_service_bind(struct owner_store *);
-int __wrap_owner_service_bind(struct owner_store *s)
+static int retry_publish(void *ctx, const struct owner_request *q, struct owner_record *r)
 {
-    live_owner=s;
-    backend_tree=s->io.tree; s->io.tree=retry_tree;
-    backend_current=s->io.account_current; s->io.account_current=retry_current;
-    return __real_owner_service_bind(s);
+    publishing=true; int e=backend_publish(ctx,q,r); publishing=false;
+    if (!e && refuse_publication_barrier) { refuse_publication_barrier=false; refuse_barrier=true; }
+    return e;
+}
+int __real_vfs_stat(struct vfs_table *, const char *, struct fat_entry *);
+int __wrap_vfs_stat(struct vfs_table *t, const char *path, struct fat_entry *entry)
+{
+    if (publishing && strstr(path,"/Windows/Profiles/")) {
+        publication_lookups++;
+        if (publication_refusals && publication_lookups>=publication_fail_at) {
+            publication_refusals--; return publication_error;
+        }
+    }
+    return __real_vfs_stat(t,path,entry);
+}
+int __real_vfs_rename(struct vfs_table *, const char *, const char *);
+int __wrap_vfs_rename(struct vfs_table *t, const char *from, const char *to)
+{
+    if (publishing && refuse_rename) { refuse_rename=false; return -EAGAIN; }
+    return __real_vfs_rename(t,from,to);
+}
+static int retry_barrier(void *ctx)
+{
+    if (refuse_barrier) { refuse_barrier=false; return -EAGAIN; }
+    return backend_barrier(ctx);
+}
+/* Install BEFORE owner_open so mount-time recovery uses the same hooks.
+ * Protocol, tree walk, publication and recovery all remain production code. */
+int __real_owner_vfs_backend(struct owner_vfs *, struct vfs_table *, uint64_t,
+                            const struct owner_account_evidence *, struct owner_backend *);
+int __wrap_owner_vfs_backend(struct owner_vfs *b, struct vfs_table *t, uint64_t volume,
+                            const struct owner_account_evidence *a, struct owner_backend *io)
+{
+    int e=__real_owner_vfs_backend(b,t,volume,a,io);
+    if (!e) {
+        backend_tree=io->tree; io->tree=retry_tree;
+        backend_current=io->account_current; io->account_current=retry_current;
+        backend_publish=io->publish; io->publish=retry_publish;
+        backend_barrier=io->barrier; io->barrier=retry_barrier;
+    }
+    return e;
+}
+int __real_owner_open(struct owner_store *, const struct owner_backend *, const uint32_t[3], uint64_t, bool);
+int __wrap_owner_open(struct owner_store *s, const struct owner_backend *io, const uint32_t sid[3], uint64_t volume, bool fresh)
+{ live_owner=s; owner_opens++; return __real_owner_open(s,io,sid,volume,fresh); }
+void *__real_acct_frame_alloc(const struct acct_kernel *, size_t);
+void *__wrap_acct_frame_alloc(const struct acct_kernel *k, size_t bytes)
+{
+    if (fail_frame) {
+        CHECK(bytes==ACCT_OWNER_BODY_MAX+ACCT_OWNER_REPLY_MAX);
+        CHECK(frame_store && frame_store->firstboot_step==frame_step);
+        fail_frame=false; return NULL;
+    }
+    return __real_acct_frame_alloc(k,bytes);
 }
 static struct process *account_process(void) { desktop_select(account_thread); return account_thread->process; }
 int acct_sys_security(struct ciuki_security_args *a, const void *in, uint32_t in_bytes, void *out, uint32_t out_bytes)
@@ -251,7 +313,16 @@ static int io_write(void *ctx, const char *name, const void *data, size_t bytes)
     (void)ctx; char p[FS_PATH_BYTES]; int e=io_path(name,p); if (e) return e;
     if (fail_manifest && strstr(name,"/manifest")) { fail_manifest=0; return -EIO; }
     if (fail_txn && !strcmp(name,"accounts.db.txn")) { fail_txn=0; return -EIO; }
-    if (orphan_refusals && !strcmp(name,"accounts.db.txn")) { orphan_refusals--; return -EAGAIN; }
+    if (!strcmp(name,"accounts.db.txn")) {
+        uint8_t digest[32]; sha256(data,bytes,digest);
+        if (refused_intent_bytes) CHECK(bytes==refused_intent_bytes && !memcmp(digest,refused_intent_digest,32));
+        if (orphan_refusals) {
+            if (!refused_intent_bytes) { refused_intent_bytes=bytes; memcpy(refused_intent_digest,digest,32); }
+            orphan_refusals--; intent_attempts++;
+            if (partial_intent) CHECK(!t_write(ctx,p+2,0,data,bytes/2));
+            return -EAGAIN;
+        }
+    }
     if (name[0]=='/' && (e=make_parents(p))) return e;
     return t_write(ctx,p+2,0,data,bytes);
 }
@@ -563,12 +634,19 @@ static void test_transient_firstboot(const char *scenario)
     else if (!strcmp(scenario,"entropy-many")) { entropy_fail_call=1; entropy_fail_count=8; expected_retries=8; expected_step="entropy-sid"; }
     else if (!strcmp(scenario,"generation")) { generation_refusals=1; expected_generation=2; expected_step="reserve"; }
     else if (!strcmp(scenario,"binding")) { binding_refusals=1; expected_step="binding"; }
-    else if (!strcmp(scenario,"orphan") || !strcmp(scenario,"orphan-tree")) {
-        orphan_refusals=1; expected_generation=2; expected_step="intent";
-        if (!strcmp(scenario,"orphan-tree")) {
-            fail_tree_op=13; fail_tree_at=1; tree_fail_count=2; expected_retries=3;
-        }
-    } else {
+    else if (!strcmp(scenario,"orphan") || !strcmp(scenario,"orphan-many") || !strcmp(scenario,"intent-partial")) {
+        orphan_refusals=!strcmp(scenario,"orphan-many")?OWNER_COMPACT_AT+8:1;
+        if (!strcmp(scenario,"intent-partial")) { partial_intent=true; orphan_refusals=8; }
+        expected_retries=orphan_refusals; expected_step="intent";
+    } else if (!strcmp(scenario,"publish") || !strcmp(scenario,"publish-many")) {
+        publication_refusals=!strcmp(scenario,"publish-many")?8:1;
+        expected_retries=publication_refusals; expected_step="commit";
+    } else if (!strncmp(scenario,"publish-proof-",14)) {
+        CHECK(sscanf(scenario,"publish-proof-%u",&publication_fail_at)==1);
+        CHECK(publication_fail_at>=1 && publication_fail_at<=6);
+        publication_refusals=1; expected_step="commit";
+    } else if (!strcmp(scenario,"allocation")) expected_retries=0;
+    else {
         unsigned op=0,at=0,count=0;
         CHECK(sscanf(scenario,"tree-%u-%u-%u",&op,&at,&count)==3);
         CHECK((op==OWNER_RESERVE || op==OWNER_PREPARE || op==OWNER_COMMIT) && at && count);
@@ -580,10 +658,27 @@ static void test_transient_firstboot(const char *scenario)
     struct acct_store tables=service_tables();
     if (binding_refusals) { production_binding=tables.owner.binding; tables.owner.binding=retry_binding; }
     CHECK(!acct_server_init(&service_server,&tables,0)); service_server.tree=&service_tree;
+    if (!strcmp(scenario,"allocation")) {
+        static const enum acct_boot_step steps[]={ACCT_BOOT_RECOVER,ACCT_BOOT_PREPARE,
+            ACCT_BOOT_COMMIT,ACCT_BOOT_ABORT,ACCT_BOOT_STATUS,ACCT_BOOT_CHECKPOINT,
+            ACCT_BOOT_COMPACT,ACCT_BOOT_RESERVE};
+        struct acct_owner_request q={0}; struct acct_owner_reply r={0};
+        frame_store=&service_server.tables;
+        unsigned polls=owner_polls;
+        for (unsigned origin=0;origin<2;origin++) for (unsigned op=0;op<8;op++) {
+            frame_store->firstboot_step=origin?ACCT_BOOT_RECOVER:ACCT_BOOT_PROMOTE;
+            frame_step=steps[op]; fail_frame=true;
+            CHECK(acct_owner_call(frame_store,op,&q,&r)==-ENOMEM);
+            CHECK(!fail_frame && frame_store->firstboot_step==steps[op]);
+            CHECK(owner_polls==polls);
+        }
+        frame_store=NULL;
+    }
     uint8_t saved_sid[64]={0}, found_sid[64]; int have_sid=0; size_t bytes=0;
     struct owner_store *same_owner=NULL;
     uint32_t lease_generation=0;
     uint64_t sealed_transaction=0; uint8_t sealed_digest[32]={0};
+    struct owner_record sealed_pending[OWNER_PROFILES];
     unsigned tries=0;
     for (;;) {
         /* Advance well beyond both RPC and ordinary-open retry deadlines:
@@ -602,11 +697,14 @@ static void test_transient_firstboot(const char *scenario)
             struct owner_store *o=volume_vfs->policy[2]->owners;
             if (!same_owner) same_owner=o;
             CHECK(o==same_owner && o==live_owner && o->ready);
-            if (o->active && exists_at("/System/Security/accounts.db.txn")) {
+            if (o->active) {
                 if (!sealed_transaction) {
                     sealed_transaction=o->active->transaction; memcpy(sealed_digest,o->active->body+128,32);
+                    memcpy(sealed_pending,o->pending,sizeof(sealed_pending));
                 }
                 CHECK(sealed_transaction==o->active->transaction && !memcmp(sealed_digest,o->active->body+128,32));
+                CHECK(!memcmp(sealed_pending,o->pending,sizeof(sealed_pending)));
+                CHECK(o->receipt_count==1);
             }
         }
         if (opened) break;
@@ -615,12 +713,14 @@ static void test_transient_firstboot(const char *scenario)
         CHECK(++tries<=expected_retries);
     }
     CHECK(tries==expected_retries && service_server.firstboot_retries==expected_retries);
-    CHECK(!entropy_fail_count && !tree_fail_count && !generation_refusals && !orphan_refusals && !binding_refusals);
+    CHECK(!entropy_fail_count && !tree_fail_count && !generation_refusals && !orphan_refusals && !binding_refusals && !publication_refusals);
     CHECK(sid_creations==1 && have_sid && promotion_logs==1);
-    char message[96]; snprintf(message,sizeof(message),"step=%s error=-11",expected_step);
-    CHECK(strstr(refusals[0],message));
-    CHECK(refusal_count==(!strcmp(scenario,"orphan-tree")?2u:1u));
-    if (refusal_count==2) CHECK(strstr(refusals[1],"step=orphans error=-11"));
+    char message[96];
+    CHECK(refusal_count==(expected_step?1u:0u));
+    if (expected_step) {
+        snprintf(message,sizeof(message),"step=%s error=-11",expected_step);
+        CHECK(strstr(refusals[0],message));
+    }
     snprintf(message,sizeof(message),"promoted retries=%u",expected_retries); CHECK(strstr(promotion_line,message));
     CHECK(service_server.firstboot_result==ACCT_FIRSTBOOT_PROMOTED && service_server.service.available);
     const struct acct_db *d=&service_server.service.db;
@@ -635,10 +735,9 @@ static void test_transient_firstboot(const char *scenario)
         char path[96]; snprintf(path,sizeof(path),"%s/Settings",o->profiles[i].binding.path); CHECK(exists_at(path));
         snprintf(path,sizeof(path),"%s/Documents/Desktop",o->profiles[i].binding.path); CHECK(exists_at(path));
     }
-    if (orphan_refusals==0 && !strncmp(scenario,"orphan",6)) {
-        CHECK(o->receipt_count==2 && o->receipts[0]->state==OWNER_ABORTED && o->receipts[1]->state==OWNER_COMMITTED);
-        CHECK(o->receipts[0]->generation<o->receipts[1]->generation);
-    } else CHECK(o->receipt_count==1 && o->receipts[0]->state==OWNER_COMMITTED);
+    CHECK(o->receipt_count==1 && o->receipts[0]->state==OWNER_COMMITTED);
+    if (refused_intent_bytes) CHECK(intent_attempts==expected_retries && sealed_transaction==1);
+    if (!strncmp(scenario,"publish",7)) CHECK(publication_lookups>=expected_retries+6 && sealed_transaction==1);
     acct_server_close(&service_server);
     if (!strcmp(scenario,"binding")) {
         /* A permanent missing binding must not become the ENOENT sentinel
@@ -663,6 +762,124 @@ static void test_transient_firstboot(const char *scenario)
     acct_server_close(&service_server); owner_system_detach();
     printf("H15 sec-firstboot %s: same-session promotion, one SID, profiles published, retired G preserved, reboot clean PASS\n",scenario);
 }
+static void test_recovery_firstboot(const char *scenario)
+{
+    bool closing=!strcmp(scenario,"recovery-close");
+    bool orphan=closing || !strcmp(scenario,"orphan-tree") || !strcmp(scenario,"recovery-persist");
+    bool persistence=!strcmp(scenario,"recovery-persist");
+    CHECK(!owner_system_attach(volume_vfs,2,volume_id,false));
+    struct acct_store tables=service_tables();
+    CHECK(!acct_server_init(&service_server,&tables,0)); service_server.tree=&service_tree;
+    if (closing) orphan_refusals=1;
+    else if (orphan) fail_txn=1;
+    else { fail_tree_op=OWNER_COMMIT; fail_tree_at=1; tree_fail_count=1; }
+    int opened=acct_server_open(&service_server,0);
+    CHECK(orphan && !closing?opened==1 && service_server.firstboot_result==-EIO:!opened && service_server.firstboot_result==-EAGAIN);
+    if (closing) CHECK(service_server.service.store.pending_intent);
+    CHECK(live_owner->active && live_owner->ready && live_owner->receipt_count==1);
+    uint8_t sid[64], found[64], digest[32]; size_t bytes=0;
+    CHECK(!t_read(0,"/System/Security/machine.sid",0,sid,64,&bytes) && bytes==64);
+    memcpy(digest,live_owner->active->body+128,32);
+    acct_server_close(&service_server);
+    CHECK(!service_server.service.store.pending_intent && !service_server.kernel.allocations);
+    /* A closed process has no live sealed bytes; reboot must abort the orphan
+     * rather than reuse its retired generation. */
+    refused_intent_bytes=0;
+    owner_system_detach();
+    unsigned opens=owner_opens;
+    /* This refusal must occur INSIDE owner_open, before service binding. */
+    fail_tree_op=0; current_owner_op=0;
+    /* Each unopened ACCOUNT turn queries generation in migration preparation
+     * before asking for orphan/intent recovery. Refuse both reads twice. */
+    if (persistence) refuse_barrier=true; else recovery_refusals=5;
+    CHECK(owner_system_attach(volume_vfs,2,volume_id,false)==-EAGAIN);
+    CHECK(owner_opens==opens+1 && !volume_vfs->policy[2]);
+    if (persistence) {
+        CHECK(!refuse_barrier && owner_system_state()==OWNER_SYSTEM_FAILED && !live_owner->ready);
+        tables=service_tables();
+        CHECK(!acct_server_init(&service_server,&tables,0)); service_server.tree=&service_tree;
+        CHECK(!acct_server_open(&service_server,0) && !service_server.service.available);
+        CHECK(service_server.last_open_error==-EIO && owner_opens==opens+1);
+        acct_server_close(&service_server); owner_system_detach();
+        CHECK(!owner_system_attach(volume_vfs,2,volume_id,false));
+    } else {
+        CHECK(recovery_refusals==4 && owner_system_state()==OWNER_SYSTEM_RECOVERING);
+        CHECK(live_owner->ready && live_owner->active && !memcmp(digest,live_owner->active->body+128,32));
+        CHECK(live_owner->active->state==(orphan?OWNER_RESERVED:OWNER_PREPARED));
+        CHECK(((struct owner_vfs *)live_owner->io.ctx)->sealed_g==live_owner->active->transaction);
+    }
+    tables=service_tables();
+    CHECK(!acct_server_init(&service_server,&tables,0)); service_server.tree=&service_tree;
+    struct owner_store *same=live_owner;
+    struct owner_receipt *receipt=live_owner->active;
+    struct owner_record pending[OWNER_PROFILES]; memcpy(pending,live_owner->pending,sizeof(pending));
+    uint64_t sequence=live_owner->sequence;
+    unsigned tries=0;
+    while (!acct_server_open(&service_server,(uint64_t)tries*60000)) {
+        CHECK(!persistence && ++tries<=2 && owner_system_state()==OWNER_SYSTEM_RECOVERING);
+        CHECK(owner_opens==opens+1 && live_owner==same && live_owner->ready && live_owner->active==receipt);
+        CHECK(live_owner->sequence==sequence && !memcmp(pending,live_owner->pending,sizeof(pending)));
+        CHECK(!volume_vfs->policy[2] && !service_server.opened && !service_server.service.available);
+        struct ciuki_security_profile profile; CHECK(owner_system_profile(1000,&profile)==-ENOENT);
+        CHECK(service_server.firstboot_result==-EAGAIN);
+        CHECK(!memcmp(digest,live_owner->active->body+128,32));
+    }
+    CHECK(tries==(persistence?0u:2u) && !recovery_refusals);
+    CHECK(owner_system_state()==OWNER_SYSTEM_OPEN && service_server.service.available && sid_creations==1);
+    CHECK(live_owner==same && live_owner->ready && !live_owner->active && live_owner->profile_count==3);
+    CHECK(live_owner->receipt_count==(orphan?2u:1u));
+    if (orphan) CHECK(live_owner->receipts[0]->state==OWNER_ABORTED && live_owner->receipts[1]->state==OWNER_COMMITTED);
+    else CHECK(live_owner->receipts[0]->state==OWNER_COMMITTED && !memcmp(digest,live_owner->receipts[0]->body+128,32));
+    uint64_t generation=orphan?2:1;
+    CHECK(service_server.service.db.generation==generation && acct_verify(&service_server.service.db.records[2],""));
+    CHECK(!t_read(0,"/System/Security/machine.sid",0,found,64,&bytes) && bytes==64 && !memcmp(sid,found,64));
+    struct acct_bootstrap boot;
+    CHECK(!acct_boot_read(&service_server.service.store,&boot) && boot.state==ACCT_CONSUMED);
+    /* Recovered CONSUMED may retain the seed after a cut. The production
+     * first-boot adapter removes that residual without replaying it. */
+    CHECK(acct_firstboot_promote(&service_server.service)==ACCT_FIRSTBOOT_NOTHING);
+    CHECK(!exists_at("/System/Security/provision.seed"));
+    for (unsigned i=0;i<3;i++) {
+        char path[96]; snprintf(path,sizeof(path),"%s/Settings",live_owner->profiles[i].binding.path); CHECK(exists_at(path));
+    }
+    acct_server_close(&service_server); owner_system_detach();
+    CHECK(!owner_system_attach(volume_vfs,2,volume_id,false));
+    tables=service_tables(); CHECK(!acct_server_init(&service_server,&tables,0));
+    CHECK(acct_server_open(&service_server,0)==1 && service_server.service.available && service_server.service.db.generation==generation);
+    CHECK(service_server.firstboot_result==ACCT_FIRSTBOOT_NOTHING && sid_creations==1);
+    acct_server_close(&service_server); owner_system_detach();
+    printf("H15 sec-firstboot %s: pre-open recovery injection, admission withheld, one SID, profiles published, reboot clean PASS\n",scenario);
+}
+static void test_publication_closed(const char *scenario)
+{
+    CHECK(!owner_system_attach(volume_vfs,2,volume_id,false));
+    struct acct_store tables=service_tables();
+    CHECK(!acct_server_init(&service_server,&tables,0)); service_server.tree=&service_tree;
+    if (!strcmp(scenario,"publish-error")) { publication_error=-EIO; publication_refusals=1; }
+    else if (!strcmp(scenario,"publish-rename")) refuse_rename=true;
+    else { CHECK(!strcmp(scenario,"publish-barrier")); refuse_publication_barrier=true; }
+    int opened=acct_server_open(&service_server,0);
+    CHECK(!live_owner->ready && live_owner->active && live_owner->active->state==OWNER_PREPARED);
+    CHECK(!service_server.service.available && !exists_at("/System/Security/accounts.db"));
+    if (!strcmp(scenario,"publish-barrier")) {
+        CHECK(!opened && service_server.firstboot_result==-EAGAIN);
+        CHECK(!acct_server_open(&service_server,60000) && service_server.last_open_error==-EIO);
+    } else CHECK(opened==1 && service_server.firstboot_result==-EIO);
+    uint8_t sid[64], found[64]; size_t bytes=0;
+    CHECK(!t_read(0,"/System/Security/machine.sid",0,sid,64,&bytes) && bytes==64);
+    acct_server_close(&service_server); owner_system_detach();
+    CHECK(!owner_system_attach(volume_vfs,2,volume_id,false));
+    tables=service_tables(); CHECK(!acct_server_init(&service_server,&tables,0));
+    CHECK(acct_server_open(&service_server,0)==1 && service_server.service.available && service_server.service.db.generation==1);
+    CHECK(live_owner->ready && !live_owner->active && live_owner->profile_count==3 && live_owner->receipt_count==1);
+    CHECK(sid_creations==1 && !t_read(0,"/System/Security/machine.sid",0,found,64,&bytes) && bytes==64 && !memcmp(sid,found,64));
+    struct acct_bootstrap boot;
+    CHECK(!acct_boot_read(&service_server.service.store,&boot) && boot.state==ACCT_CONSUMED);
+    CHECK(acct_firstboot_promote(&service_server.service)==ACCT_FIRSTBOOT_NOTHING);
+    CHECK(!exists_at("/System/Security/provision.seed"));
+    acct_server_close(&service_server); owner_system_detach();
+    printf("H15 sec-firstboot %s: uncertain publication closed, exact durable recovery, reboot clean PASS\n",scenario);
+}
 int main(int argc, char **argv)
 {
     setvbuf(stdout,0,_IONBF,0);
@@ -671,7 +888,10 @@ int main(int argc, char **argv)
     struct process *account; account_thread=role_fixture(CIUKI_SECURITY_ROLE_ACCOUNT,&account);
     account->actions[SIGCHLD].handler=SIG_IGN;
     mount_image(argv[1]);
-    if (!strncmp(argv[2],"retry:",6)) test_transient_firstboot(argv[2]+6);
+    if (!strcmp(argv[2],"retry:orphan-tree") || !strncmp(argv[2],"retry:recovery-",15)) test_recovery_firstboot(argv[2]+6);
+    else if (!strcmp(argv[2],"retry:publish-error") || !strcmp(argv[2],"retry:publish-rename") ||
+             !strcmp(argv[2],"retry:publish-barrier")) test_publication_closed(argv[2]+6);
+    else if (!strncmp(argv[2],"retry:",6)) test_transient_firstboot(argv[2]+6);
     else {
         test_first_boot();
         test_reboot();

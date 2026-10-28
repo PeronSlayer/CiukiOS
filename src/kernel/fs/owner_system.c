@@ -273,12 +273,14 @@ static int make_directory(const char *name)
     e=vfs_mkdir(&sys.table,path,FAT_ATTR_HIDDEN|FAT_ATTR_SYSTEM);
     return e==-EEXIST?0:e;
 }
-static int open_store(bool fresh,const uint32_t sid[3])
+static int finish_open(int e,bool fresh)
 {
-    struct owner_account_evidence evidence={&sys,ev_intent,ev_current,ev_checkpoint,ev_import};
-    int e=owner_vfs_backend(&sys.backend,&sys.table,sys.volume,&evidence,&sys.io);
-    if(!e && fresh) e=make_directory("Owner");
-    if(!e) e=owner_open(&sys.store,&sys.io,sid,sys.volume,fresh);
+    if(e==-EAGAIN && sys.store.ready) {
+        /* Only reversible recovery validation leaves ready set. Keep its
+         * receipts, pending records and fences; do not bind admission yet. */
+        sys.state=OWNER_SYSTEM_RECOVERING; sys.error=e;
+        return e;
+    }
     if(!e) e=owner_service_bind(&sys.store);
     if(!e) e=bind_policy();
     if(e) {
@@ -294,6 +296,14 @@ static int open_store(bool fresh,const uint32_t sid[3])
               (unsigned long long)sys.store.generation,(unsigned long long)sys.store.floor);
     owner_log("[owner] system volume %c: policy bound (managed rules, OWNER lease)",'A'+sys.drive);
     return 0;
+}
+static int open_store(bool fresh,const uint32_t sid[3])
+{
+    struct owner_account_evidence evidence={&sys,ev_intent,ev_current,ev_checkpoint,ev_import};
+    int e=owner_vfs_backend(&sys.backend,&sys.table,sys.volume,&evidence,&sys.io);
+    if(!e && fresh) e=make_directory("Owner");
+    if(!e) e=owner_open(&sys.store,&sys.io,sid,sys.volume,fresh);
+    return finish_open(e,fresh);
 }
 int owner_system_attach(struct vfs *v,unsigned drive,uint64_t volume,bool readonly)
 {
@@ -337,7 +347,7 @@ void owner_system_detach(void)
     if(!sys.vfs) return;
     owner_service_dispatcher(0);
     if(sys.bound) { vfs_lock(sys.vfs,0); if(sys.vfs->policy[sys.drive]==&sys.policy) policy_unbind_locked(sys.vfs,sys.drive); vfs_unlock(sys.vfs); }
-    if(sys.state==OWNER_SYSTEM_OPEN) owner_close(&sys.store);
+    if(sys.state==OWNER_SYSTEM_OPEN || sys.state==OWNER_SYSTEM_RECOVERING) owner_close(&sys.store);
     if(sys.table_ready) vfs_table_destroy(&sys.table);
     memset(&sys,0,sizeof(sys));
 }
@@ -368,6 +378,13 @@ static int authorize(const struct security_subject *subject,unsigned op)
 static bool store_enter(void)
 { bool expected=false; return __atomic_compare_exchange_n(&sys.store.busy,&expected,true,false,__ATOMIC_ACQUIRE,__ATOMIC_RELAXED); }
 static void store_leave(void) { __atomic_store_n(&sys.store.busy,false,__ATOMIC_RELEASE); }
+static int resume_open(void)
+{
+    if(!store_enter()) return -EBUSY;
+    int e=owner_open_resume(&sys.store);
+    store_leave();
+    return finish_open(e,false);
+}
 static bool root_syntax(const char *path)
 {
     if(path[0]!='/' || !path[1]) return false;
@@ -408,9 +425,13 @@ static int query(const struct security_subject *subject,const uint8_t *q,size_t 
     fs_wr32(r,1); fs_wr32(r+4,OWNER_QUERY_BYTES); fs_wr32(r+8,op);
     if(sys.state==OWNER_SYSTEM_NONE) return op==OWNER_IDENTITY?-ENODEV:-EIO;
     if(op!=OWNER_IDENTITY && volume!=sys.volume) return -EACCES;
+    if(op!=OWNER_IDENTITY && sys.state==OWNER_SYSTEM_RECOVERING) {
+        e=resume_open();
+        if(e) return e;
+    }
     bool open=sys.state==OWNER_SYSTEM_OPEN && sys.store.ready;
-    /* IDENTITY names the volume in every state (2: store unavailable), so
-     * ACCOUNT binds it and answers its clients at once with EIO. */
+    /* IDENTITY keeps the volume usable by ACCOUNT's recovery loop even while
+     * the store is unavailable. Recovery EAGAIN above still withholds admission. */
     fs_wr32(r+12,open?1:sys.state==OWNER_SYSTEM_UNPROVISIONED?0:2); op64(r+16,sys.volume);
     if(open) { op64(r+24,sys.store.generation); op64(r+32,sys.store.floor); fs_wr32(r+40,sys.store.receipt_count); }
     if(op!=OWNER_IDENTITY && sys.state!=OWNER_SYSTEM_UNPROVISIONED && !open) return -EIO;
@@ -464,6 +485,10 @@ int owner_system_dispatch(const struct security_subject *subject,const void *wir
     if(!wire || !reply || n<12) return -EINVAL;
     unsigned op=fs_rd32((const uint8_t *)wire+8);
     if(op>=OWNER_IDENTITY && op<=OWNER_CHECKPOINT_FLOOR) return query(subject,wire,n,reply,cap,bytes);
+    if(sys.state==OWNER_SYSTEM_RECOVERING) {
+        int e=authorize(subject,op); if(e) return e;
+        e=resume_open(); if(e) return e;
+    }
     if(sys.state==OWNER_SYSTEM_OPEN) return owner_call(&sys.store,subject,wire,n,reply,cap,bytes);
     if(sys.state!=OWNER_SYSTEM_UNPROVISIONED) return -EIO;
     int e=authorize(subject,op); if(e) return e;
