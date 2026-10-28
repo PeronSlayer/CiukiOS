@@ -35,3 +35,11 @@
 - U4-5: a Standard user cannot rename their own account (Windows XP limited accounts: change password and picture only); the ACCOUNT service must refuse it, not only the page. sec-k08 fixes it.
 - U4-6: machine-wide power settings (hibernation, the power button action) belong to the machine and are written through the SYSTEM service; per-user schemes stay per user. sec-k08 moves them.
 - U4-7 approved: per-user Desktop and Start Menu in a LOGON session, merged with All Users (the XP union already decided for sec-user-05), superseding sec-user-03's decision 6.
+
+## Lead decisions on the sec-k08 questions (2026-10-28 15:20)
+- K8-1 (S2-4): per-user hives stay out of Registry Checker backups, as in Windows 98, where SCANREG backs up the machine registry and the system INI files.
+- K8-2 (U4-6): the standby and hard-disk timers are per-user scheme settings again, editable by every user, as Windows XP power schemes are. The sealed machine `power.cfg` keeps only the power-button and lid actions.
+- K8-3 (U4-3): confirmed. A firmware-initiated suspend locks every session whose owner has a password, whatever the per-user resume preference. The 2 s window after a resume, in which Ctrl+Alt+Delete may lock instead of opening the menu, is accepted.
+- K8-4: `security.kdf` reports min/median/max and prints WARN above a 1,000 ms median; it never fails the self-test, because the figure depends on the CPU.
+- K8-5: images ship without `power.cfg`; the defaults (button: Shut down, lid: nothing) apply.
+- K8-6: every future directive that adds a syscall, call-99 action, channel operation, device command or policy kind adds its census row in `tests/host/security/policy_census.py`. The census test enforces it.

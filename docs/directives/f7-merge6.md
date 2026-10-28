@@ -1,6 +1,6 @@
 # f7-merge6: bring the GPU family branches onto integration 6
 
-- **Written:** 2026-10-28 15:35 by the lead. Implementer: Codex `gpt-6.1-sol`, effort `high`, one session per family worktree (f7-24 Radeon, f7-25 Matrox, f7-27 Mach64, f7-31 VMware SVGA3D).
+- **Written:** 2026-10-28 15:15 by the lead. Implementer: Codex `gpt-6.1-sol`, effort `high`, one session per family worktree (f7-24 Radeon, f7-25 Matrox, f7-27 Mach64, f7-31 VMware SVGA3D).
 - **State:** in your worktree the lead has started `git merge wt/integ6`, and the conflict markers are in the files `git diff --name-only --diff-filter=U` lists. `wt/integ6` is current main plus:
   - the whole user-security programme;
   - sec-runtime1;
