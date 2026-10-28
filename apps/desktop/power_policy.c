@@ -173,6 +173,38 @@ int pp_store(const struct pp_config *c, char *extra, size_t size)
     free(kept);
     return 0;
 }
+/* ---- sec-k08 (U4-6): the machine's power buttons (power_policy.h). */
+void pp_machine_defaults(struct pp_machine *m) { m->power_button = PP_BUTTON_SHUTDOWN; m->lid = PP_LID_NONE; }
+int pp_machine_parse(struct pp_machine *m, const char *text, size_t n)
+{
+    pp_machine_defaults(m);
+    int rejected = 0, seen_button = 0, seen_lid = 0;
+    char line[48];
+    for (size_t at = 0; at < n;) {
+        const char *end = memchr(text + at, '\n', n - at);
+        size_t len = end ? (size_t)(end - (text + at)) : n - at;
+        if (!end || len >= sizeof(line)) rejected++;
+        else {
+            memcpy(line, text + at, len); line[len] = 0;
+            char *eq = strchr(line, '=');
+            if (eq) *eq++ = 0;
+            if (eq && !seen_button && !strcmp(line, "power_button") && named(eq, button_names, 2, &m->power_button)) seen_button = 1;
+            else if (eq && !seen_lid && !strcmp(line, "power_lid") && named(eq, lid_names, 3, &m->lid)) seen_lid = 1;
+            else rejected++;
+        }
+        at += len + (end ? 1 : 0);
+    }
+    return rejected;
+}
+size_t pp_machine_format(const struct pp_machine *m, char *out, size_t cap)
+{
+    int n = snprintf(out, cap, "power_button=%s\npower_lid=%s\n", button_names[m->power_button == PP_BUTTON_STANDBY],
+                     lid_names[m->lid >= 0 && m->lid <= PP_LID_SHUTDOWN ? m->lid : 0]);
+    return n < 0 || (size_t)n >= cap ? 0 : (size_t)n;
+}
+void pp_machine_apply(struct pp_config *c, const struct pp_machine *m) { c->power_button = m->power_button; c->lid = m->lid; }
+void pp_machine_take(struct pp_machine *m, const struct pp_config *c) { m->power_button = c->power_button; m->lid = c->lid; }
+/* ---- end sec-k08 ---- */
 int pp_active(const struct pp_config *c, const struct pp_summary *s)
 {
     if (c->active >= 0 && (unsigned)c->active < c->count) return c->active;

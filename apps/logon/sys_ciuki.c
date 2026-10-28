@@ -35,6 +35,13 @@ static int pids(void *ctx, uint32_t *out, unsigned capacity)
     return (int)count;
 }
 static void log_line(void *ctx, const char *line) { (void)ctx; lgn_log_ciuki(line); }
+/* sec-k08 (U4-3): firmware resume and critical suspend counts (call 73). */
+static int resumes(void *ctx, uint32_t *count)
+{
+    (void)ctx; struct ciuki_power_events e;
+    if (ciuki_power_events(&e)) return -errno;
+    *count=e.resumes+e.critical; return 0;
+}
 
 const struct lgn_sys lgn_sys_ciuki={NULL,lgn_ciuki_security,lgn_ciuki_send,lgn_ciuki_recv,lgn_ciuki_close,lgn_ciuki_wait,
-                                    lgn_ciuki_now,boot_flags,power,pids,log_line};
+                                    lgn_ciuki_now,boot_flags,power,pids,log_line,resumes};

@@ -150,8 +150,11 @@ static int l_pids(void *ctx, uint32_t *pids, unsigned capacity)
 }
 static unsigned logon_logs;
 static void l_log(void *ctx, const char *line) { (void)ctx; logon_logs++; if (verbose) printf("  %s\n", line); }
+/* sec-k08 (U4-3): call-73 firmware resume/critical counts LOGON samples. */
+static uint32_t fw_resumes;
+static int l_resumes(void *ctx, uint32_t *count) { (void)ctx; *count = fw_resumes; return 0; }
 static const struct lgn_sys logon_sys = { &logon_bind, b_security, b_send, b_recv, b_close, l_wait, b_now,
-                                          l_boot_flags, l_power, l_pids, l_log };
+                                          l_boot_flags, l_power, l_pids, l_log, l_resumes };
 static struct lgn logon;
 static struct process *logon_p, *ui_p, *account_p;
 

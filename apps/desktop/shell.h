@@ -190,6 +190,10 @@ struct desk_shell {
      * of the current power source (consumed by G10's DPMS) and the drive
      * timer last sent to the kernel. */
     struct pp_config power_cfg;
+    /* sec-k08 (U4-6): a LOGON session's machine power buttons (power.cfg),
+     * applied over power_cfg whenever it is (re)loaded; set by desktop.c. */
+    struct pp_machine power_machine;
+    int power_machine_set;
     struct pp_summary power_summary;
     struct pp_alarm_state power_alarm;
     struct pp_broadcast_state power_broadcast;

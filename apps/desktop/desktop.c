@@ -1102,6 +1102,20 @@ static int mixer_line_apply(struct desktop *d,const struct ciuki_mixer_line *lin
     return mixer_submit(&job);
 }
 /* ---- desktop shell services: the file and kernel side of shell.c ---- */
+/* sec-k08 (lead decision U4-6): a LOGON session's power-button and lid
+ * actions are the machine's (power_policy.h PP_MACHINE_FILE, sealed and
+ * written through the SYSTEM setting service); a missing or damaged file
+ * keeps the defaults, never the user's own lines. 127 bytes, read when
+ * the settings are (re)loaded. The interim desktop keeps desktop.cfg's. */
+static void power_machine_load(struct desktop *d)
+{
+    d->sh.power_machine_set=d->logon_session;
+    pp_machine_defaults(&d->sh.power_machine);
+    if (!d->logon_session) return;
+    char text[PP_MACHINE_MAX+1]; size_t n=0;
+    if (!cfg_read_at(PP_MACHINE_FILE,text,sizeof(text),&n) && pp_machine_parse(&d->sh.power_machine,text,n))
+        pp_machine_defaults(&d->sh.power_machine);
+}
 static void settings_load(struct desktop *d)
 {
     static char text[CFG_TEXT_MAX]; size_t n;
@@ -1117,6 +1131,7 @@ static void settings_load(struct desktop *d)
     int rejected=error ? 0 : cfg_parse(&d->sh.cfg,text,n);
     if (rejected) snprintf(d->notice,sizeof(d->notice),"desktop.cfg: %d line(s) ignored",rejected);
     (void)pp_load(&d->sh.power_cfg,d->sh.cfg.extra);   /* G11: the power_* lines */
+    power_machine_load(d); if (d->sh.power_machine_set) pp_machine_apply(&d->sh.power_cfg,&d->sh.power_machine);   /* sec-k08 */
     d->sh.power_meter_hidden=!d->sh.power_cfg.show_meter;
     d->sh.power_disk_sent=CIUKI_POWER_UNKNOWN;   /* the first poll programs the drive timer, Never included */
 
@@ -2397,6 +2412,7 @@ static void shell_service(struct desktop *d)
             /* Display Properties saved its confirmed mode in this snapshot.
              * Scanout/lease notifications never supply a durable preference. */
             desk_saver_config(d);
+            power_machine_load(d);        /* sec-k08 (U4-6): the machine's power buttons */
             desk_shell_power_config(d);   /* G11: Control Panel's power_* lines */
 
             /* Explicit desktop Refresh also updates the launch inventory;

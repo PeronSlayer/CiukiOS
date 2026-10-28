@@ -425,7 +425,7 @@ static void run(bool profile, bool unscheduled_3d, const char *folder)
                 fprintf(stderr, "%s overran: %u > %u\n", c->id, r->ms, c->limit_ms);
             CHECK(r->ms <= c->limit_ms);
             const char *expected = "SKIP";
-            if (!strncmp(c->id, "memory.", 7)) expected = "PASS";
+            if (!strncmp(c->id, "memory.", 7) || !strcmp(c->id, "security.kdf")) expected = "PASS";   /* sec-k08: computed on any machine */
             else if (profile && no_3d && !strcmp(c->id, "display.3d_qualification")) expected = "FAIL";
             else if (profile && no_3d && !strcmp(c->id, "display.gl_draw")) expected = "SKIP";
             else if (profile) expected = !strcmp(c->id, "optical.disc") ? "SKIP" : "PASS";
@@ -462,7 +462,7 @@ static void run(bool profile, bool unscheduled_3d, const char *folder)
         CHECK(strstr(log_text, " model=TOSHIBA_DVD-ROM_SD-C2502\n"));
         CHECK(fb.width == 1024 && fb.height == 768 && fb.mode_id == 0x117);
     } else {
-        CHECK(s.passed == 2 && s.failed == 1 && s.skipped == selftest_phase1_count + selftest_phase2_count - 3);
+        CHECK(s.passed == 3 && s.failed == 1 && s.skipped == selftest_phase1_count + selftest_phase2_count - 4);   /* sec-k08: + security.kdf */
         CHECK(strstr(log_text, "FAIL desktop.start ") && strstr(log_text, " reason=no_desktop"));
         CHECK(opens == 0 && !dosbox_requested && !vm_created);
     }

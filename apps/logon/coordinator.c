@@ -227,13 +227,30 @@ static void session_poll(struct lgn *g)
     if (!e) session_activate(g);
     else if (e!=-EBUSY && e!=-EAGAIN) session_failed(g,e,LGN_MSG_START_FAILED);
 }
+/* sec-k08 (lead decision U4-3): firmware power events since the last
+ * watch. A firmware-initiated suspend (APM Critical Suspend, an unsolicited
+ * resume) never ran the desktop's password-on-resume, so the kernel
+ * concealed the session (core/power_source.c); LOGON then locks an owner
+ * with a password, as Windows XP prompts on resume by default, and restores
+ * a passwordless owner (no false lock, contract 4.3). */
+#define RESUME_GATE_MS 2000u   /* PID 1 moves the gate well within this */
+static int firmware_resumed(struct lgn *g)
+{
+    uint32_t count=0;
+    if (g->sys->resumes && !g->sys->resumes(g->sys->ctx,&count) && count!=g->resumes_seen) {
+        g->resumes_seen=count; g->resume_until=now_of(g)+RESUME_GATE_MS;
+    }
+    return now_of(g)<g->resume_until;
+}
 /* ACTIVE: a session generation the coordinator did not cause means the
- * kernel moved the gate (physical attention, a trusted role restart) or the
- * pair ended. One idempotent ATTENTION entry reads the current binding. */
+ * kernel moved the gate (physical attention, a firmware resume, a trusted
+ * role restart) or the pair ended. One idempotent ATTENTION entry reads the
+ * current binding. */
 static void session_watch(struct lgn *g)
 {
     struct lgn_session *s=&g->session;
     uint32_t state=0, generation=0;
+    int resumed=firmware_resumed(g);   /* sec-k08: sampled on every watch */
     int e=session_query(g,s->id,&state,&generation);
     if (e || state!=CIUKI_SECURITY_SESSION_ACTIVE) { begin_ending(g,LGN_END_CRASH); return; }
     if (generation==s->generation || g->enter_reason) return;
@@ -244,6 +261,16 @@ static void session_watch(struct lgn *g)
     if (s->console.authentication_required) {
         set_screen(g,LGN_MODE_LOCKED);
         if (g->message==LGN_MSG_NONE) set_message(g,LGN_MSG_SERVICE_RESTART,0);
+    } else if (resumed && s->blank) {   /* sec-k08: nothing to unlock with */
+        g->resume_until=0;
+        if (menu_return(g)) set_screen(g,LGN_MODE_SECURITY);
+        else lgn_note(g,"[logon] session %u resumed (no password)",s->id);
+    } else if (resumed) {               /* sec-k08 */
+        g->resume_until=0;
+        e=console_enter(g,s->id,CIUKI_SECURITY_SECURE_RESUME);
+        if (e && e!=-EBUSY) { set_screen(g,LGN_MODE_SECURITY); return; }
+        set_screen(g,LGN_MODE_LOCKED);
+        lgn_note(g,"[logon] session %u locked after a firmware resume",s->id);
     } else set_screen(g,LGN_MODE_SECURITY);
 }
 static void session_collect(struct lgn *g)
@@ -833,6 +860,7 @@ int lgn_init(struct lgn *g, const struct lgn_sys *sys)
     g->safe=e ? 1 : !!(flags&CIUKI_BOOT_SAFE_MODE);
     if (e) g->autologon_done=1;
     g->started=now_of(g); g->mode=LGN_MODE_STARTING;
+    (void)firmware_resumed(g); g->resume_until=0;   /* sec-k08: the baseline count */
     return 0;
 }
 static void advance(struct lgn *g)

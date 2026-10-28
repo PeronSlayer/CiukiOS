@@ -4013,6 +4013,25 @@ uint32_t reserved[2];
 
 ---- end sec-sysvc2 ----
 
+---- sec-k08: two more sealed machine settings behind call 99 SETTING
+(docs/directives/sec-lead-decisions.md S2-5, U4-6; same record, same
+rule: administrators or SYSTEM, the text validated, the file rewritten as
+SYSTEM, its old text restored after a failed write).
+CLOCK C:\SYSTEM\SETTINGS\clock.cfg: the time zone service's store, read
+at boot before any process (a complete clock.cfg record of lib/tzrule.c,
+at most 511 bytes). POWER C:\SYSTEM\SETTINGS\power.cfg: the machine's
+power buttons, read by every session's desktop (the power_button= and
+power_lid= lines of apps/desktop/power_policy.h, at most 127 bytes);
+per-user power schemes, alarms and the meter stay in the user's own
+settings.
+
+```c
+#define CIUKI_SYSTEM_SETTING_CLOCK 4u
+#define CIUKI_SYSTEM_SETTING_POWER 5u
+```
+
+---- end sec-k08 ----
+
 ```c
 struct ciuki_spawn_fd {
     int32_t source;

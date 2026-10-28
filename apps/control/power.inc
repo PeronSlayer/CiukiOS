@@ -38,6 +38,32 @@ static int pw_refresh(struct cp_app *a)
                       a->pw_events.version == CIUKI_POWER_EVENTS_VERSION;
     return (before.bays != 0) != (a->pw_summary.bays != 0) || standby != pw_standby(a);
 }
+/* --- sec-k08 (lead decision U4-6): in a LOGON session the power-button
+ * and lid actions are the machine's, read from power.cfg and saved through
+ * the SYSTEM setting service; the page shows the machine's values to
+ * everyone and the service refuses Standard users and Guest. */
+static void pw_machine_load(struct cp_app *a)
+{
+    if (!a->host.power_machine_load) return;
+    char buf[PP_MACHINE_MAX + 1]; size_t n = 0; struct pp_machine m;
+    if (a->host.power_machine_load(a->host.ctx, buf, sizeof(buf), &n) || pp_machine_parse(&m, buf, n)) pp_machine_defaults(&m);
+    pp_machine_apply(&a->pw_cfg, &m);
+}
+static void pw_machine_save(struct cp_app *a)
+{
+    struct pp_machine m; pp_machine_take(&m, &a->pw_cfg);
+    char buf[PP_MACHINE_MAX + 1]; size_t n = pp_machine_format(&m, buf, sizeof(buf));
+    int e = n ? a->host.power_machine_save(a->host.ctx, buf, n) : -E2BIG;
+    if (e) {
+        pw_machine_load(a);   /* show what the machine keeps */
+        text(a, C_STATUS, e == -EPERM ? "You must be an administrator to change the power buttons." :
+                          "The power settings could not be saved.");
+        return;
+    }
+    int r = a->host.apply ? a->host.apply(a->host.ctx, DESK_SETTINGS_RELOAD, 0, 0) : -1;
+    text(a, C_STATUS, r ? "Saved. The desktop applies it at its next start." : "Saved and applied.");
+}
+/* --- end sec-k08 --- */
 static void pw_open(struct cp_app *a)
 {
     static struct ciuki_settings now;
@@ -47,6 +73,7 @@ static void pw_open(struct cp_app *a)
      * policy fields a Standard user or Guest sees but cannot change. */
     a->secure_resume = desk_secure_pref(now.extra, DESK_SECURE_RESUME);
     a->machine_locked = a->host.self_admin && !a->host.self_admin(a->host.ctx);
+    pw_machine_load(a);   /* sec-k08 (U4-6) */
     a->pw_tab = power_meter_requested ? 2 : 0; a->pw_details = 1;
     power_meter_requested = 0;
     (void)pw_refresh(a);
@@ -220,7 +247,9 @@ static void pw_chosen(struct cp_app *a, int owner, int value)
     else if (owner == PW_BUTTON) c->power_button = value;
     else if (owner == PW_LID) c->lid = value;
     else return;
-    pw_save(a); build(a);
+    if ((owner == PW_BUTTON || owner == PW_LID) && a->host.power_machine_save) pw_machine_save(a);   /* sec-k08 */
+    else pw_save(a);
+    build(a);
 }
 static int pw_event(struct cp_app *a, const struct du_event *e)
 {

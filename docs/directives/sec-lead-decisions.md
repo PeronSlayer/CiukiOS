@@ -16,3 +16,22 @@
 - K-Q6: exact Windows XP default parity is not required; differences are documented CiukiOS choices. Zero persistent lockout with the bounded 1 s retry backoff of the model part.
 - K-Q7: answered by model Q2/Q5: ready images leave 500 unset; custom accounts and Guest need 8-63 byte passwords; if every administrator verifier is lost or corrupt, recovery is the Setup CD repair path (physical access is outside the threat model); no implicit empty-password recovery.
 - K-Q8: shutdown/restart allowed to every interactive session including Guest and from the logon screen (physical access is outside the threat model, XP workstation default allows it at the Welcome screen); mixer/display/input preferences are per session, machine defaults are administrator-only; audit INPUT_KEYBOARD_SET forwarding and CIUKI_SETUP_NET_QUERY routing in sec-k04 and refuse unsupported paths until fixed.
+
+## Lead decisions on the sec-sysvc2 and integration questions (2026-10-28 10:29)
+- S2-1 approved: one per-user log location, `<profile>\Local Settings\Application Data\CiukiOS\Logs` (Windows XP keeps non-roaming per-user data and crash reports under Local Settings\Application Data); it supersedes sec-user-05's separate NetSurf and Crash folders. Profile-less sessions keep the machine folders.
+- S2-2 approved: the startup ScanDisk report is a kernel SYSTEM job (call-99 JOB) and the daily registry backup a job of the SYSTEM registry broker; both run as SYSTEM, which is the requirement. No common job queue for now.
+- S2-3 approved: Registry Checker restore and damaged-hive repair apply at the broker's next start, before anything loads the registry, like Windows 98 SCANREG /RESTORE (restart) and XP System Restore.
+- S2-4: backups hold the machine registry, BOOT.CFG, HWPROF.CFG and the settings files; per-user hives stay out for this step. Including them (XP restore points snapshot user hives too) goes to sec-k08's audit with the 4 MiB archive limit.
+- S2-5: `clock.cfg` is read at boot and must be sealed like the other boot settings; sec-k08 adds it behind call-99 SETTING.
+- S2-6: the synchronous backup against the desktop's 5 s request timeout is measured on the Pentium III in the self-test boot.
+- I-1 (integration): the Setup CD carries the machine registry hives that sec-k06 keeps under /System/Security/Registry/Machine (machine configuration Setup installs, like the default hives of a Windows Setup medium); the account seed and bootstrap.state stay excluded (sec-user-02).
+- I-2 (integration, sec-integfix): an owned drive letter without media reports ERROR_NOT_READY (ENXIO) before the sec-k03 subject-aware walk; unknown letters remain ENOENT.
+
+## Lead decisions on the sec-user-04 questions (2026-10-28 10:41)
+- U4-1 approved: the G32 upgrade enrollment amendment before section 7 of `user-security-contract.md`, with its private LOGON/ACCOUNT operation numbers and settings request 11.
+- U4-2 approved: an administrator's log-off of another user's locked session is forced, as Windows XP's "Log Off" of a disconnected user (unsaved data is lost and the dialog says so).
+- U4-3 approved for this step: the desktop raises the lock before Stand by; a firmware-initiated suspend locks when the desktop sees the resume. sec-k08 checks whether a kernel resume hook is needed for the APM/ACPI paths the hardware baseline uses.
+- U4-4: account pictures. Images ship only the default Ciuki portrait for now; a picture set derived from the approved portrait and Tango is a later UI item, never a substitute portrait.
+- U4-5: a Standard user cannot rename their own account (Windows XP limited accounts: change password and picture only); the ACCOUNT service must refuse it, not only the page. sec-k08 fixes it.
+- U4-6: machine-wide power settings (hibernation, the power button action) belong to the machine and are written through the SYSTEM service; per-user schemes stay per user. sec-k08 moves them.
+- U4-7 approved: per-user Desktop and Start Menu in a LOGON session, merged with All Users (the XP union already decided for sec-user-05), superseding sec-user-03's decision 6.

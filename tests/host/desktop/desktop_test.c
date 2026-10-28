@@ -1337,6 +1337,14 @@ static void test_power_policy(void)
     d.sh.want_standby=0; power_poll(p,3); d.sh.power_cfg.lid=PP_LID_SHUTDOWN; p.lid_open=0; power_poll(p,3); assert(d.sh.want_power==2);
     d.sh.want_power=0; power_poll(p,3); assert(!d.sh.want_power);   /* still closed: one action */
     d.sh.power_cfg.lid=PP_LID_NONE; p.lid_open=1; power_poll(p,3); p.lid_open=0; power_poll(p,3); assert(!d.sh.want_power);
+    /* sec-k08 (U4-6): a LOGON session's buttons are the machine's power.cfg;
+     * a reload keeps them over the user's own power_button/power_lid lines. */
+    snprintf(d.sh.cfg.extra,sizeof(d.sh.cfg.extra),"power_button=shutdown\npower_lid=none\n");
+    d.sh.power_machine=(struct pp_machine){PP_BUTTON_STANDBY,PP_LID_SHUTDOWN}; d.sh.power_machine_set=1;
+    desk_shell_power_config(&d); assert(d.sh.power_cfg.power_button==PP_BUTTON_STANDBY && d.sh.power_cfg.lid==PP_LID_SHUTDOWN);
+    p.lid_open=1; power_poll(p,3); p.lid_open=0; power_poll(p,3); assert(d.sh.want_power==2);
+    d.sh.want_power=0; d.sh.power_machine_set=0; desk_shell_power_config(&d);
+    assert(d.sh.power_cfg.power_button==PP_BUTTON_SHUTDOWN && d.sh.power_cfg.lid==PP_LID_NONE); d.sh.cfg.extra[0]=0;
     /* APM standby/suspend requests while unqualified: one notice per burst. */
     d.sh.notification.active=0; power_ev.sleep_requests++; power_poll(p,3);
     assert(d.sh.notification.active && strstr(d.sh.notification.text,"Stand by is not available"));

@@ -26,6 +26,7 @@
 #include <ciuki/supervisor.h>
 #include <ciuki/com.h>
 #include <ciuki/selftest.h>
+#include <ciuki/pbkdf2.h> /* sec-k08: security.kdf */
 
 /* Optional subsystems: an image or configuration without them reads as an
  * absent device, never as a link error. */
@@ -830,6 +831,35 @@ CHECK(check_ata)
  * grant). Phase 2: with the desktop; ordered so that the 3D qualification
  * finishes before any mode change, and the APM fault record (biosvm keeps
  * only the last failure) is read before the firmware video calls. */
+/* ---- sec-k08: the account verifier KDF on this CPU, for the lead's runtime
+ * gate (user-security-kernel.md, account verifiers: target <= 1000 ms per
+ * verification on the Pentium III baseline, measured, never tuned here; the
+ * PBKDF2 work factor is the ACCOUNT service's). Five derivations of a fixed
+ * non-secret input while the desktop runs, 10 ms apart. ---- */
+CHECK(check_kdf)
+{
+    UNUSED;
+    static const char key[] = "selftest-not-a-password";
+    static const uint8_t salt[16] = {'C','i','u','k','i','O','S','-','s','e','l','f','t','e','s','t'};
+    uint32_t ms[5]; uint8_t out[32]; unsigned runs = 0;
+    for (; runs < 5; runs++) {
+        if (runs) {
+            if (now() + 10 + 2u * ms[runs - 1] > until) break;   /* the next one would overrun the bound */
+            task_sleep_ms(10);
+        }
+        uint64_t t0 = now();
+        if (pbkdf2_hmac_sha256(key, sizeof(key) - 1, salt, sizeof(salt), CIUKI_ACCOUNT_KDF_ITERATIONS, out)) { fail(r, "kdf_error"); return; }
+        ms[runs] = (uint32_t)(now() - t0);
+    }
+    for (unsigned i = 1; i < runs; i++)
+        for (unsigned j = i; j && ms[j - 1] > ms[j]; j--) { uint32_t t = ms[j]; ms[j] = ms[j - 1]; ms[j - 1] = t; }
+    selftest_figures(r, "iterations=%u runs=%u min_ms=%u median_ms=%u max_ms=%u target_ms=1000 out=%02x%02x%02x%02x",
+                     CIUKI_ACCOUNT_KDF_ITERATIONS, runs, ms[0], ms[runs / 2], ms[runs - 1], out[0], out[1], out[2], out[3]);
+    if (runs < 5) fail(r, "bound");
+    else if (ms[2] > 1000) fail(r, "over_target");
+    else pass(r);
+}
+/* ---- end sec-k08 ---- */
 const struct selftest_check selftest_phase1[] = {
     { "serial.uart", 2000, check_serial },
     { "memory.start", 2000, check_memory_start },
@@ -863,6 +893,7 @@ const struct selftest_check selftest_phase2[] = {
     { "usb.controllers", 10000, check_usb_controllers },
     { "usb.devices", 2000, check_usb_devices },
     { "storage.ata", 2000, check_ata },
+    { "security.kdf", 15000, check_kdf },   /* sec-k08 */
     { "serial.records", 1000, check_serial_records },
     { "memory.end", 3000, check_memory_end },
 };

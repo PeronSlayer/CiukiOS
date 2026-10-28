@@ -269,8 +269,12 @@ static int mutate(struct acct_service *s, struct acct_job *job)
             !acct_password_valid(q->password,0) || strcmp(q->password,q->confirm)) return -EINVAL;
     } else {
         if (index<0) return -ENOENT;
-        int personal=q->operation==ACCT_PASSWORD || q->operation==ACCT_PICTURE || q->operation==ACCT_RENAME ||
-            (q->operation==ACCT_UPDATE && !(q->selectors&~(1024u|4096u)));
+        /* sec-k08 (lead decision U4-5): a Standard user or Guest changes
+         * only their own password and picture (Windows XP limited accounts);
+         * the name, like type and status, is an administrator's change. The
+         * service refuses it, whatever the page offers. */
+        int personal=q->operation==ACCT_PASSWORD || q->operation==ACCT_PICTURE ||
+            (q->operation==ACCT_UPDATE && !(q->selectors&~4096u));
         if (!is_admin && !(self && personal)) return -EPERM;
         int destructive=q->operation==ACCT_DELETE || q->operation==ACCT_ROLE ||
             (q->operation==ACCT_ENABLE && !(q->flags&ACCT_ENABLED)) ||

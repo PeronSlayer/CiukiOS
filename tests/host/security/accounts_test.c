@@ -240,6 +240,18 @@ static void service(void)
     assert(fake_run(&s,2,&q,&r)==-EACCES); f.now+=1000;
     fake_request(&q,ACCT_PASSWORD,s.db.generation,1001,NULL,"password2"); strcpy(q.old_password,"password1");
     assert(!fake_run(&s,2,&q,&r));
+    /* sec-k08 (U4-5): a Standard user's own rename is refused by the
+     * service (plain RENAME and the UPDATE name selector, alone or with the
+     * picture); the own picture stays allowed; an administrator renames. */
+    fake_request(&q,ACCT_RENAME,s.db.generation,1001,"Robert",NULL); assert(fake_run(&s,2,&q,&r)==-EPERM);
+    fake_request(&q,ACCT_PICTURE,s.db.generation,1001,NULL,NULL); strcpy(q.picture,"catalogue/ciuki.png");
+    q.operation=ACCT_UPDATE; q.selectors=1024u|4096u; q.flags=q.selectors; q.wire_operation=4; strcpy(q.name,"Robert");
+    assert(fake_run(&s,2,&q,&r)==-EPERM && s.db.records[3].uid==1001 && !strcmp(s.db.records[3].name,"Bob"));
+    fake_request(&q,ACCT_PICTURE,s.db.generation,1001,NULL,NULL); strcpy(q.picture,"catalogue/ciuki.png");
+    assert(!fake_run(&s,2,&q,&r) && !strcmp(s.db.records[3].picture,"catalogue/ciuki.png"));
+    fake_request(&q,ACCT_RENAME,s.db.generation,1001,"Robert",NULL); assert(!fake_run(&s,1,&q,&r));
+    assert(!strcmp(s.db.records[3].name,"Robert"));
+    fake_request(&q,ACCT_RENAME,s.db.generation,1001,"Bob",NULL); assert(!fake_run(&s,1,&q,&r));
     fake_request(&q,ACCT_ROLE,s.db.generation,1000,NULL,NULL); q.groups=ACCT_STANDARD;
     assert(fake_run(&s,1,&q,&r)==-EPERM);
     password(&s,500,NULL,"recovery1");
@@ -580,6 +592,48 @@ void round3_enrollment_outcome(void);
 void round3_logon_restart(void);
 void round3_distinct_handles(void);
 void round3_intent_bounds(void);
+/* ---- sec-k08 H13 (tests/host/security/test_policy_coverage.py): the
+ * ACCOUNT service frontend. A Standard user (peer 2, uid 1001) and Guest
+ * (peer 3, uid 501) try every management operation on another account
+ * (the administrator CiukiUser 1000 and the built-in 500), their own type,
+ * name and status, another account's PROFILE and the AUTH operations; each
+ * is refused before any store write (the database generation and every
+ * store file stay unchanged) and leaves no allocation or peer reference. */
+static void h13_accounts(void)
+{
+    struct fake f; fake_init(&f); struct acct_service s; fake_boot(&f,&s);
+    password(&s,1000,"","newpass12"); create_user(&s,"Bob",1,ACCT_STANDARD);
+    password(&s,501,NULL,"guestpass1");
+    struct acct_request q; struct acct_response r; unsigned cases=0;
+    for(int peer=2;peer<=3;peer++) {
+        uint32_t self=peer==2?1001:501;
+        const struct { unsigned op; uint32_t uid; const char *name; const char *password; unsigned groups; } attempts[]={
+            {ACCT_CREATE,0,"Mallory","password9",ACCT_ADMIN},{ACCT_DELETE,1000,NULL,NULL,0},{ACCT_ENABLE,500,NULL,NULL,0},
+            {ACCT_ROLE,1000,NULL,NULL,ACCT_STANDARD},{ACCT_ROLE,self,NULL,NULL,ACCT_ADMIN},{ACCT_RENAME,1000,"Owned",NULL,0},
+            {ACCT_RENAME,self,"Renamed",NULL,0},{ACCT_PASSWORD,1000,NULL,"takeover9",0},{ACCT_PICTURE,1000,NULL,NULL,0},
+            {ACCT_ENABLE,self,NULL,NULL,0},{ACCT_DELETE,self,NULL,NULL,0}};
+        for(unsigned i=0;i<sizeof(attempts)/sizeof(*attempts);i++) for(unsigned k=0;k<4;k++) {
+            uint64_t generation=s.db.generation; unsigned outstanding=f.outstanding, refs=f.peers[peer].refs;
+            fake_request(&q,attempts[i].op,s.db.generation,attempts[i].uid,attempts[i].name,attempts[i].password);
+            q.groups=attempts[i].groups; if(attempts[i].op==ACCT_PICTURE) strcpy(q.picture,"catalogue/ciuki.png");
+            if(attempts[i].op==ACCT_ENABLE) q.flags=attempts[i].uid==self?0:1;
+            int e=fake_run(&s,peer,&q,&r);
+            if(e!=-EPERM) printf("H13 accounts peer %d op %u uid %u: %d\n",peer,attempts[i].op,attempts[i].uid,e);
+            assert(e==-EPERM && s.db.generation==generation && f.outstanding==outstanding && f.peers[peer].refs==refs);
+            cases++;
+        }
+        /* Another account's profile; the AUTH service operations. */
+        fake_request(&q,ACCT_PROFILE,s.db.generation,1000,NULL,NULL); assert(fake_run(&s,peer,&q,&r)==-EACCES); cases++;
+        static const unsigned auth_ops[]={ACCT_AUTH,ACCT_UNLOCK,ACCT_AUTOLOGON,ACCT_ENROLL_VERIFY};
+        for(unsigned i=0;i<4;i++) {
+            fake_request(&q,auth_ops[i],s.db.generation,0,"CiukiUser","newpass12");
+            int e=fake_run(&s,peer,&q,&r); assert(e==-EPERM); cases++;
+        }
+    }
+    acct_service_close(&s); fake_destroy(&f);   /* fake_destroy: no allocation or peer reference outstanding */
+    printf("H13 accounts: %u refusals (Standard user and Guest: create, delete, enable, type, rename, password reset and picture of other accounts, own type/name/status, other profiles, AUTH operations) with no store write, allocation or peer reference PASS\n",cases);
+}
+/* ---- end sec-k08 ---- */
 int main(int argc, char **argv)
 {
     setvbuf(stdout,NULL,_IONBF,0);
@@ -615,6 +669,7 @@ int main(int argc, char **argv)
     else if(!strcmp(argv[1],"round3-logon-restart")) round3_logon_restart();
     else if(!strcmp(argv[1],"round3-distinct-handles")) round3_distinct_handles();
     else if(!strcmp(argv[1],"round3-intent-bounds")) round3_intent_bounds();
+    else if(!strcmp(argv[1],"h13")) h13_accounts();   /* sec-k08 */
     else assert(0);
     return 0;
 }

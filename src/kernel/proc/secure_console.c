@@ -128,6 +128,21 @@ void security_attention_physical(void)
     irq_restore(f);
     proc_notify();
 }
+/* sec-k08 (lead decision U4-3): a firmware-initiated suspend or resume
+ * (core/power_source.c) conceals the session through the same deferred
+ * entry as Ctrl+Alt+Delete; LOGON's watch sees the moved gate and the call-73
+ * resume count, then locks (an owner with a password) or restores. Armed
+ * only once LOGON is registered; the interim desktop keeps its own path. */
+static uint32_t resume_pending;
+static uint64_t resume_handled;
+void security_attention_resume(void)
+{
+    if (!security_attention_armed()) return;
+    uint32_t f = irq_save();
+    if (resume_pending != UINT32_MAX) resume_pending++;
+    irq_restore(f);
+    proc_notify();
+}
 /* COLLECT keeps a session CLOSING until a PID 1 pass found no DOS VM or
  * Win32 session object left. Nonblocking; registers unknown sessions. */
 unsigned secure_session_retained(uint32_t session)
@@ -164,6 +179,12 @@ void secure_console_poll(void)
         attention_result = security_console_attention(CIUKI_SECURITY_SECURE_ATTENTION);
         attention_handled++;
         klog("[security] secure attention source=keyboard result=%d", attention_result);
+    }
+    f = irq_save(); pending = resume_pending; resume_pending = 0; irq_restore(f);   /* sec-k08 */
+    if (pending) {
+        int r = security_console_attention(CIUKI_SECURITY_SECURE_ATTENTION);
+        resume_handled++;
+        klog("[security] secure attention source=resume result=%d handled=%llu", r, (unsigned long long)resume_handled);
     }
     (void)grants_console_neutral();
     for (unsigned i = 0; i < ARRAY_SIZE(records); i++) {

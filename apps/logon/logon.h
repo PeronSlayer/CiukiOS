@@ -46,6 +46,9 @@ struct lgn_sys {
     int (*power)(void *, unsigned action);                 /* LGN_EVENT_SHUTDOWN/RESTART: orderly path */
     int (*pids)(void *, uint32_t *, unsigned capacity);    /* live pids */
     void (*log)(void *, const char *);
+    /* sec-k08 (lead decision U4-3): call 73 EVENTS resume and critical
+     * suspend counts (firmware power events); NULL: none known. */
+    int (*resumes)(void *, uint32_t *count);
 };
 
 /* Accepted LOGON endpoint (service 5), one exchange at a time. */
@@ -113,6 +116,10 @@ struct lgn {
      * provisional catalogue, confirmed by ENROLL_SOURCE) and its probe. */
     int override, enrolling, probe_pending;
     uint64_t next_probe;
+    /* sec-k08 (U4-3): the firmware power events seen by the last watch, and
+     * until when a gate moved by the kernel counts as that event's. */
+    uint32_t resumes_seen;
+    uint64_t resume_until;
 };
 
 int lgn_init(struct lgn *, const struct lgn_sys *);

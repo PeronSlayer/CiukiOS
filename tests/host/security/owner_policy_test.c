@@ -308,7 +308,10 @@ static void test_matrix(void)
         {"/System/Settings/hwprofiles.cfg",1},{"/System/Settings/accel.cfg",1},{"/System/Settings/ACCEL-RETRY.CFG",1},
         {"/System/Settings/accel-s3savage-5333-8c2e.cfg",1},{"/System/Settings/accel-i810.cfg",1},
         {"/System/Settings/desktop.cfg",3},{"/System/Settings/accel.txt",3},{"/System/Settings/xaccel.cfg",3},
-        {"/System/Settings/HWPROF.CFG",3},{"/System/performance.cfg",3},{"/Programs/HWPROF.CFG",3}};
+        {"/System/Settings/HWPROF.CFG",3},{"/System/performance.cfg",3},{"/Programs/HWPROF.CFG",3},
+        /* sec-k08: clock.cfg (S2-5) and the machine power buttons (U4-6). */
+        {"/System/Settings/clock.cfg",1},{"/System/Settings/CLOCK.CFG",1},{"/System/Settings/power.cfg",1},
+        {"/System/Settings/clock.txt",3},{"/System/clock.cfg",3},{"/System/power.cfg",3},{"/Programs/power.cfg",3}};
     for(unsigned i=0;i<sizeof(boot_inputs)/sizeof(*boot_inputs);i++) {
         struct policy_label label=policy_path(&v,boot_inputs[i].path,0);
         for(unsigned who=0;who<5;who++) {
