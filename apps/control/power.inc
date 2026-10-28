@@ -155,11 +155,10 @@ static void pw_build(struct cp_app *a)
             for (int src = 0; src < 1 + battery; src++) {
                 pw_choice_text(a->pw_cells[src][t], sizeof(a->pw_cells[src][t]), c->schemes[scheme].timer[src][t]);
                 w = add(a, DU_BUTTON, PW_CELL + src * PP_TIMERS + t, 224 + src * 160, 142 + t * 32, 150, 24, a->pw_cells[src][t]);
-                w->disabled = (t == PP_STANDBY && !standby) || (a->machine_locked && t != PP_MONITOR);   /* sec-user-04 */
+                w->disabled = t == PP_STANDBY && !standby;   /* sec-k08b: per-user scheme timers */
             }
         }
-        add(a, DU_LABEL, PW_NOTE, 32, 244, CP_WIDTH - 64, 16, a->machine_locked ? "You must be an administrator to change this setting." :
-                                                               standby ? "" : pw_standby_text(a));   /* sec-user-04 */
+        add(a, DU_LABEL, PW_NOTE, 32, 244, CP_WIDTH - 64, 16, standby ? "" : pw_standby_text(a));
         add(a, DU_LABEL, PW_SOURCE, 24, 284, CP_WIDTH - 48, 16, a->pw_text[2]);
     } else if (a->pw_tab == 1) {
         pw_alarm_widgets(a, &c->low, PW_LOW_GROUP, 40, "Low battery alarm", "Set off &low battery alarm when power level reaches:");
@@ -307,7 +306,7 @@ static int pw_event(struct cp_app *a, const struct du_event *e)
     default: break;
     }
     if (e->id >= PW_CELL && e->id < PW_CELL + PP_SOURCES * PP_TIMERS) {
-        if (e->type == DU_EV_ACTIVATE && !(a->machine_locked && (e->id - PW_CELL) % PP_TIMERS != PP_MONITOR)) pw_open_menu(a, e->id);
+        if (e->type == DU_EV_ACTIVATE) pw_open_menu(a, e->id);
         return 1;
     }
     if (!alarm) return 0;

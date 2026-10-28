@@ -201,7 +201,8 @@ MAP = {
         'CIUKI_SYS_PROC_LIST': (ANY + ' (bounded nonsecret summaries)', PROC + '::proc_list('),
         'CIUKI_SYS_PROC_TERMINATE': ('own uid/session or administrator; PID 1/SYSTEM/desktop group protected', H13N + '::CIUKI_SYS_PROC_TERMINATE'),
         'CIUKI_SYS_DOSVM': ('own session VM: capability, owner key and immutable uid/session (k05)', 'tests/host/dosvm_test.c::CIUKI_DOSVM_'),
-        'CIUKI_SYS_POWER': ('actions: live session or SYSTEM logon; POLICY administrator (k04)', 'tests/host/security/power_policy_test.c::power_record_call'),
+        # sec-k08b K8-7: POLICY is the user's disk timer, not machine settings.
+        'CIUKI_SYS_POWER': ('actions: live session or SYSTEM logon; disk POLICY administrator or live session desktop; machine settings administrator via call99', 'tests/host/security/power_policy_test.c::power_record_call'),
         'CIUKI_SYS_DISPLAY': (GRANT + '; machine defaults administrator', DESK),
         'CIUKI_SYS_LAUNCH_MARK': ('status anyone; markers own-session compositor/child', 'tests/host/proc/launch_test.c::proc_launch_mark'),
         'CIUKI_SYS_DEVICES': (ANY + ' (copied inventory)', 'tests/host/devices_test.c::devices_query'),
