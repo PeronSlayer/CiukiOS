@@ -551,6 +551,10 @@ class NormalBoot(unittest.TestCase):
                      '[security] session 1 w32srv pid=7 pgid=7 uid=1000 gid=545 groups=544,545',
                      '[security] session 1 desktop pid=8 pgid=8 uid=1000 gid=545 groups=544,545']:
             parser.feed(line.encode() + b'\n')
+        # LOGON shows the composed desktop at "session N running" (run.py NORMAL_BOOT_SESSION).
+        self.assertFalse(parser.desktop_seen)
+        parser.feed(b'[user 35] [logon] session 1 running uid=1000 start_ms=1644\n')
+        self.assertTrue(parser.desktop_seen)
         self.assertTrue(parser.check())
         self.assertEqual((parser.summary()['desktop_pid'], parser.summary()['desktop_pgid']), (8, 8))
         # A second session's desktop in the same normal boot is a repeated milestone.

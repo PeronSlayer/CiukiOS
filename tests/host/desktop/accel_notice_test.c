@@ -74,6 +74,10 @@ int main(void)
     record(CIUKI_DEVICE_QUARANTINED,"unsupported_device");
     CHECK(notice_at(&d,40000000000ull)==1 && notices==4);
     CHECK(!strcmp(last_text,"2D engine: NO (unsupported_device)"));
+    /* No driver for the adapter (standard VGA): finished without a card. */
+    memset(&accel_notice_state,0,sizeof(accel_notice_state));
+    record(CIUKI_DEVICE_QUARANTINED,"no_driver");
+    CHECK(notice_at(&d,45000000000ull)==1 && notices==4);
     /* No record yet: the activation decides later; give up after 60 s. */
     memset(&accel_notice_state,0,sizeof(accel_notice_state));
     inventory.count=1;
