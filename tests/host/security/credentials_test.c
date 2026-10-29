@@ -712,7 +712,14 @@ static void test_amendment_launch(struct proc_thread *logon)
     CHECK(extended_call(logon,10,id,&in,&again,64)==-EBUSY && !user_visible);fence_error=0;
     retire(id);
     CHECK(!security_session_create(&c,&profile,&id));CHECK(!launch_call(logon,id,2,&server));
-    g_ticks+=5000;g_current=&controller;security_poll();CHECK(session_find(id)->launches[1].state==4);
+    uint64_t launch_started=g_ticks;
+    g_current=&controller;
+    g_ticks=launch_started+5000;security_poll();
+    CHECK(!poll_call(logon,&server) && server.state==1 && !server.error);
+    g_ticks=launch_started+CIUKI_SECURITY_LAUNCH_TIMEOUT_MS-1;security_poll();
+    CHECK(!poll_call(logon,&server) && server.state==1 && !server.error);
+    g_ticks++;security_poll();
+    CHECK(!poll_call(logon,&server) && server.state==4 && server.error==-ETIMEDOUT);
     retire(id);
     CHECK(!security_session_create(&c,&profile,&id));CHECK(!launch_call(logon,id,2,&server));
     ready_child(&server,-EIO);CHECK(!poll_call(logon,&server) && server.state==4 && server.error==-EIO);
