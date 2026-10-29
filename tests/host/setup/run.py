@@ -24,7 +24,8 @@ def main():
         module=importlib.util.module_from_spec(spec);spec.loader.exec_module(module)
         portrait=folder/"portrait.xrgb";portrait.write_bytes(module.convert(ROOT/"assets/brand/ciuki-logo.png"))
         binary=folder/"setup-test"
-        subprocess.run(["clang","-std=c17","-O1","-g","-Wall","-Wextra","-Werror","-D_POSIX_C_SOURCE=200809L",
+        # Keep the historical visual fixture identity independent of production config.
+        subprocess.run(["clang",'-DCIUKI_HUMAN_NAME="CiukiOS 1.0 Beta"',"-std=c17","-O1","-g","-Wall","-Wextra","-Werror","-D_POSIX_C_SOURCE=200809L",
                         ("-fsanitize=undefined" if "--ubsan" in sys.argv else "-fsanitize=address,undefined"),"-fno-sanitize-recover=undefined","-ffunction-sections","-fdata-sections","-Wl,--gc-sections", "-Wl,--wrap=malloc,--wrap=calloc,--wrap=waitpid",
                         f'-DST_NATIVE_ROOT="{temp}"', "-idirafter",str(ROOT/"sdk/sysroot-overlay/include"),
                         "-I",str(ROOT/"src/kernel/include"),"-I",str(ROOT/"sdk/libsetup/include"),

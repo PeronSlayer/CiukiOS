@@ -1,8 +1,8 @@
-# CiukiOS 1.0 Beta Release Notes
+# CiukiOS 1.0.0 Beta 1 Release Notes
 
-- **Version:** 1.0.1 beta — unreleased.
+- **Version:** 1.0.0-beta.1 — unreleased.
 - **Date:** 2026-10-29.
-- **Release channel:** beta; tags use `v1.0.1-beta.<n>`.
+- **Release channel:** beta; tags use `v1.0.0-beta.1`.
 - **Architecture:** i686 PCs with CMOV, BIOS/E820, VBE 2.0+ video, parallel ATA and PS/2 input; late-1990s and early-2000s desktops and laptops. Current acceptance requires at least 128 MiB RAM; VM packages use 512 MiB.
 - **Media:** one canonical 512 MiB FAT32 disk image, a Setup CD ISO and VM packages.
 - **Qualification:** publication requires the release image to pass automated acceptance and the unattended self-test on the reference QEMU profile. Those results and the approved SHA-256 must be recorded at release time. These notes do not certify an image or completion of hardware qualification.
@@ -49,26 +49,26 @@ The original Half-Life installer, main menu and t0a0 map run in the host runtime
 
 ## Installation and VM packages
 
-Verify `SHA256SUMS` before use. Packages are named `ciukios-1.0.1-*`; use the files attached to the same beta tag. Back up any destination disk before installation or raw writing, which can erase its contents.
+Verify `SHA256SUMS` before use. Packages are named `ciukios-1.0.0-beta.1-*`; use the files attached to the same beta tag. Back up any destination disk before installation or raw writing, which can erase its contents.
 
 ### Setup CD
 
-Burn `ciukios-1.0.1-setup.iso` to a CD, or attach it as an IDE CD-ROM in a BIOS VM, then boot the disc and follow Setup. Select the destination disk and components, and create the required administrator and recovery passwords. The CD carries system services, default machine registry hives, required sources and licence notices.
+Burn `ciukios-1.0.0-beta.1-setup.iso` to a CD, or attach it as an IDE CD-ROM in a BIOS VM, then boot the disc and follow Setup. Select the destination disk and components, and create the required administrator and recovery passwords. The CD carries system services, default machine registry hives, required sources and licence notices.
 
 The ISO uses El Torito hard-disk emulation. It is **not a hybrid USB image**; use the raw disk package for direct USB/disk writing.
 
 ### Raw disk image
 
-Extract `ciukios-1.0.1-disk.zip` and write `ciukios.img` to a whole destination disk using Rufus in DD mode, balenaEtcher or `dd`. This overwrites the destination. For development and readback verification, follow [the physical-machine procedure](https://github.com/PeronSlayer/CiukiOS/blob/main/docs/build-and-run.md#physical-machines).
+Extract `ciukios-1.0.0-beta.1-disk.zip` and write `ciukios.img` to a whole destination disk using Rufus in DD mode, balenaEtcher or `dd`. This overwrites the destination. For development and readback verification, follow [the physical-machine procedure](https://github.com/PeronSlayer/CiukiOS/blob/main/docs/build-and-run.md#physical-machines).
 
 The ready image uses the CiukiUser account described above. Device support depends on the detected controller; one image serves desktops and laptops.
 
 ### Virtual machines
 
-- **QEMU:** extract `ciukios-1.0.1-qemu.zip` and run `run-qemu.sh` or `run-qemu.cmd`. Install QEMU separately. Launchers prefer host acceleration and retry with TCG when needed; Apple Silicon uses x86 TCG.
-- **VirtualBox:** extract `ciukios-1.0.1-virtualbox.zip` and run `create-vm.sh` or `create-vm.cmd`, with VirtualBox installed. The package uses a VDI, BIOS, IDE PIIX4, ICH AC97, PCnet-FAST III, VBoxVGA, 512 MiB and one CPU.
-- **VMware:** extract `ciukios-1.0.1-vmware.zip` and open `ciukios.vmx`. It uses an IDE VMDK, ES1371 sound, E1000 NAT and VMware SVGA.
-- **OVA:** import `ciukios-1.0.1-vm.ova` as an alternative. Inspect the imported configuration: BIOS, IDE, supported audio/video, NAT, 512 MiB and one CPU. Importers can map device hints differently.
+- **QEMU:** extract `ciukios-1.0.0-beta.1-qemu.zip` and run `run-qemu.sh` or `run-qemu.cmd`. Install QEMU separately. Launchers prefer host acceleration and retry with TCG when needed; Apple Silicon uses x86 TCG.
+- **VirtualBox:** extract `ciukios-1.0.0-beta.1-virtualbox.zip` and run `create-vm.sh` or `create-vm.cmd`, with VirtualBox installed. The package uses a VDI, BIOS, IDE PIIX4, ICH AC97, PCnet-FAST III, VBoxVGA, 512 MiB and one CPU.
+- **VMware:** extract `ciukios-1.0.0-beta.1-vmware.zip` and open `ciukios.vmx`. It uses an IDE VMDK, ES1371 sound, E1000 NAT and VMware SVGA.
+- **OVA:** import `ciukios-1.0.0-beta.1-vm.ova` as an alternative. Inspect the imported configuration: BIOS, IDE, supported audio/video, NAT, 512 MiB and one CPU. Importers can map device hints differently.
 
 Conversion and integrity tests do not establish Windows/macOS launcher or VirtualBox/VMware runtime qualification. Consult the evidence attached to the published release.
 
@@ -88,7 +88,7 @@ CiukiOS kernel code is GPL-2.0, the unified DOS fork is GPL-2.0-or-later under i
 
 ### Wine 10.0 LGPL source offer
 
-The reused Wine 10.0 libraries are LGPL-2.1-or-later, without warranty. Recipients may modify, rebuild and replace them under that licence. Complete corresponding source accompanies each release in `ciukios-1.0.1-sources.zip` and the Setup CD's `SOURCES` directory: the exact Wine archive (`WINE100.TXZ`), CiukiOS patches, pins, recipes and helper sources (`CIUKIOS.ZIP`). Rebuild with `make upper`; see `third_party/wine/SOURCE-OFFER.txt` for component-specific recipes. Notices accompany the release in `ciukios-1.0.1-notices.zip` and the CD's `LICENSES` directory. These sources must be available from the same release location; upstream links alone do not replace them. See [Wine 10.0's LGPL text, sections 4 and 6](https://github.com/wine-mirror/wine/blob/wine-10.0/COPYING.LIB).
+The reused Wine 10.0 libraries are LGPL-2.1-or-later, without warranty. Recipients may modify, rebuild and replace them under that licence. Complete corresponding source accompanies each release in `ciukios-1.0.0-beta.1-sources.zip` and the Setup CD's `SOURCES` directory: the exact Wine archive (`WINE100.TXZ`), CiukiOS patches, pins, recipes and helper sources (`CIUKIOS.ZIP`). Rebuild with `make upper`; see `third_party/wine/SOURCE-OFFER.txt` for component-specific recipes. Notices accompany the release in `ciukios-1.0.0-beta.1-notices.zip` and the CD's `LICENSES` directory. These sources must be available from the same release location; upstream links alone do not replace them. See [Wine 10.0's LGPL text, sections 4 and 6](https://github.com/wine-mirror/wine/blob/wine-10.0/COPYING.LIB).
 
 ### Game data policy
 

@@ -26,7 +26,7 @@ Released under the [GNU GPLv2](LICENSE).
 </tr>
 </table>
 
-QEMU captures of the 1.0.1 alpha ([details](docs/screenshots/1.0.1-alpha/README.md)).
+QEMU captures of the 1.0.0-alpha.2 ([details](docs/screenshots/1.0.1-alpha/README.md)).
 
 ## Highlights
 
@@ -62,7 +62,7 @@ More detail, the plan and the evidence behind each item:
 
 ## Status
 
-**1.0.1 beta** on `main` (unreleased): kernel-enforced user accounts, expanded
+**1.0.0-beta.1 (CiukiOS 1.0.0 Beta 1)** on `main` (unreleased): kernel-enforced user accounts, expanded
 OpenGL and LAN support, DOS game and sound improvements, and Setup CD account
 provisioning. Publication requires acceptance and self-test qualification of the
 release image; hardware qualification continues ([Changelog](CHANGELOG.md)). The frozen
@@ -94,3 +94,5 @@ instructions, including writing the image to a real machine:
 - [Support the project](DONATIONS.md)
 
 Developed by its owner with AI agents; see [AGENTS.md](AGENTS.md).
+
+Versions follow [Semantic Versioning 2.0.0](https://semver.org/spec/v2.0.0.html); see [the version mapping](CHANGELOG.md#versioning).

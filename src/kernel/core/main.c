@@ -50,7 +50,7 @@ void kmain(uint32_t magic, uint32_t bi_phys)
     klog("Ciuki VMM F0 build %s - CiukiOS", CIUKI_BUILD_ID);
     /* A separate line: scripts/test/physical.py and its host fixtures match
      * the banner above, so its text stays as it is. */
-    klog("CiukiOS %s", CIUKI_VERSION);
+    klog("CiukiOS %s", CIUKI_VERSION_FULL);
     /* Only the current real-mode loader has this optional private trailer.
      * Read it before reclaim; klog retains protected early-boot records even
      * when both firmware and kernel UART probes find no serial port. */

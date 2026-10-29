@@ -991,7 +991,7 @@ exactly; process exit MUST use call 0 and MUST NOT receive a duplicate number.
 | 53 | `sigprocmask(B=how,C=set*,D=old*)` | 0; calling thread's mask; null set queries only. | N | EFAULT, EINVAL |
 | 54 | `kill(B=pid,C=signal)` | 0; signal/probe targets in caller's process group only. | N | EINVAL, ESRCH, EPERM |
 | 55 | `sigreturn(B=frame*)` | Restore validated active signal frame; no ordinary return. | X | none; malformed frame MUST terminate caller with SIGSEGV |
-| 56 | `uname(B=utsname*)` | 0; sysname CiukiOS, nodename ciuki, machine i686, `release` the recorded build ID, `version` the CiukiOS version string (`config/version.json`, e.g. `0.9.0 pre-alpha`). | N | EFAULT |
+| 56 | `uname(B=utsname*)` | 0; sysname CiukiOS, nodename ciuki, machine i686, `release` the recorded build ID, `version` the CiukiOS version string (`config/version.json`, e.g. `1.0.0-beta.1`). | N | EFAULT |
 | 57 | `surface_create(B=width,C=height,D=format)` | New CLOEXEC fd for zeroed shared surface; format=1 XRGB8888. | N | EINVAL, EOVERFLOW, ENOMEM, EMFILE, ENFILE |
 | 58 | `surface_map(B=fd,C=prot)` | Base address; whole shared object, READ or READ plus WRITE. | N | EBADF, EINVAL, EACCES, ENOMEM |
 | 59 | `surface_info(B=fd,C=info*)` | 0; immutable geometry and allocation length. | N | EBADF, EFAULT |

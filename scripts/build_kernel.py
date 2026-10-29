@@ -81,7 +81,7 @@ def check_toolchain() -> None:
 
 
 def read_version() -> dict:
-    """{'number', 'stage', 'display'} from config/version.json (the single
+    """SemVer identity (version, core, stage, number, display) from config/version.json (the single
     source; scripts/ciuki_version.py validates it)."""
     sys.dont_write_bytecode = True
     spec = importlib.util.spec_from_file_location("ciuki_version", ROOT / "scripts" / "ciuki_version.py")
@@ -164,7 +164,11 @@ def main() -> int:
     OBJ.mkdir(parents=True, exist_ok=True)
     os.environ["TMPDIR"] = str(OUT)
     bid, bhex, bdirty = build_id()
-    version = read_version()["display"]
+    version = read_version()["version"]
+    spec = importlib.util.spec_from_file_location("ciuki_version", ROOT / "scripts/ciuki_version.py")
+    identity = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(identity)
+    full_version = identity.with_build(version, bid, bid.removesuffix("-dirty"))
     epoch = int(os.environ.get("SOURCE_DATE_EPOCH", str(int(time.time()))))
     if epoch < 0 or epoch > 0x7fffffffffffffff:
         raise SystemExit("invalid build epoch")
@@ -262,6 +266,7 @@ def main() -> int:
         o = OBJ / (c.parent.name + "_" + c.stem + ".o")
         run(["clang", *CFLAGS, *lwip_includes, "-I", str(SRC / "net/lwip/libc"), *frame_flags(c), f'-DCIUKI_BUILD_ID="{bid}"', f'-DCIUKI_BUILD_HEX8="{bhex}"',
              f'-DCIUKI_VERSION="{version}"',
+             f'-DCIUKI_VERSION_FULL="{full_version}"',
              f'-DCIUKI_PROC_PAYLOAD_BIN="{proc_payload}"',
              f'-DCIUKI_SIGNAL_PAYLOAD_BIN="{signal_payload}"',
              f'-DCIUKI_DESKTOP_PAYLOAD_BIN="{desktop_payload}"',
@@ -309,7 +314,7 @@ def main() -> int:
          "-Map", str(OUT / "VMM.map"), "-o", str(elf), *map(str, objs)])
     audit(elf)
     clock_record = {"utc_epoch": epoch, "kernel_sha256": hashlib.sha256(elf.read_bytes()).hexdigest(),
-                    "version": version}
+                    "version": version, "version_full": full_version, "version_display": read_version()["display"]}
     (OUT / "build-clock.json").write_text(json.dumps(clock_record, indent=2) + "\n")
     size = elf.stat().st_size
     print(f"[build-kernel] {elf.relative_to(ROOT)} ({size} bytes), CiukiOS {version}, build {bid}")

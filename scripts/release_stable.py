@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Package an owner-approved canonical image and Setup CD as a stable release, or an alpha/beta pre-release (--channel).
+"""Package an owner-approved canonical image and Setup CD as a SemVer release.
 
 No builds or guest execution. --dry-run performs the audits without network or
 release output. See docs/release-process.md for the approval and source contract.
@@ -27,6 +27,8 @@ import tempfile
 import xml.etree.ElementTree as ET
 import zipfile
 
+import ciuki_version
+
 import build_cd
 import build_dos_image
 import build_games_disk
@@ -36,9 +38,7 @@ ROOT = Path(__file__).resolve().parent.parent
 REPO = os.environ.get("CIUKIOS_GITHUB_REPO", "PeronSlayer/CiukiOS")
 SHA256 = re.compile(r"[0-9a-f]{64}")
 COMMIT = re.compile(r"[0-9a-f]{40}")
-VERSION = re.compile(r"[0-9]+\.[0-9]+\.[0-9]+")
-CHANNELS = ("stable", "alpha", "beta")
-RELEASE_TAG = re.compile(r"v[0-9]+\.[0-9]+\.[0-9]+-(?:stable|alpha|beta)\.[1-9][0-9]*")
+RELEASE_TAG = re.compile(r"v(?:0|[1-9][0-9]*)\.(?:0|[1-9][0-9]*)\.(?:0|[1-9][0-9]*)(?:-(?:alpha|beta|rc)\.[1-9][0-9]*)?")
 STABLE_TAG = RELEASE_TAG
 PUBLIC_FORBIDDEN = re.compile(r"\b(?:T23|E500|ThinkPad|Armada)\b|qemu-t23", re.IGNORECASE)
 OVF = "http://schemas.dmtf.org/ovf/envelope/1"
@@ -283,9 +283,12 @@ def clean(value: object) -> bool:
     return value is False or (type(value) is int and value == 0)
 
 
-def inputs(root: Path, version: str, approved_sha: str, channel: str = "stable") -> dict:
-    require(channel in CHANNELS, "channel must be stable, alpha or beta")
-    require(VERSION.fullmatch(version), "version must be MAJOR.MINOR.PATCH")
+def inputs(root: Path, version: str, approved_sha: str) -> dict:
+    try:
+        identity_info = ciuki_version.identity(version)
+    except ValueError as error:
+        raise Refusal(str(error)) from error
+    channel = identity_info["stage"]
     require(SHA256.fullmatch(approved_sha), "approval must name a full lowercase SHA-256")
     policy = json.loads((root / "config/release-policy.json").read_text())["stable"]
     require(policy.get("requires_owner_approval") is True and policy.get("owner_approved") is True
@@ -307,18 +310,20 @@ def inputs(root: Path, version: str, approved_sha: str, channel: str = "stable")
     require(disk.get("image_sha256") == approved_sha and build.get("disk_image_sha256") == approved_sha,
             "manifest image approval mismatch")
     require(disk.get("version") == build.get("version"), "disk/CD version mismatch")
+    full = disk.get("version_full")
+    require(isinstance(full, str) and full.startswith(version + "+build.")
+            and full == build.get("version_full"), "disk/CD build metadata mismatch")
+    ciuki_version.parse(full)
     identity = git_json(root, commit, "config/version.json")
-    require(identity["version"] == version and disk["version"] == f"{version} {identity['stage']}",
+    require(identity["version"] == version and disk["version"] == version,
             "release version differs from built source")
-    if channel != "stable":
-        require(identity["stage"] == channel, f"source stage {identity['stage']!r} is not the {channel} channel")
     verify_file(image, {"sha256": approved_sha, "size": image.stat().st_size})
     verify_file(iso, {"sha256": cd["iso"]["sha256"], "size": cd["iso"]["bytes"]})
     config = git_json(root, commit, "config/cd-components.json")
     changelog = git_bytes(root, commit, "CHANGELOG.md").decode()
-    section = changelog_section(changelog, version, None if channel == "stable" else channel)
+    section = changelog_section(changelog, version)
     channel_notes = ""
-    if channel in ("alpha", "beta"):
+    if channel in ("alpha", "beta", "rc"):
         channel_notes = git_bytes(root, commit, f"docs/release-notes-1.0-{channel}.md").decode()
         require(channel_notes.strip(), f"empty {channel} release notes")
     return {"root": root, "image": image, "iso": iso, "disk": disk, "cd": cd,
@@ -328,15 +333,13 @@ def inputs(root: Path, version: str, approved_sha: str, channel: str = "stable")
             "channel_notes": channel_notes}
 
 
-def changelog_section(changelog: str, version: str, stage: str | None = None) -> str:
-    # One version can carry an alpha and a beta section (SemVer pre-releases of the same version).
-    sections = re.split(r"(?m)^(?=## )", changelog)
-    tail = r"\]?\s+" + re.escape(stage) + r"\b" if stage else r"(?=[\]\s(]|$)"
-    for section in sections:
+def changelog_section(changelog: str, version: str) -> str:
+    ciuki_version.identity(version)
+    for section in re.split(r"(?m)^(?=## )", changelog):
         heading = section.splitlines()[0] if section else ""
-        if re.match(r"## \[?" + re.escape(version) + tail, heading):
+        if re.match(r"## \[?" + re.escape(version) + r"(?=[\]\s(]|$)", heading):
             return section.strip()
-    raise Refusal(f"CHANGELOG has no section for {version}{' ' + stage if stage else ''}")
+    raise Refusal(f"CHANGELOG has no section for {version}")
 
 
 def shareware_hashes(root: Path, commit: str) -> set[str]:
@@ -417,16 +420,11 @@ def audit_inputs(info: dict, scratch: Path) -> tuple[Path, list[Path], list[Path
     return tree, sources, notices
 
 
-def next_number(version: str, tags: list[str], channel: str = "stable") -> int:
-    pattern = re.compile(r"v" + re.escape(version) + "-" + channel + r"\.([1-9][0-9]*)")
-    numbers = {int(m[1]) for tag in tags if (m := pattern.fullmatch(tag))}
-    return max(numbers, default=0) + 1
-
-
-def release_tags(root: Path, version: str, remote: bool, channel: str = "stable") -> list[str]:
-    tags = command("git", "tag", "--list", f"v{version}-{channel}.*", root=root).splitlines()
+def release_tags(root: Path, version: str, remote: bool) -> list[str]:
+    tag = "v" + version
+    tags = command("git", "for-each-ref", "--format=%(refname:strip=2)", "refs/tags/" + tag, root=root).splitlines()
     if remote:
-        refs = json.loads(command("gh", "api", f"repos/{REPO}/git/matching-refs/tags/v{version}-{channel}.", root=root))
+        refs = json.loads(command("gh", "api", f"repos/{REPO}/git/matching-refs/tags/{tag}", root=root))
         tags += [r["ref"].removeprefix("refs/tags/") for r in refs]
     return tags
 
@@ -655,7 +653,7 @@ def notes(info: dict) -> str:
             f"Approved disk SHA-256: `{info['sha256']}`\n\n"
             f"Owner approval: {info['policy']['approval_record']}\n\n"
             + ("This is a pre-release (" + info["channel"] + " channel): expect rough edges; see the known issues below.\n\n"
-             if info.get("channel", "stable") != "stable" else "")
+             if ciuki_version.identity(info["version"])["prerelease_number"] is not None else "")
             + (info["channel_notes"].rstrip() + "\n\n" if info.get("channel_notes") else "")
             + "## Try this release\n\n"
             "Verify SHA256SUMS before use. Extract the disk ZIP for Rufus (DD mode), "
@@ -705,13 +703,11 @@ def publication_command(info: dict, directory: Path) -> list[str]:
             *(str(directory / name) for name in artifacts(info)),
             "--target", info["commit"], "--title", info["title"],
             "--notes-file", str(directory / "RELEASE-NOTES.md"), "-R", REPO,
-            *(["--prerelease"] if info.get("channel", "stable") != "stable" else [])]
+            *(["--prerelease"] if ciuki_version.identity(info["version"])["prerelease_number"] is not None else [])]
 
 
-def release_title(version: str, channel: str, number: int) -> str:
-    if channel == "stable":
-        return f"CiukiOS {version} \u2014 stable {number}"
-    return f"CiukiOS {version} {channel}" + (f" {number}" if number > 1 else "")
+def release_title(version: str) -> str:
+    return ciuki_version.identity(version)["human_name"]
 
 
 @contextmanager
@@ -726,11 +722,12 @@ def release_lock(root: Path):
         yield
 
 
-def release(root: Path, version: str, approved_sha: str, dry_run: bool, channel: str = "stable") -> Path:
+def release(root: Path, version: str, approved_sha: str, dry_run: bool) -> Path:
     with release_lock(root):
-        info = inputs(root, version, approved_sha, channel)
-        number = next_number(version, release_tags(root, version, not dry_run, channel), channel)
-        info.update(tag=f"v{version}-{channel}.{number}", title=release_title(version, channel, number))
+        info = inputs(root, version, approved_sha)
+        tag = "v" + version
+        require(tag not in release_tags(root, version, not dry_run), "release tag already exists locally or remotely")
+        info.update(tag=tag, title=release_title(version))
         releases = root / "build/releases"
         destination = releases / info["tag"]
         require(not destination.exists(), "release destination already exists; inspect it before retrying")
@@ -768,12 +765,10 @@ def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--version", required=True)
     parser.add_argument("--approved-image-sha256", required=True)
-    parser.add_argument("--channel", choices=CHANNELS, default="stable",
-                        help="stable (default), or alpha/beta: tag v<version>-<channel>.<n>, GitHub prerelease")
     parser.add_argument("--dry-run", action="store_true")
     args = parser.parse_args()
     try:
-        release(ROOT, args.version, args.approved_image_sha256, args.dry_run, args.channel)
+        release(ROOT, args.version, args.approved_image_sha256, args.dry_run)
     except (Refusal, OSError, KeyError, TypeError, ValueError, zipfile.BadZipFile, tarfile.TarError) as error:
         raise SystemExit(f"[stable-release] refused: {error}") from error
 
