@@ -93,7 +93,8 @@ int main(void)
     assert(!strcmp(du_get(&ui,107)->text,"Loading..."));
     struct du_event address={.type=DU_EV_KEY,.key=DU_KEY_F4};files_event(&ui,&address,&app);
     assert(du_focused(&ui)==100 && app.loading);
-    struct ciuki_input_event motion={.type=CIUKI_INPUT_MOTION,.value=440,.value2=40};du_input(&ui,&motion);
+    struct du_rect views=du_get(&ui,9)->box;
+    struct ciuki_input_event motion={.type=CIUKI_INPUT_MOTION,.value=views.x+8,.value2=views.y+8};du_input(&ui,&motion);
     enum du_view view=du_get(&ui,107)->view;
     struct ciuki_input_event button={.type=CIUKI_INPUT_BUTTON,.code=1,.value=1};du_input(&ui,&button);
     button.value=0;du_input(&ui,&button);assert(du_get(&ui,107)->view!=view && app.loading);

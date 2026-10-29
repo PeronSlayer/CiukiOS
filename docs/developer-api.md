@@ -9643,6 +9643,10 @@ struct du_item {
     uint8_t selected, ghost, depth, expanded, children;
 };
 struct du_column { const char *title; int width, right; };
+struct du_icon_position {
+    int x;
+    int y;
+};
 enum du_view { DU_DETAILS, DU_ICONS, DU_LIST };
 
 enum du_kind { DU_LABEL, DU_BUTTON, DU_TOOLBUTTON, DU_EDIT, DU_LISTVIEW, DU_TREE,
@@ -9828,6 +9832,21 @@ int lo, hi, line, big, tick, buddy;
     uint8_t wrap, editable;
     char tip[96];
     const char *help;
+```
+
+Optional count unscrolled icon positions, owned by the caller. Divider
+resize/auto-fit emits DU_EV_CHANGE with index = column.
+
+```c
+const struct du_icon_position *icon_positions;
+```
+
+Editable combo: 0 conventional, 1 history, 2 filtered suggestions with
+no initial hot entry. Typing edits; arrows preview; Enter accepts. A
+history-arrow/F4 open emits DU_EV_CHANGE with index = 1 first.
+
+```c
+int suggestions;
 };
 
 #define DU_ANCHOR_LEFT   1u

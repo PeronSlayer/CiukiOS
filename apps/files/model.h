@@ -28,7 +28,7 @@ struct fm_meta { enum fm_type type; uint64_t size, ino; uint32_t dev, mode; int6
 /* bin: 0, or index + 1 of the entry's record in fm_model.bin (G2: the Recycle
  * Bin view lists stored items under their stored names; the record has the
  * original name, location and deletion date). */
-struct fm_entry { char name[FM_NAME]; struct fm_meta meta; unsigned selected; uint32_t bin; unsigned result; char registered_type[80]; };
+struct fm_entry { char name[FM_NAME]; struct fm_meta meta; unsigned selected; uint32_t bin; unsigned result; char registered_type[80]; int icon_x, icon_y, icon_placed; };
 typedef int (*fm_emit)(const char *, const struct fm_meta *, void *);
 /* Cheap enumeration metadata (type/size/mtime/ino); METADATA fills missing
  * portable-host metadata without opening contents. SNIFF also classifies ELF.

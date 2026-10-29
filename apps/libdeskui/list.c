@@ -52,6 +52,14 @@ static struct layout compute(const struct du_widget *w)
             rows = (count + l.cols - 1) / l.cols;
         }
         l.rows = rows;
+        if (w->icon_positions) {
+            for (unsigned i=0;i<w->count;i++) {
+                int bottom=w->icon_positions[i].y/CELL_H+1;
+                if (bottom>l.rows) l.rows=bottom;
+            }
+            if (l.rows>l.visible && !l.has_v) { l.has_v=1; l.area.w-=SB; }
+            rows=l.rows;
+        }
         l.v = (struct du_sb){{l.area.x + l.area.w, l.body.y, SB, l.body.h}, 1, w->scroll, rows, l.visible};
     } else {
         l.colw = name_width(w);
@@ -104,6 +112,8 @@ static struct du_rect cell(const struct du_widget *w, const struct layout *l, un
 {
     if (w->kind == DU_TREE || w->view == DU_DETAILS)
         return (struct du_rect){l->area.x, l->area.y + ((int)i - w->scroll) * DU_ROW, l->area.w, DU_ROW};
+    if (w->view == DU_ICONS && w->icon_positions)
+        return (struct du_rect){l->area.x+w->icon_positions[i].x,l->area.y+w->icon_positions[i].y-w->scroll*CELL_H,CELL_W,CELL_H};
     if (w->view == DU_ICONS)
         return (struct du_rect){l->area.x + (int)i % l->cols * CELL_W, l->area.y + ((int)i / l->cols - w->scroll) * CELL_H, CELL_W, CELL_H};
     return (struct du_rect){l->area.x + ((int)i / l->rows - w->hscroll) * l->colw, l->area.y + (int)i % l->rows * DU_ROW, l->colw, DU_ROW};
@@ -276,7 +286,7 @@ void du_list_ensure(struct du_widget *w, unsigned index)
         if ((int)index >= w->scroll + l.visible) w->scroll = (int)index - l.visible + 1;
         w->scroll = du_sb_clamp(w->scroll, (int)w->count, l.visible);
     } else if (w->view == DU_ICONS) {
-        int row = (int)index / l.cols;
+        int row = w->icon_positions ? w->icon_positions[index].y/CELL_H : (int)index / l.cols;
         if (row < w->scroll) w->scroll = row;
         if (row >= w->scroll + l.visible) w->scroll = row - l.visible + 1;
         w->scroll = du_sb_clamp(w->scroll, l.rows, l.visible);
@@ -534,7 +544,28 @@ int du_list_press(struct du_ui *u, struct du_widget *w, int button, int x, int y
         int at = l.header.x;
         for (unsigned c = 0; c < w->column_count; c++) {
             at += w->columns[c].width;
-            if (button == 1 && x >= at - 3 && x <= at + 3) { w->drag = 30 + (int)c; w->drag_offset = x - w->columns[c].width; return 1; }
+            if (button == 1 && x >= at - 3 && x <= at + 3) {
+                int marker=-2-(int)c;
+                int dbl=u->last_click_widget==w->id && u->last_click_index==marker &&
+                    u->now-u->last_click_ns<(uint64_t)u->input_double_ms*1000000ull &&
+                    abs(x-u->last_click_x)<=4 && abs(y-u->last_click_y)<=4;
+                if (dbl) {
+                    int width=24;
+                    for (unsigned i=0;i<w->count;i++) {
+                        int n=du_text_width(w->items[i].text[c]?w->items[i].text[c]:"")+(c?12:30);
+                        if (n>width) width=n;
+                    }
+                    w->columns[c].width=width>16384?16384:width;
+                    u->last_click_widget=-1; w->drag=0;
+                    du_invalidate(u,w->box);
+                    du_emit(u,(struct du_event){.type=DU_EV_CHANGE,.id=w->id,.index=(int)c});
+                } else {
+                    u->last_click_widget=w->id; u->last_click_index=marker; u->last_click_ns=u->now;
+                    u->last_click_x=x; u->last_click_y=y;
+                    w->drag=30+(int)c; w->drag_offset=x-w->columns[c].width;
+                }
+                return 1;
+            }
         }
         int col = du_header_hit(w, x, y);
         if (button == 1 && col >= 0) du_emit(u, (struct du_event){.type = DU_EV_SORT, .id = w->id, .index = col});
@@ -629,6 +660,10 @@ void du_list_release(struct du_ui *u, struct du_widget *w)
     struct layout l=compute(w);
     if (drag>=10 && drag<=13) du_invalidate(u,l.v.box);
     else if (drag>=20 && drag<=23) du_invalidate(u,l.h.box);
+    if (drag>=30 && drag<30+DU_COLUMNS) {
+        if (w->columns[drag-30].width!=u->last_click_x-w->drag_offset) u->last_click_widget=-1;
+        du_emit(u,(struct du_event){.type=DU_EV_CHANGE,.id=w->id,.index=drag-30});
+    }
     if (drag==50 && pending && w->active<w->count) select_event(u,w,(int)w->active,0,DU_SELECT_RELEASE);
     if (drag==52) {
         if (pending && w->active<w->count) select_event(u,w,(int)w->active,0,DU_SELECT_RELEASE);

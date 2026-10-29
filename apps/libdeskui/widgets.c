@@ -1485,7 +1485,8 @@ static void key_down(struct du_ui *u, unsigned code)
     }
     struct du_widget *f = u->focus >= 0 && (unsigned)u->focus < u->count ? &u->widgets[u->focus] : NULL;
     if (f && (f->hidden || f->disabled)) f = NULL;
-    if (f && f->kind == DU_EDIT && du_edit_key(u, f, code)) return;
+    if (f && f->kind==DU_EDIT && du_edit_key(u,f,code)) return;
+    if (f && f->kind==DU_COMBO && f->editable && du_combo_key(u,f,code)) return;
     if (f && f->kind == DU_TEXTAREA && f->data && ((struct du_textarea *)f->data)->readonly &&
         du_widget_key(u, f, code)) return;
     if (du_menu_accelerator(u, code)) return;

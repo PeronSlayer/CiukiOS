@@ -101,7 +101,8 @@ int main(int argc,char **argv)
     action(FILES_UNDO); settle(); assert(fake_lookup("/dest/a.txt")<0);
     select_name("b.txt"); action(FILES_MOVE_TO); choose_dest(); assert(fake_lookup("/work/b.txt")<0 && fake_lookup("/dest/b.txt")>=0);
     action(FILES_UNDO); settle(); assert(fake_lookup("/work/b.txt")>=0 && fake_lookup("/dest/b.txt")<0);
-    action(FILES_UNDO); settle(); assert(du_dialog_id(&ui) && !strcmp(ui.dialog.title,"Undo")); accept();
+    assert(!app.undo_available && du_get(&ui,FILES_UNDO)->disabled);
+    action(FILES_UNDO); settle(); assert(!du_dialog_id(&ui)); /* one-level Undo is exhausted */
     select_name("a.txt"); action(FILES_COPY_TO); cancel(); assert(fake_lookup("/dest/a.txt")<0);
     action(FILES_OPEN_WITH); assert(du_dialog_id(&ui)==242);
     ui.dialog.focus=2; key(DU_KEY_ENTER); assert(du_dialog_id(&ui)==243);
