@@ -1,7 +1,7 @@
 /* Private registry-dispatch implementation. Notifications are relayed by
  * owning USER threads; desktop alone starts/resets the coordinator.
  * SPDX-License-Identifier: LGPL-2.1-or-later */
-struct wr_end_window {struct w32r_window w; unsigned queried,delivered,ended;};
+struct wr_end_window {struct w32r_window w; unsigned queried,delivered,ended,notified;};
 /* G3: a HOLD session (the desktop's Shut Down, Restart, Log Off) has no
  * deadline: the desktop watches the window in turn for hangs and ends a
  * hung process (its windows are then skipped). After every window agreed it
@@ -93,7 +93,7 @@ static uint32_t wr_power_turn(struct wr_server *s,uint32_t pid,const struct w32r
         w->delivered=1;r->key=w->w.hwnd;r->type=W32R_POWERBROADCAST;r->count=p->event;r->disposition=p->lparam;return 0;
     }
     if(!w->delivered || a->key!=w->w.hwnd || a->flags>1)return 87;
-    w->delivered=0;
+    w->delivered=0;w->notified=0;
     if(!a->flags && p->event<=1){p->denied=1;p->at=p->count;return 0;}
     if(a->flags){p->granted++;w->queried=1;}
     p->deadline=0;
@@ -160,6 +160,7 @@ static uint32_t wr_end_call(struct wr_server *s,uint32_t pid,const struct w32r_r
     if(a->index!=W32R_SESSION_POLL && a->index!=W32R_SESSION_REPLY)return 87;
     if(!a->type || (a->index==W32R_SESSION_POLL && (a->key || a->flags)))return 87;
     wr_end_advance(s);if(!e || e->stage==2)return wr_power_turn(s,pid,a,r);   /* G11: no session pending */
+    if(e->at>=e->count)return a->index==W32R_SESSION_POLL?0:6;
     struct wr_end_window *w=&e->windows[e->at];
     if(w->w.pid!=pid || w->w.tid!=a->type)return a->index==W32R_SESSION_POLL?0:5;
     if(a->index==W32R_SESSION_POLL){
@@ -170,5 +171,50 @@ static uint32_t wr_end_call(struct wr_server *s,uint32_t pid,const struct w32r_r
     if(!w->delivered || a->key!=w->w.hwnd || a->flags>1)return 87;
     if(!e->stage){w->queried=1;if(!a->flags && !(e->flags&4)){e->veto=1;e->at=e->count;}}
     else w->ended=1;
-    w->delivered=0;e->at++;wr_end_advance(s);return 0;
+    w->delivered=0;w->notified=0;e->at++;wr_end_advance(s);return 0;
+}
+
+/* Notify the next undelivered turn. The kernel latch coalesces notifications
+ * until its owning USER thread consumes one; unrelated threads do no RPC. */
+void wr_session_wake(struct wr_server *s)
+{
+    if (!s->session_notify) return;
+    wr_end_advance(s);
+    struct wr_end *e=s->ending;
+    if (e && e->stage<2) {
+        /* A USER thread can consume its power latch while this session
+         * owns POLL. The undelivered power turn needs a fresh notification
+         * once the session releases priority, even if its old latch was
+         * already consumed. Delivered callbacks keep their existing state. */
+        struct wr_power *p=s->power;
+        if (p && p->at<p->count && !p->windows[p->at].delivered)
+            p->windows[p->at].notified=0;
+        if (e->at<e->count && !e->windows[e->at].delivered && !e->windows[e->at].notified) {
+            e->windows[e->at].notified=1;
+            s->session_notify(e->windows[e->at].w.pid,e->windows[e->at].w.tid);
+        }
+        return;
+    }
+    wr_power_advance(s);
+    struct wr_power *p=s->power;
+    if (p && p->at<p->count && !p->windows[p->at].delivered && !p->windows[p->at].notified) {
+        p->windows[p->at].notified=1;
+        s->session_notify(p->windows[p->at].w.pid,p->windows[p->at].w.tid);
+    }
+}
+uint64_t wr_deadline(struct wr_server *s)
+{
+    uint64_t deadline=UINT64_MAX;
+    if (!s->session_only)
+        for (unsigned h=0;h<2;h++)
+            if (s->hive[h].dirty && s->hive[h].dirty_since+2000<deadline)
+                deadline=s->hive[h].dirty_since+2000;
+    struct wr_end *e=s->ending;
+    if (e && e->stage<2 && e->at<e->count && e->deadline<deadline) deadline=e->deadline;
+    struct wr_power *p=s->power;
+    /* Match wr_session_wake: a power deadline cannot advance while a
+     * session has priority. The release iteration evaluates it at s->now. */
+    if ((!e || e->stage==2) && p && p->at<p->count && p->deadline &&
+        (!p->windows[p->at].delivered || p->event>1) && p->deadline<deadline) deadline=p->deadline;
+    return deadline;
 }

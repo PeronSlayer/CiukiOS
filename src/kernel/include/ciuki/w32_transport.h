@@ -152,6 +152,9 @@ struct ciuki_w32_message_args {
 #define W32_SELECT_SENT_ONLY 2u
 /* wait.reserved bit zero selects new arrivals; zero retains the f5-04 ABI. */
 #define W32_WAIT_NEW_INPUT 1u
+#define W32_WAIT_SERVICES 2u /* internal USER transport wake */
+#define W32_WAIT_SESSION 4u /* session latch only, including after desktop disconnect */
+#define W32_WAIT_SERVICE 0x104u /* drain transport, then retry the application wait */
 struct ciuki_w32_section_args {
     struct ciuki_w32_header header;
     uint32_t kind, file, bytes, protect, name, flags, result, error;
@@ -178,6 +181,9 @@ struct ciuki_w32_service_args {
 #define W32_SVC_PRIORITY 4u
 #define W32_SVC_FOCUS 5u
 #define W32_SVC_INPUT 6u
+#define W32_SVC_WAIT 7u /* native server: pid=timeout in ms, endpoint=0 */
+#define W32_SVC_NOTIFY 8u /* authenticated w32srv: pid=client, endpoint=tid */
+#define W32_SVC_SESSION 9u /* own thread: consume session notification latch */
 _Static_assert(sizeof(struct ciuki_w32_object_args) == 72, "object wire");
 _Static_assert(sizeof(struct ciuki_w32_wait_args) == 56, "wait wire");
 _Static_assert(sizeof(struct ciuki_w32_apc_args) == 40, "APC wire");

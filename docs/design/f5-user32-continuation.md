@@ -130,3 +130,82 @@ changed the system palette) and
   in both axis modes; absolute mode reports the running sum (no cursor
   position, no DIPROP_RANGE clamp, no reset on read), relative mode the delta
   since the last read. The wheel follows the same rule.
+
+## fx-w32idle: blocking message waits
+
+Round 3 applies the same event-driven contract to overlapping coordinators.
+Comparing the production session wake path with Microsoft's blocking
+[GetMessage](https://learn.microsoft.com/en-us/windows/win32/api/winuser/nf-winuser-getmessage)
+and [MsgWaitForMultipleObjects](https://learn.microsoft.com/en-us/windows/win32/api/winuser/nf-winuser-msgwaitformultipleobjects)
+contracts and Wine's
+[queue wait/recheck loop](https://github.com/wine-mirror/wine/blob/master/dlls/win32u/message.c)
+shows two private bookkeeping requirements: a session that prevents delivery
+invalidates the undelivered power turn's notification, and its power deadline
+cannot schedule a wake while that session retains priority. Once reset,
+cancelled or completed, the session releases priority; the usual wake step
+evaluates the deferred power turn against the refreshed clock and signals it
+once if still pending. Delivered power callbacks retain their existing state.
+Hive commit deadlines remain eligible during a hold; finite sessions keep
+their own deadlines. These are CiukiOS coordination decisions derived from
+the blocking model, rather than claims that Windows exposes the same private
+protocol. The original queue
+order, timer synthesis and round-2 race fixes remain unchanged.
+
+Round 2 refines the same blocking contract using the Microsoft references and
+Wine's [wait_message implementation](https://raw.githubusercontent.com/wine-mirror/wine/master/dlls/win32u/message.c):
+internal event processing retains an absolute application timeout and checks
+queue readiness again. A timer that reaches its deadline after readiness was
+published must cause an immediate check, never an infinite sleep. Session and
+power turns notify once per pending state; nested USER loops consume duplicate
+latches and defer session RPCs until the active callback returns. After an
+internal wake, USER checks application objects/queue without internal services
+before retrying, so repeated service activity cannot hide input or a timeout.
+The service refreshes its monotonic clock on entering each loop and immediately
+before dispatching each request. Its session, power and shutdown windows thus
+start at request time even after an indefinite idle sleep. These are host-tested
+race and loop-order requirements, not guest residency measurements.
+
+Research and implementation decision (host evidence only): Microsoft
+[GetMessage](https://learn.microsoft.com/en-us/windows/win32/api/winuser/nf-winuser-getmessage),
+[WaitMessage](https://learn.microsoft.com/en-us/windows/win32/api/winuser/nf-winuser-waitmessage),
+[MsgWaitForMultipleObjects](https://learn.microsoft.com/en-us/windows/win32/api/winuser/nf-winuser-msgwaitformultipleobjects),
+and [About Messages and Message Queues](https://learn.microsoft.com/en-us/windows/win32/winmsg/about-messages-and-message-queues)
+specify blocking queue waits, optional kernel objects, and low-priority paint
+and timer synthesis. WaitMessage requires new arrivals; MWMO_INPUTAVAILABLE
+also accepts existing unread input. Preserve these distinctions and the current
+sent/posted/input/paint/timer delivery order. These live documents describe the
+retained API contract; they are not hardware evidence for Windows 98.
+The locally supplied Windows 98 Resource Kit, chapter 28, corroborates the
+historical model: `wrkc28_8.htm` (User) describes asynchronous input and a
+separate queue for each Win32 thread; `wrkc28_4.htm` (Multitasking) describes
+preemptively scheduled Win32 threads. Its cooperative Win16 scheduling does
+not justify periodic RPCs in a Win32 message wait.
+
+Wine's [dlls/win32u/message.c](https://github.com/wine-mirror/wine/blob/master/dlls/win32u/message.c)
+(get_server_queue_handle, wait_objects, NtUserMsgWaitForMultipleObjectsEx and
+NtUserGetMessage) waits on the server queue handle alongside application
+handles. Its wait_message rechecks driver work on queue wakes while retaining
+the application's absolute timeout. Use that event-driven model; no Wine code
+is copied.
+
+Repository baseline: the production USER harness records four end-session
+RPCs in 1000 ms per idle GUI thread. The guest service extends active_until
+by 20 ms on every fragment, so four isolated replies keep it runnable for
+80 ms/s (8 percent, excluding actual RPC work). USER additionally wakes every
+10 ms and the kernel wait every millisecond. These are separate costs.
+
+Decision: retain the existing queue and synthesis code. Extend W32_WAIT with
+an internal service wake that observes desktop channel readiness and a per-thread
+session latch. USER drains the transport and rechecks queue/object conditions
+on that wake; only a real application wait result leaves MsgWait. Timers supply
+the nearest real deadline, including kernel waitable timers. The registry
+service signals the authenticated owning thread when session/power coordination
+advances, and USER fetches session work only after consuming that latch.
+The service waits on accepted channel readability/closure or a new connection;
+fragmented transactions no longer require a runnable grace period. Dirty hive
+commits retain their two-second deadline. Display defaults are refreshed while
+processing traffic, rather than by a permanent idle polling deadline.
+After desktop disconnection, USER keeps waiting on the session latch alone:
+an already observed channel hangup cannot repeatedly wake it. Readiness uses
+retained service endpoint identities, and pending secure links must name the
+exact server subject and an endpoint it still owns, matching ACCEPT.

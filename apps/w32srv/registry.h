@@ -72,6 +72,7 @@ struct wr_server {
      * them): the processes a virtual restart must close. */
     uint32_t live[WR_LIVE];
     unsigned live_count;
+    void (*session_notify)(uint32_t pid, uint32_t tid);
     struct wr_end *ending;
     struct wr_power *power_query;
     struct wr_power *power;   /* G11: the WM_POWERBROADCAST in progress */
@@ -86,6 +87,8 @@ uint32_t wr_clients_reset(struct wr_server *); /* fresh desktop: prior-boot PIDs
 void wr_destroy(struct wr_server *);
 uint32_t wr_flush(struct wr_server *);
 uint32_t wr_tick(struct wr_server *, uint64_t now);
+void wr_session_wake(struct wr_server *);
+uint64_t wr_deadline(struct wr_server *);
 uint32_t wr_exit(struct wr_server *, uint32_t pid);
 uint32_t wr_dispatch(struct wr_server *, uint32_t pid, const void *, size_t,
                      void *, size_t, size_t *);

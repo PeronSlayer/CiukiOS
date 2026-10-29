@@ -144,12 +144,37 @@ int32_t ui_kernel_call(void *record, uint32_t bytes) {
   }
   if (header->operation == W32_SERVICE) {
     struct ciuki_w32_service_args *r = record;
+    if (r->action==W32_SVC_SESSION) return (int32_t)w32_service_call(thread,r);
     r->endpoint = 7;
     r->result = 1;
     return 0;
   }
   CHECK(false);
   return -1;
+}
+static uint64_t idle_event_tick;
+static unsigned idle_wait_calls;
+static uint64_t idle_first_deadline;
+static void idle_wait(uint64_t deadline) {
+  if (!idle_wait_calls++) idle_first_deadline=deadline;
+  uint64_t wake=deadline<idle_event_tick ? deadline : idle_event_tick;
+  CHECK(wake>g_ticks && wake!=UINT64_MAX);
+  if(wake==idle_event_tick)idle_event_tick=UINT64_MAX;
+  g_ticks=wake-1; /* schedule's one tick is the next event or timer deadline */
+}
+void ui_kernel_idle_begin(uint32_t event_ms) {
+  idle_event_tick=event_ms==UINT32_MAX ? UINT64_MAX : g_ticks+event_ms;
+  idle_wait_calls=0;idle_first_deadline=0;on_kwait=idle_wait;
+}
+unsigned ui_kernel_idle_end(uint64_t *deadline) {
+  on_kwait=0;*deadline=idle_first_deadline;return idle_wait_calls;
+}
+void ui_kernel_session_notify(uint32_t pid,uint32_t tid) {
+  for (unsigned i=0;i<3;i++)
+    if (ui_threads[i]->tid==tid && ui_threads[i]->process->pid==pid) {
+      ui_threads[i]->w32->session_pending=true;
+      w32_changed_wake();
+    }
 }
 void ui_kernel_finish(void) {
   dispatch = 0;
