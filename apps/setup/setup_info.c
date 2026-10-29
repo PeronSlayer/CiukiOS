@@ -41,6 +41,9 @@ int setup_release_parse(const char *json, size_t length, struct setup_release *o
         string(json, length, "disk_image_sha256", out->disk_image_sha256, sizeof(out->disk_image_sha256), 64) ||
         string(json, length, "version", out->version, sizeof(out->version), 0) ||
         hex(out->content_digest) || hex(out->disk_image_sha256)) return -1;
+    /* Older media can omit these additive presentation fields. */
+    if (value(json, length, "version_full") && string(json, length, "version_full", out->version_full, sizeof(out->version_full), 0)) return -1;
+    if (value(json, length, "version_display") && string(json, length, "version_display", out->version_display, sizeof(out->version_display), 0)) return -1;
     const char *v = value(json, length, "payload_files");
     if (!v || *v < '0' || *v > '9') return -1;
     unsigned long n = 0;

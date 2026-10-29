@@ -603,8 +603,9 @@ scrollable page, replacing the former nine-line text:
 
 - **Header (fixed).** The approved Ciuki portrait, unchanged, area-sampled to 56 px in a
   sunken frame; `CiukiOS` in the large face; the tagline `Classic computing, one woof at a
-  time.`; `Dedicated to Ciuki.  Version <uname version>` (the version string of
-  `config/version.json`, which the kernel reports through `uname`).
+  time.`; `Dedicated to Ciuki.  Version <human version>` (the version string of
+  `config/version.json`, which the kernel reports through `uname`, rendered as `1.0.0 Beta 1`).
+  General shows the human name and full `+build.<build id>.g<short commit>` details.
 - **List (scrolling).** One line per component with three columns: name, version or pin,
   licence. Seven groups in this order: System, DOS, Windows compatibility, Network and
   browser, Media, Tools, Icons; group names are bold in the theme's selection colour. The

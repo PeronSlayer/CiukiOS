@@ -13,12 +13,10 @@
 #include <ciuki/fbdev.h>
 #include <ciuki/timing.h>
 #include <ciuki/selftest.h>
+#include <ciuki/version.h>
 
 #ifndef CIUKI_BUILD_HEX8
 #define CIUKI_BUILD_HEX8 "00000000"
-#endif
-#ifndef CIUKI_VERSION
-#define CIUKI_VERSION "unknown"
 #endif
 #define STALL_GRACE_MS 30000u
 #define PHASE_MAX 32u

@@ -777,13 +777,15 @@ def build(image, out_dir, setup_elf, config_path=COMPONENTS, limit_sectors=CD_LI
         # ISO tree: sources, licences, answer-file sample.
         iso_tree_dir = work / "iso"
         archives = build_archives(config, required, iso_tree_dir / "SOURCES", epoch, image.parent, manifest)
-        identity = {"version": manifest["version"], "git_revision": manifest["git_revision"], "git_dirty": manifest["git_dirty"]}
+        identity = {"version": manifest["version"], "version_full": manifest.get("version_full", "unknown"),
+                    "version_display": manifest.get("version_display", manifest["version"]), "git_revision": manifest["git_revision"], "git_dirty": manifest["git_dirty"]}
         licence_count = licence_tree(config, present, {p: files[p] for p in files}, iso_tree_dir / "LICENSES",
                                      archives, assignment, epoch, identity)
         (iso_tree_dir / SAMPLE).write_text(ANSWER_SAMPLE)
         iso_files = {p.relative_to(iso_tree_dir).as_posix(): p for p in iso_tree_dir.rglob("*") if p.is_file()}
         digest, listed = content_digest(files, iso_files)
-        release = {"schema_version": 1, "version": manifest["version"], "git_revision": manifest["git_revision"],
+        release = {"schema_version": 1, "version": manifest["version"], "version_full": manifest.get("version_full", "unknown"),
+                    "version_display": manifest.get("version_display", manifest["version"]), "git_revision": manifest["git_revision"],
                    "git_dirty": manifest["git_dirty"], "disk_image": manifest["image"], "disk_image_sha256": manifest["image_sha256"],
                    "kernel_sha256": manifest["kernel_sha256"], "build_epoch": epoch, "boot_options": setup_options.decode(),
                    "payload_files": len(files) + 1, "payload_bytes": sum(Path(s).stat().st_size for s in files.values()),
@@ -820,7 +822,8 @@ def build(image, out_dir, setup_elf, config_path=COMPONENTS, limit_sectors=CD_LI
         iso_records = [{"path": p, "sha256": sha256_file(s), "size": s.stat().st_size, "attributes": 32} for p, s in sorted(iso_files.items())]
         cd = {
             "schema_version": 1,
-            "build": {"version": manifest["version"], "git_revision": manifest["git_revision"], "git_dirty": manifest["git_dirty"],
+            "build": {"version": manifest["version"], "version_full": manifest.get("version_full", "unknown"),
+                    "version_display": manifest.get("version_display", manifest["version"]), "git_revision": manifest["git_revision"], "git_dirty": manifest["git_dirty"],
                       "source_revision": head, "source_matches_build": source_matches, "build_epoch": epoch,
                       "disk_image": manifest["image"], "disk_image_sha256": manifest["image_sha256"],
                       "kernel_sha256": manifest["kernel_sha256"],

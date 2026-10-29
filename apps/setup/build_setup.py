@@ -41,7 +41,7 @@ def module(name, path):
 
 
 def inputs():
-    return {"sources": {name: digest(ROOT / name) for name in (*SOURCES, *HEADERS, "apps/setup/build_setup.py")},
+    return {"sources": {name: digest(ROOT / name) for name in (*SOURCES, *HEADERS, "apps/setup/build_setup.py", "scripts/ciuki_version.py", "config/version.json")},
             "sdk_manifest_sha256": digest(SDK / "manifest.json"),
             "libraries": {str(p.relative_to(ROOT)): digest(p) for p in LIBRARIES}}
 
@@ -66,7 +66,9 @@ def build(validate_sdk=True):
         pass
     OUT.mkdir(parents=True, exist_ok=True)
     env = dict(os.environ, TMPDIR=str(OUT))
-    command = [str(SDK / "bin/ciuki-cc"), *CFLAGS, "-ffunction-sections", "-fdata-sections",
+    version = module("setup_version", ROOT / "scripts/ciuki_version.py").load()
+    command = [str(SDK / "bin/ciuki-cc"), *CFLAGS,
+               '-DCIUKI_HUMAN_NAME="' + version["human_name"] + '"', "-ffunction-sections", "-fdata-sections",
                "-I", str(ROOT / "apps/setup"), "-I", str(ROOT / "sdk/libsetup/include"),
                # sec-user-02: the kernel's ciuki/sha256.h for the shared account codecs (SDK headers win).
                "-idirafter" + str(ROOT / "src/kernel/include"),

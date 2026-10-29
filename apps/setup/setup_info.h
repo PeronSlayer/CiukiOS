@@ -10,6 +10,7 @@ struct setup_release {
     char content_digest[65];     /* SHA-256 of the CD content listing (RELEASE.JSON excluded) */
     char disk_image_sha256[65];  /* the sibling canonical disk image */
     char version[48];
+    char version_full[160], version_display[64];
     unsigned long payload_files; /* files in the boot image's FAT volume */
 };
 /* 0, or -1 when a field is missing or malformed. */

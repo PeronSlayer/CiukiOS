@@ -1,18 +1,18 @@
-# CiukiOS 1.0 Alpha Release Notes
+# CiukiOS 1.0.0 Alpha 2 Release Notes
 
-- **Release:** 1.0 Alpha (unreleased, `main`; latest image `2287114d` of 2026-10-25, hardware trial pending)
+- **Release:** 1.0.0-alpha.2 (unreleased, `main`; latest image `2287114d` of 2026-10-25, hardware trial pending)
 - **Date:** 2026-10-25 (first written 2026-10-21; updated with the trials and fixes of 2026-10-21/22 and the image of 2026-10-25)
 - **Target Architecture:** i686 PC (Pentium III baseline, AC'97 audio, IDE/ATA, VESA VBE 2.0+, PS/2 / USB HID)
 - **Primary Hardware Twin:** the reference laptop (1.13 GHz Pentium III-M, 512 MiB RAM, S3 SuperSavage IX/C, Intel 82801CA ICH3 AC'97)
 - **Canonical Image:** 512 MiB FAT32 disk image (`build/f0/ciukios.img`, or `build/hw/ciukios-hw.img`)
-- **Setup Media Note:** Setup CD (f9) is deferred to a later release (owner decision 2026-10-21 20:29, dev diary 2026-10-21-07); the 1.0 Alpha ships as a direct disk image written to the target disk.
+- **Setup Media Note:** Setup CD (f9) is deferred to a later release (owner decision 2026-10-21 20:29, dev diary 2026-10-21-07); the initial 1.0.0-alpha.1 images ship as a direct disk image written to the target disk.
 - **Qualification Status:** Five alpha images (`8f59e221`, `28805270`, `b453bc92`, `5a10eef4`, `a4d9454e`) were tried on the reference laptop on 2026-10-21/22 and none has passed; see section 2.2. Hardware qualification is open (`TODO(lead)`).
 
 ---
 
-## 1.0.1 alpha (2026-10-25)
+## 1.0.0-alpha.2 (2026-10-25)
 
-First published alpha; the 1.0.0 version was skipped. It adds the fixes from the hardware trial of the earlier images and new games (details in `CHANGELOG.md`):
+Unpublished second alpha (formerly labelled 1.0.1 alpha); the earlier hardware images are 1.0.0-alpha.1. It adds the fixes from the hardware trial of the earlier images and new games (details in `CHANGELOG.md`):
 
 - Control Panel pages no longer redraw over each other; applications open faster; NetSurf scrolls and repaints much faster and retries refused connections.
 - Storage stays responsive when the CPU is busy (I/O priority); the boot menu idles the CPU.
@@ -20,13 +20,13 @@ First published alpha; the 1.0.0 version was skipped. It adds the fixes from the
 - Lower system overhead: task switches, page allocation, statistics and media detection cost less CPU.
 - Programs > Games has a Classic Games submenu (Solitaire, FreeCell, Hearts, Minesweeper) and the Warcraft II DOS demo.
 - The Quake III Arena demo installer is in a desktop folder; Windows installers with large payloads start.
-- Packages: QEMU, VirtualBox (VDI and scripts), VMware (VMDK and `.vmx`), OVA, Setup ISO and raw disk image, named `ciukios-1.0.1-*`.
+- Packages: QEMU, VirtualBox (VDI and scripts), VMware (VMDK and `.vmx`), OVA, Setup ISO and raw disk image, named `ciukios-1.0.0-alpha.2-*`.
 
 ---
 
 ## 1. Overview and Contents
 
-CiukiOS 1.0 Alpha marks the completion of the core foundations transition, bringing together Windows 98/ME-class resource management, a unified DOS subsystem, native Win32 application and installer support, full TCP/IP networking with a native graphical web browser, and desktop multimedia capabilities.
+CiukiOS 1.0.0 Alpha 1 marks the completion of the core foundations transition, bringing together Windows 98/ME-class resource management, a unified DOS subsystem, native Win32 application and installer support, full TCP/IP networking with a native graphical web browser, and desktop multimedia capabilities.
 
 ### 1.1 Kernel and Resource Management
 - **Windows 98/ME Resource Management Model:** Full implementation of the sequence covering Memory (M1–M4), Real-Time (R1–R3), Storage Cache & Concurrency (C1–C5), and DOS Memory (D1):
@@ -121,7 +121,7 @@ The next image is built only with the desktop CPU budget demonstrated on the mod
 
 ## 3. How to Write the Image to Disk
 
-To deploy the CiukiOS 1.0 Alpha image to physical hardware, follow the verified physical installation procedure documented in [docs/build-and-run.md](build-and-run.md#physical-machines):
+To deploy the CiukiOS 1.0.0 Alpha 1 image to physical hardware, follow the verified physical installation procedure documented in [docs/build-and-run.md](build-and-run.md#physical-machines):
 
 ### 3.1 Target Image
 The canonical target image is:
@@ -160,7 +160,7 @@ To record diagnostic boot logs from the reference laptop during physical testing
 
 ## 4. Licence Summary
 
-CiukiOS 1.0 Alpha adheres to strict licensing boundaries, source code publication obligations, and intellectual property requirements:
+CiukiOS 1.0.0 Alpha 1 adheres to strict licensing boundaries, source code publication obligations, and intellectual property requirements:
 
 ### 4.1 Unified DOS Kernel and Ported CiukiDOS Code
 - **License:** **GNU General Public License, version 2 or (at your option) any later version (GPL-2.0-or-later)**.

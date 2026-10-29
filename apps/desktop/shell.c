@@ -7,6 +7,7 @@
  * theme (Platinum, Ciuki Blue). No file or kernel access here
  * (shell.h). Integer-only. */
 #include "desktop.h"
+#include "version_name.h"
 #include "../libdeskui/deskui.h"
 #include "shell_icons.h"
 #include "input_text.h"
@@ -4219,7 +4220,9 @@ static void credits_page(struct desktop *d, struct du_canvas *c, struct desk_box
     int32_t tx = x + 70, right = page.x + page.w - tx - 8;
     du_text_font(c, t->font_large, tx, y - 1, "CiukiOS", t->select);
     du_text_fit(c, tx, y + 26, right, "Classic computing, one woof at a time.", SH_INK);
-    snprintf(line, sizeof(line), "Dedicated to Ciuki.  Version %s", d->version[0] ? d->version : "unknown");
+    char human_version[96];
+    ciuki_version_name(human_version, sizeof(human_version), d->version);
+    snprintf(line, sizeof(line), "Dedicated to Ciuki.  Version %s", human_version);
     du_text_fit(c, tx, y + 26 + step, right, line, t->dark);
     struct desk_box view, licences; int rows;
     credits_geometry(page, &view, &licences, &rows);
@@ -4283,9 +4286,13 @@ static void about_page(struct desktop *d, struct du_canvas *c, struct desk_box c
         du_text_font(c, t->font_large, tx, y + 2, "CiukiOS", t->select);
         du_text(c, tx, y + 30, "Classic computing, one woof at a time.", SH_INK);
         du_text_font(c, t->font_bold, tx, y + 30 + step, "Dedicated to Ciuki", t->dark);
-        snprintf(line, sizeof(line), "Version: %s", d->version[0] ? d->version : "unknown");
+        char human_version[96];
+        ciuki_version_name(human_version, sizeof(human_version), d->version);
+        snprintf(line, sizeof(line), "CiukiOS %s", human_version);
         du_text_fit(c, tx, y + 36 + 2 * step, right, line, SH_INK);
-        snprintf(line, sizeof(line), "Build: %s", d->build_identity);
+        size_t commit_length = strspn(d->build_identity, "0123456789abcdef");
+        snprintf(line, sizeof(line), "%s+build.%s.g%.*s", d->version, d->build_identity,
+                 (int)(commit_length ? commit_length : 7), commit_length ? d->build_identity : "unknown");
         du_text_fit(c, tx, y + 36 + 3 * step, right, line, SH_INK);
         du_text(c, tx, y + 36 + 4 * step, !d->realtime_source ? "Clock: build seed (UTC)" : (d->time_flags & CIUKI_TIME_RTC_LOCAL) ? "Clock: RTC (local time)" : "Clock: RTC (UTC)", SH_INK);
         snprintf(line, sizeof(line), "Display: %u x %u, 32-bit colour", (unsigned)d->width, (unsigned)d->height);
