@@ -37,6 +37,9 @@ uint32_t ui_kernel_tid(void), ui_kernel_pid(void), ui_kernel_ticks(void);
 int32_t ui_kernel_call(void *, uint32_t);
 uint32_t ui_kernel_child_handle(uint32_t);
 void ui_kernel_close_handle(uint32_t), ui_kernel_child_wait(uint32_t, uint32_t);
+void ui_kernel_session_notify(uint32_t,uint32_t);
+void ui_kernel_idle_begin(uint32_t);
+unsigned ui_kernel_idle_end(uint64_t *);
 DWORD W32API WaitForInputIdle(HANDLE, DWORD);
 static DWORD errors[3];
 DWORD W32API GetLastError(void) { return errors[ui_kernel_current()]; }
@@ -120,6 +123,10 @@ __attribute__((weak)) BOOL W32API DeleteFileA(const char *name) {
 #endif
 HANDLE W32API GetProcessHeap(void) { return (HANDLE)1; }
 static unsigned allocations,allocation_calls;
+/* One-shot regression hook: recycle a retired GlobalAlloc block, poisoning
+ * its old payload so reconstruction must restore the serialized bytes. */
+static HANDLE global_reuse_once;
+static BOOL global_reuse_ready;
 void *W32API HeapAlloc(HANDLE h, DWORD flags, DWORD n) {
   (void)h;
   (void)flags;
@@ -145,9 +152,26 @@ BOOL W32API HeapFree(HANDLE h, DWORD flags, void *v) {
   return 1;
 }
 HANDLE W32API GlobalAlloc(DWORD flags, DWORD n) {
+  if (global_reuse_ready) {
+    HANDLE h=global_reuse_once;
+    CHECK(h && ((DWORD *)h)[-7]==n);
+    global_reuse_once=0;
+    global_reuse_ready=0;
+    memset(h,0,n);
+    allocations++;
+    allocation_calls++;
+    return h;
+  }
   return HeapAlloc((HANDLE)1, flags, n);
 }
 HANDLE W32API GlobalFree(HANDLE h) {
+  if (h && h==global_reuse_once) {
+    CHECK(!global_reuse_ready);
+    memset(h,0xa5,((DWORD *)h)[-7]);
+    global_reuse_ready=1;
+    allocations--;
+    return 0;
+  }
   HeapFree((HANDLE)1, 0, h);
   return 0;
 }
@@ -3257,6 +3281,7 @@ static void test_production_gdi(void) {
   host_modules = 0;
   host_gdi_exit();
 }
+#include "idle_test.inc"
 #ifndef U32_TEST_EXTERNAL_MODULES
 #include "../shell/clients.inc"
 #include "g18_test.inc"
@@ -3302,6 +3327,7 @@ static void run(void) {
   CHECK(mkdtemp(dir));
   wr_posix_io(&io, dir);
   CHECK(wr_init(&server, &io, 0));
+  server.session_notify=ui_kernel_session_notify;
   struct u32_backend backend = {ui_kernel_call, w32r_gate,     w32r_exchange,
                                 ui_kernel_tid,  ui_kernel_pid, ui_kernel_ticks,
                                 surface,        drop,          ui_kernel_pause};
@@ -3336,6 +3362,10 @@ static void run(void) {
   CHECK(GetParent(child) == windows[0]);
   CHECK(GetWindow(windows[0], 5) == child);
   CHECK(!UnregisterClassA("USER fixture", 0) && GetLastError() == 1412);
+  test_idle_wait();
+  test_idle_timer_race();
+  test_idle_nested_session();
+  test_idle_service_retries();
   puts("STEP send");
   test_send();
   puts("STEP queues");

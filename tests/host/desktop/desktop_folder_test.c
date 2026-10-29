@@ -108,6 +108,7 @@ static int in_bin(const char *original)
 #include "desktop_dnd_test.h"
 #include "desktop_recycle_test.h"
 #include "desktop_g19_test.h"
+#include "desktop_arrange_test.h"
 int main(int argc,char **argv)
 {
     setvbuf(stdout,NULL,_IOLBF,0); assert(argc==3); poll_frame=pthread_self(); out=argv[1]; fake_reset(); fake_image_tree();
@@ -377,6 +378,7 @@ int main(int argc,char **argv)
     fm_drag_free(g8_selected,NULL,g8_count); assert(!fake_vfs.unlink(NULL,selection_manifest+1));
     puts("PASS G8 desktop: rename Undo, Create Shortcut, link drops and multi-selection hand-off without changing clipboard");
     g19_cases();
+    arrange_cases();
     desk_render_release(&d);
     fake_assert_clean(); desk_folder_destroy(&d); free(d.sh.icons); free(d.sh.wall); free((void *)d.portrait); free(d.pixels);
     puts("PASS desktop folder: listing, scripted New Folder, unique folder/text/BMP, FAT rename/errors, Trash collisions, association launches, shared clipboard copy/move, positions/rename/reparse/Arrange, conditional Pictures isolation");

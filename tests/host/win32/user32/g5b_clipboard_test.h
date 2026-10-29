@@ -34,13 +34,25 @@ static void test_g5b_handles(void)
   CHECK(OpenClipboard(windows[0]) && EmptyClipboard());
   CHECK(SetClipboardData(CF_PALETTE,pal)==pal && SetClipboardData(CF_METAFILEPICT,mfp)==mfp && SetClipboardData(CF_ENHMETAFILE,enh)==enh);
   CHECK(CloseClipboard());
+  global_reuse_once=mfp;
   u32_clip_render_all(windows[0],0); /* owner exit frees its handles, retains bytes */
+  CHECK(global_reuse_ready);
   CHECK(OpenClipboard(windows[0]));
-  HANDLE got_pal=GetClipboardData(CF_PALETTE),got_meta=GetClipboardData(CF_METAFILEPICT),got_emf=GetClipboardData(CF_ENHMETAFILE);
-  CHECK(got_pal && got_meta && got_emf && got_pal!=pal && got_meta!=mfp && got_emf!=enh);
+  HANDLE got_pal=GetClipboardData(CF_PALETTE);
+  CHECK(got_pal && got_pal!=pal);
+  /* The owner has freed mfp. A reconstructed global block may have the same
+   * address: unlike GDI object handles, host GlobalAlloc has no generation.
+   * Force that legal reuse so this regression does not depend on ASLR/load. */
+  HANDLE got_meta=GetClipboardData(CF_METAFILEPICT);
+  CHECK(got_meta && got_meta==mfp && !global_reuse_once && !global_reuse_ready);
+  HANDLE got_emf=GetClipboardData(CF_ENHMETAFILE);
+  CHECK(got_emf && got_emf!=enh);
   uint8_t entries[8]; CHECK(palette_entries(U32_PTR(got_pal),0,2,entries)==2 && !memcmp(entries,palette+4,8));
   memcpy(&picture,GlobalLock(got_meta),sizeof(picture)); GlobalUnlock(got_meta);
   CHECK(picture.mode==8 && picture.x==640 && picture.y==480 && wmf_bits(U32_PTR(picture.metafile),0,0)==24 && emf_bits(U32_PTR(got_emf),0,0)==108);
+  uint8_t got_wmf[24],got_enh[108];
+  CHECK(wmf_bits(U32_PTR(picture.metafile),sizeof(got_wmf),got_wmf)==sizeof(got_wmf) && !memcmp(got_wmf,wmf,sizeof(wmf)));
+  CHECK(emf_bits(U32_PTR(got_emf),sizeof(got_enh),got_enh)==sizeof(got_enh) && !memcmp(got_enh,emf,sizeof(emf)));
   CHECK(CloseClipboard() && palette_entries(U32_PTR(got_pal),0,0,0)==2); /* valid until Empty */
   CHECK(OpenClipboard(windows[0]) && EmptyClipboard() && CloseClipboard());
   CHECK(!palette_entries(U32_PTR(got_pal),0,0,0) && !emf_bits(U32_PTR(got_emf),0,0));
@@ -74,5 +86,6 @@ static void test_g5b_handles(void)
   g5b_display_request(WM_SIZECLIPBOARD,0,0); CHECK(g5b_display_sizes==2);
   free(display_output); display_output=0; display_bytes=0; g5b_display=0;
   CHECK(OpenClipboard(windows[0]) && EmptyClipboard() && CloseClipboard());
+  puts("TRACE clipboard retired GlobalAlloc address reused with exact reconstructed metafile bytes");
   puts("TRACE G5b clipboard GDI handle reconstruction/lifetimes, Unicode names, delayed CF_BITMAP, owner-display name/size/paint/scroll");
 }

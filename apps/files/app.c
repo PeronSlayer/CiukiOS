@@ -3,6 +3,8 @@
  * Files controller: layout, menus, panes, selection, operations and jobs. */
 #include "app.h"
 #include "../desktop/profile.h"
+#include "../desktop/icon_labels.h"
+#include "../desktop/settings.h"
 #include "transfer.h"
 #include "transfer_ui.h"
 #include "../desktop/catalog.h"
@@ -416,6 +418,38 @@ static void resize_layout(struct du_ui *u, void *user)
 { (void)u; files_layout(user); }
 
 /* ---- places and folder tree ---- */
+int files_display_path(const struct files_app *a, char *out, const char *in)
+{
+    char path[FM_PATH]; int r=fm_posix_path(path,in); if (r) return r;
+    int which=!path[0] ? 0 : fm_same_path(path,profile_home()) ? 1 : -1;
+    if (which>=0 && a->system_labels[which][0]) { strcpy(out,a->system_labels[which]); return 0; }
+    return fm_display_path(out,in);
+}
+/* Runs only on the scan worker. A partial read never publishes partial names. */
+static void system_labels_read(struct files_app *a, const struct fm_vfs *fs)
+{
+    struct fm_meta meta;
+    int status=fs->stat_path(fs->ctx,profile_settings(),&meta);
+    if (status) { if (status==-ENOENT) memset(a->system_labels,0,sizeof(a->system_labels)); return; }
+    if (meta.type!=FM_FILE || meta.size>=CFG_TEXT_MAX) return;
+    int fd=fs->open(fs->ctx,profile_settings(),0);
+    if (fd<0) { if (fd==-ENOENT) memset(a->system_labels,0,sizeof(a->system_labels)); return; }
+    char *text=malloc(CFG_TEXT_MAX+1);
+    unsigned n=0; int error=text ? 0 : -ENOMEM;
+    while (!error && n<CFG_TEXT_MAX) {
+        int got=fs->read(fs->ctx,fd,text+n,CFG_TEXT_MAX-n);
+        if (got<0) error=got;
+        else if (!got) break;
+        else n+=(unsigned)got;
+    }
+    int closed=fs->close(fs->ctx,fd);
+    if (!error && !closed && n<CFG_TEXT_MAX) {
+        text[n]=0; memset(a->system_labels,0,sizeof(a->system_labels));
+        icon_label_read(text,"/Computer",a->system_labels[0],64);
+        icon_label_read(text,profile_home(),a->system_labels[1],64);
+    }
+    free(text);
+}
 struct names { char (*v)[FM_NAME]; unsigned count, capacity; const char *parent; int show_hidden, hide_system; };
 static int collect_dir(const char *name, const struct fm_meta *meta, void *ctx)
 {
@@ -458,6 +492,8 @@ static void places_build(struct files_app *a)
         if (i == 4 && !a->games_available) continue;
         struct files_place *p = &a->places[a->place_count++];
         snprintf(p->name, sizeof(p->name), "%s", names[i]); snprintf(p->path, sizeof(p->path), "%s", i==2 ? profile_home() : paths[i]);
+        if ((i==0 || i==2) && a->system_labels[i==0 ? 0 : 1][0])
+            snprintf(p->name,sizeof(p->name),"%s",a->system_labels[i==0 ? 0 : 1]);
         if (i==6) profile_child(p->path,sizeof(p->path),"Desktop");
     }
     for (unsigned i = 0; i < a->place_count; i++) {
@@ -536,7 +572,7 @@ static void tree_build(struct files_app *a)
 {
     a->tree_count = 1;
     struct files_node *root = &a->tree[0];
-    snprintf(root->name, sizeof(root->name), "Computer");
+    snprintf(root->name, sizeof(root->name), "%s", a->system_labels[0][0] ? a->system_labels[0] : "Computer");
     strcpy(root->path, FM_COMPUTER); root->depth = 0;
     root->expanded = (uint8_t)!in_set(a->collapsed, a->collapsed_count, FM_COMPUTER); root->children = 1;
     if (root->expanded) fm_volumes_slots(&a->model.fs, a->model.drive_slots, tree_drive, a);
@@ -669,12 +705,13 @@ static const unsigned bin_key_of_header[6] = {0, 4, 5, 2, 1, 3};
 void files_update(struct files_app *a)
 {
     struct fm_model *m = &a->model;
+    if (a->tree_count) snprintf(a->tree[0].name,sizeof(a->tree[0].name),"%s",a->system_labels[0][0] ? a->system_labels[0] : "Computer");
     set_flag(a->tools_items, 2, C_FIND_STOP, DU_ITEM_DISABLED, !a->find_running);
     int computer = !(a->loading ? a->loading_path : m->path)[0];
     m->fixed = files_fixed(a);
     int bin = !a->loading && fm_is_recycle(m->path);
     char display[FM_PATH];
-    if (fm_display_path(display, a->loading ? a->loading_path : m->path)) strcpy(display, "(path too long)");
+    if (files_display_path(a,display, a->loading ? a->loading_path : m->path)) strcpy(display, "(path too long)");
     if (m->count > a->capacity) {
         unsigned cap = m->count + 32;
         struct du_item *rows = realloc(a->rows, cap * sizeof(*rows));
@@ -836,6 +873,15 @@ void files_update(struct files_app *a)
     set_flag(a->go_items, 14, C_FORWARD, DU_ITEM_DISABLED, m->history_at + 1 >= m->history_count);
     set_flag(a->go_items, 14, C_UP, DU_ITEM_DISABLED, root);
     set_flag(a->go_items, 14, C_GO_GAMES, DU_ITEM_DISABLED, !a->games_available);
+    for (unsigned i=0;i<2;i++) {
+        unsigned at=0;
+        for (const char *p=a->system_labels[i]; *p; p++) {
+            if (*p=='&') a->system_menu_labels[i][at++]='&';
+            a->system_menu_labels[i][at++]=*p;
+        }
+        a->system_menu_labels[i][at]=0;
+        a->go_items[i ? 8 : 6].label=at ? a->system_menu_labels[i] : i ? "&Documents" : "&Computer";
+    }
     set_flag(a->view_items, 10, C_ICONS, DU_ITEM_CHECKED, list->view == DU_ICONS);
     set_flag(a->view_items, 10, C_LIST, DU_ITEM_CHECKED, list->view == DU_LIST);
     set_flag(a->view_items, 10, C_DETAILS, DU_ITEM_CHECKED, list->view == DU_DETAILS);
@@ -1088,6 +1134,7 @@ static void *scan_run(void *arg)
         if (!a->navigation_loaded) {
             (void)fm_navigation_load(&s->source,&a->navigation); a->navigation_loaded=1;
         }
+        system_labels_read(a,&s->source);
         if (!a->view_loaded) {
             struct fm_vfs adapter=a->model.fs; a->model.fs=s->source;
             (void)fm_view_load(&a->model,&a->attribute_column);
@@ -1210,6 +1257,7 @@ static int scan_submit(struct files_app *a, enum scan_kind kind, const char *pat
     struct files_app *b = &s->state;
     b->navigation=a->navigation; b->navigation_loaded=a->navigation_loaded;
     b->navigation_dirty=a->navigation_dirty; b->navigation_revision=a->navigation_revision;
+    memcpy(b->system_labels,a->system_labels,sizeof(b->system_labels));
     memcpy(b->tree, a->tree, FILES_TREE * sizeof(*b->tree)); b->tree_count = a->tree_count;
     b->games_available = a->games_available;
     fm_init(&b->model, &a->model.fs);
@@ -1301,6 +1349,11 @@ static void scan_poll(struct files_app *a)
         W(a,FILES_UNDO)->disabled=!a->undo_available || a->job_active || a->loading;
         set_flag(a->edit_items,sizeof(edit_template)/sizeof(*edit_template),FILES_UNDO,DU_ITEM_DISABLED,W(a,FILES_UNDO)->disabled);
         du_invalidate(a->ui,W(a,FILES_UNDO)->box);
+    }
+    if (memcmp(a->system_labels,b->system_labels,sizeof(a->system_labels))) {
+        memcpy(a->system_labels,b->system_labels,sizeof(a->system_labels));
+        places_build(a);
+        files_update(a);
     }
 #ifdef __i386__
     if (s->kind==SCAN_MEDIA && a->poll_clipboard) {
@@ -1457,6 +1510,10 @@ static void scan_stop(struct files_app *a)
 }
 static int navigate_as(struct files_app *a,const char *path,enum scan_kind kind)
 {
+    if (kind==SCAN_ADDRESS) {
+        if (a->system_labels[0][0] && !strcmp(path,a->system_labels[0])) path=FM_COMPUTER;
+        else if (a->system_labels[1][0] && !strcmp(path,a->system_labels[1])) path=profile_home();
+    }
     char target[FM_PATH]; int r = fm_posix_path(target, path);
     if (r) { error_box(a, "Files", "Cannot open the folder.", r); return r; }
     if (a->rename_index >= 0) rename_hide(a);
@@ -1846,10 +1903,11 @@ static void properties_dialog(struct files_app *a)
     if (have && j->count==1 && (info->mask & CIUKI_FILE_INFO_MODIFIED)) time_text(modified,sizeof(modified),info->modified);
     else if (j->count==1 && e.meta.modified>0) time_text(modified,sizeof(modified),e.meta.modified);
     const char *kind=j->count==1 ? fm_type_name(&e,type,sizeof(type)) : "Multiple types";
-    snprintf(title,sizeof(title),"%.70s Properties",j->count==1 ? (a->property_drive>=0 ? "Drive" : fm_basename(path)) : "Selection");
+    const char *caption=fm_same_path(path,profile_home()) && a->system_labels[1][0] ? a->system_labels[1] : fm_basename(path);
+    snprintf(title,sizeof(title),"%.70s Properties",j->count==1 ? (a->property_drive>=0 ? "Drive" : caption) : "Selection");
     snprintf(a->property_text,sizeof(a->property_text),
         "%.120s\nType:\t%s\nLocation:\t%.130s\nSize:\t%s (%llu bytes)\nSize on disk:\t%s\nContains:\t%llu Files, %llu Folders\nMS-DOS name:\t%s\nCreated:\t%s\nModified:\t%s\nAccessed:\t%s",
-        j->count==1 ? fm_basename(path) : "Multiple items",kind,parent,size,(unsigned long long)j->bytes,allocated,
+        j->count==1 ? caption : "Multiple items",kind,parent,size,(unsigned long long)j->bytes,allocated,
         (unsigned long long)j->files,(unsigned long long)j->folders,
         have && j->count==1 && (info->mask & CIUKI_FILE_INFO_SHORT_NAME) ? info->short_name : "-",created,modified,accessed);
     int version=a->property_have_version, dos=a->property_have_dos;

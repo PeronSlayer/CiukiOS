@@ -58,8 +58,12 @@ static const char F_MEMORY[] = "Setup log kept in memory only";                 
 static const char F_RESCUE[] = "F1 Help " MID " Esc Close";
 static const char TAGLINE[] = "Classic computing, one woof at a time.";
 
+#ifndef CIUKI_HUMAN_NAME
+#define CIUKI_HUMAN_NAME "CiukiOS"
+#endif
+
 static const char W_H[] = "Welcome to CiukiOS Setup";
-static const char W_P1[] = "Setup installs CiukiOS 1.0 Beta on this computer: the Ciuki kernel, the desktop, the DOS and Windows game personalities, the NetSurf browser and the bundled shareware games.";
+static const char W_P1[] = "Setup installs " CIUKI_HUMAN_NAME " on this computer: the Ciuki kernel, the desktop, the DOS and Windows game personalities, the NetSurf browser and the bundled shareware games.";
 static const char W_P2[] = "The whole installation takes about 15 minutes on a 1998" EN "2004 PC. Setup will restart the computer once; remove the CD when asked.";
 static const char W_BOX[] = ST_B "Before you begin" ST_B "\n" MID " Back up any data on the destination disk.\n" MID
                             " Connect the network cable if you want LAN play and Internet.\n" MID " Keep the CD in the drive until Setup asks to remove it.";

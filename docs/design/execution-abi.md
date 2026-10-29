@@ -991,7 +991,7 @@ exactly; process exit MUST use call 0 and MUST NOT receive a duplicate number.
 | 53 | `sigprocmask(B=how,C=set*,D=old*)` | 0; calling thread's mask; null set queries only. | N | EFAULT, EINVAL |
 | 54 | `kill(B=pid,C=signal)` | 0; signal/probe targets in caller's process group only. | N | EINVAL, ESRCH, EPERM |
 | 55 | `sigreturn(B=frame*)` | Restore validated active signal frame; no ordinary return. | X | none; malformed frame MUST terminate caller with SIGSEGV |
-| 56 | `uname(B=utsname*)` | 0; sysname CiukiOS, nodename ciuki, machine i686, `release` the recorded build ID, `version` the CiukiOS version string (`config/version.json`, e.g. `0.9.0 pre-alpha`). | N | EFAULT |
+| 56 | `uname(B=utsname*)` | 0; sysname CiukiOS, nodename ciuki, machine i686, `release` the recorded build ID, `version` the CiukiOS version string (`config/version.json`, e.g. `1.0.0-beta.1`). | N | EFAULT |
 | 57 | `surface_create(B=width,C=height,D=format)` | New CLOEXEC fd for zeroed shared surface; format=1 XRGB8888. | N | EINVAL, EOVERFLOW, ENOMEM, EMFILE, ENFILE |
 | 58 | `surface_map(B=fd,C=prot)` | Base address; whole shared object, READ or READ plus WRITE. | N | EBADF, EINVAL, EACCES, ENOMEM |
 | 59 | `surface_info(B=fd,C=info*)` | 0; immutable geometry and allocation length. | N | EBADF, EFAULT |
@@ -2900,3 +2900,26 @@ for the next start. Behaviour: [startup-recovery.md](startup-recovery.md).
 The SDK wrappers are in `ciuki/recovery.h` (`ciuki_recovery_status`,
 `ciuki_recovery_configure`, `ciuki_recovery_enable`, `ciuki_scandisk`,
 `ciuki_scandisk_report`).
+
+### fx-w32idle additive operation census
+
+CIUKI_SYS_W32 (96) and all record sizes remain unchanged. The private
+`ciuki/w32_transport.h` adds these operations/constants, covered by literal
+assertions in `tests/host/abi_layout_test.c`:
+
+| Value | Operation | Inputs and result |
+| --- | --- | --- |
+| 7 | W32_SVC_WAIT | Registered native service only. `service` selects its own registration, `pid` is the timeout in ms (INFINITE allowed), `endpoint=0`. Blocks until a new connection or accepted channel input/closure; `result=1` means work, 0 timeout, error 995 interruption. |
+| 8 | W32_SVC_NOTIFY | Registered native w32srv only. `pid` and `endpoint` select a live same-credential client PID/TID with an accepted retained service link. Sets its coalesced session latch; error 5 denies untrusted targets/callers. |
+| 9 | W32_SVC_SESSION | Win32 calling thread only, service 2, zero pid/endpoint. Atomically consumes its session latch into `result`. No service RPC. |
+| 2 | W32_WAIT_SERVICES | `wait.reserved` flag. Include desktop channel input/closure and the calling thread's session latch in the wait. Composes with W32_WAIT_NEW_INPUT=1. |
+| 4 | W32_WAIT_SESSION | `wait.reserved` flag. Include only the session latch after USER has observed desktop disconnection, avoiding repeated hangup wakes while retaining session delivery. |
+| 0x104 | W32_WAIT_SERVICE | Internal wait result. USER drains its transport and retries the original application wait with its remaining timeout; never returned as an application handle index. |
+
+The native service's wait predicate retains endpoint identities through its
+service links, and rechecks them at enrollment. Channel enqueue/close and
+connection publication wake this wait domain. No channel wire opcode, native
+syscall, public Win32 export or record field is introduced. GUI timers still
+synthesize WM_TIMER only after higher-priority messages; the timeout is the
+nearest requested timer deadline instead of a fixed polling slice. Kernel
+waitable timers also bound kernel sleep by their next actual deadline.

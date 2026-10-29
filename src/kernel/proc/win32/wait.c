@@ -10,10 +10,11 @@ struct w32_wait {
     struct w32_wait *next;
     struct proc_thread *thread;
     struct w32_object *objects[W32_WAIT_MAX];
-    uint32_t count, mask, result;
-    bool all, alertable, new_input;
+    uint32_t count, mask, result, generation;
+    bool all, alertable, new_input, services, desktop;
 };
 static struct w32_wait *waiters, **wait_tail = &waiters;
+static uint32_t w32_change_generation;
 static bool object_ready(struct w32_object *o, uint32_t tid)
 {
     if (o->type == W32_OBJ_MUTEX)
@@ -49,6 +50,8 @@ static uint32_t acquire(struct w32_wait *w)
         return W32_WAIT_FAILED;
     if (w->alertable && w->thread->w32->head)
         return W32_WAIT_IO_COMPLETION;
+    if (w->services && w32_service_ready(w->thread, w->desktop))
+        return W32_WAIT_SERVICE;
     bool queue = !!(w->mask & (w->new_input ? w32_queue_changed(w->thread) : w32_queue_bits(w->thread)));
     if (!w->count && !w->mask)
         return W32_WAIT_PENDING;
@@ -79,6 +82,7 @@ void w32_wait_pump(void)
 }
 void w32_changed_wake(void)
 {
+    w32_change_generation++;
     w32_wait_pump();
     kwait_wake_all(&w32_changed);
 }
@@ -120,14 +124,15 @@ uint32_t w32_wait_try(struct proc_thread *t, const uint32_t *handles, unsigned c
 static bool wait_ready(void *arg)
 {
     struct w32_wait *w = arg;
-    return w->result != W32_WAIT_PENDING || w->thread->process->state != PROC_LIVE || w->thread->stopped;
+    return w->result != W32_WAIT_PENDING || w->generation != w32_change_generation ||
+        w->thread->process->state != PROC_LIVE || w->thread->stopped;
 }
 uint32_t w32_wait_call(struct proc_thread *t, struct ciuki_w32_wait_args *a)
 {
     a->result = W32_WAIT_FAILED;
     if (!security_process_live(t->process)) { a->error=5; return 0; }
     if (a->count > 64 || (a->wake_mask && a->count == 64) || a->all > 1 || a->alertable > 1
-        || a->wake_mask & ~W32_QS_ALL || a->reserved & ~W32_WAIT_NEW_INPUT) {
+        || a->wake_mask & ~W32_QS_ALL || a->reserved & ~(W32_WAIT_NEW_INPUT | W32_WAIT_SERVICES | W32_WAIT_SESSION)) {
         a->error = 87;
         return 0;
     }
@@ -140,6 +145,8 @@ uint32_t w32_wait_call(struct proc_thread *t, struct ciuki_w32_wait_args *a)
         .count = a->count,
         .all = !!a->all,
         .new_input = !!(a->reserved & W32_WAIT_NEW_INPUT),
+        .services = !!(a->reserved & (W32_WAIT_SERVICES | W32_WAIT_SESSION)),
+        .desktop = !!(a->reserved & W32_WAIT_SERVICES),
         .alertable = !!a->alertable,
         .mask = a->wake_mask,
         .result = W32_WAIT_PENDING };
@@ -154,7 +161,7 @@ uint32_t w32_wait_call(struct proc_thread *t, struct ciuki_w32_wait_args *a)
         drop_wait(&w);
         return 0;
     }
-    uint64_t start = w32_now(), deadline = start + (a->timeout == W32_INFINITE ? INT32_MAX : a->timeout);
+    uint64_t deadline = a->timeout == W32_INFINITE ? UINT64_MAX : w32_now() + a->timeout;
     /* Signal and enrollment share one publication interval. The signal row
      * has no user copies and does not allocate. Never expose a lost-wakeup gap. */
     kpreempt_hold();
@@ -177,6 +184,7 @@ uint32_t w32_wait_call(struct proc_thread *t, struct ciuki_w32_wait_args *a)
     }
     kpreempt_release();
     while (!a->error && w.result == W32_WAIT_PENDING) {
+        w.generation = w32_change_generation;
         uint64_t now = w32_now();
         if (a->timeout != W32_INFINITE && (int64_t)(now - deadline) >= 0) {
             w.result = W32_WAIT_TIMEOUT;
@@ -192,7 +200,10 @@ uint32_t w32_wait_call(struct proc_thread *t, struct ciuki_w32_wait_args *a)
          * The whole queue must be empty, even for a filtered input wait. */
         if (a->wake_mask && t->w32->queue && !w32_queue_bits(t) && t->process->w32->gui)
             t->process->w32->input_idle = true;
-        uint64_t wake = now + 1;
+        uint64_t wake = deadline;
+        for (struct w32_object *o = w32_objects; o; o = o->next)
+            if (o->type == W32_OBJ_TIMER && o->u.timer.armed && o->u.timer.due < wake)
+                wake = o->u.timer.due;
         kwait_wait_until(&w32_changed, wait_ready, &w, wake);
         if (t->process->state != PROC_LIVE || t->stopped) {
             w.result = W32_WAIT_FAILED;
@@ -215,10 +226,12 @@ uint32_t w32_wait_call(struct proc_thread *t, struct ciuki_w32_wait_args *a)
 void w32_timer_poll(void)
 {
     uint64_t now = w32_now();
+    bool changed = false;
     for (struct w32_object *o = w32_objects; o; o = o->next) {
         if (o->type != W32_OBJ_TIMER || !o->u.timer.armed || (int64_t)(now - o->u.timer.due) < 0)
             continue;
         o->signalled = true;
+        changed = true;
         if (o->u.timer.period) {
             uint64_t late = now - o->u.timer.due;
             o->u.timer.due += ((late / o->u.timer.period) + 1) * o->u.timer.period;
@@ -242,5 +255,5 @@ void w32_timer_poll(void)
             }
         }
     }
-    w32_changed_wake();
+    if (changed) w32_changed_wake();
 }

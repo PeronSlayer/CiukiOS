@@ -11,6 +11,12 @@ _Static_assert(sizeof(((struct ciuki_security_link *)0)->reserved)==8,"ciuki_sec
 #include <ciuki/bootstat.h>
 #include <ciuki/w32_core.h>
 #include <ciuki/w32_transport.h>
+_Static_assert(W32_WAIT_SERVICES == 2u, "fx-w32idle service wait flag");
+_Static_assert(W32_WAIT_SESSION == 4u, "fx-w32idle session-only wait flag");
+_Static_assert(W32_WAIT_SERVICE == 0x104u, "fx-w32idle internal transport result");
+_Static_assert(W32_SVC_WAIT == 7u, "fx-w32idle native service wait");
+_Static_assert(W32_SVC_NOTIFY == 8u, "fx-w32idle session notification");
+_Static_assert(W32_SVC_SESSION == 9u, "fx-w32idle consume notification");
 /* sec-k06: additive token kind; transport reuses the existing object record. */
 _Static_assert(W32_OBJ_TOKEN == 15, "sec-k06 query-token object kind");
 _Static_assert(W32_MSG_INPUT_IDLE == 13u, "fx-q3hang input-idle query action");

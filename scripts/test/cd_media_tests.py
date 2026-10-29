@@ -141,11 +141,13 @@ def make_disk_image(work):
         f.seek(2048 * 512)
         f.write(volume.read_bytes())
     head = subprocess.run(["git", "-C", str(ROOT), "rev-parse", "HEAD"], capture_output=True, text=True).stdout.strip()
-    version = module("cd_media_version", ROOT / "scripts/ciuki_version.py").load()["display"]
+    identity = module("cd_media_version", ROOT / "scripts/ciuki_version.py").load()
+    version = identity["version"]
     kernel = sha(PAYLOAD["/system/VMM.ELF"])
     # fx-6: the disk kernel has no debug sections; build-clock.json binds the complete ELF.
     full_kernel = sha(b"complete kernel with debug sections, not installed")
-    manifest = {"schema_version": 1, "version": version, "git_revision": head, "git_dirty": True,
+    manifest = {"schema_version": 1, "version": version, "version_full": version + "+build.fixture.g" + head[:12],
+                "version_display": identity["display"], "git_revision": head, "git_dirty": True,
                 "image": "ciukios.img", "image_sha256": sha(image.read_bytes()), "kernel_sha256": kernel,
                 "kernel_full_sha256": full_kernel,
                 "build_epoch": EPOCH, "payloads": [{"path": p, "sha256": sha(d), "size": len(d)} for p, d in sorted(PAYLOAD.items())],
@@ -459,6 +461,9 @@ class MediaTests(unittest.TestCase):
         self.assertEqual(release["disk_image_sha256"], disk["image_sha256"])
         self.assertEqual(release["git_revision"], disk["git_revision"])
         self.assertEqual(release["version"], disk["version"])
+        self.assertEqual(release["version_full"], disk["version_full"])
+        self.assertEqual(self.manifest["build"]["version_full"], disk["version_full"])
+        self.assertEqual(release["version_display"], disk["version_display"])
         self.assertEqual(release["boot_options"], cfg.decode())
         self.assertEqual(release["payload_files"], len(CD_PAYLOAD) + 2)       # + setup, RELEASE.JSON
         self.assertEqual(release["content_digest"], self.manifest["content_digest"])

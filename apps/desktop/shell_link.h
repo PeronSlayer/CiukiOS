@@ -40,6 +40,8 @@ struct desk_link_entry {
     struct desk_launch_record launch;
     char source[260]; /* re-read at activation; never launch stale cached bytes */
     unsigned desktop;
+    uint64_t source_size;
+    int64_t source_modified;
 };
 struct desk_uninstall_entry {
     char key[260], name[64], command[1284], version[64], publisher[128], location[260];

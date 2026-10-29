@@ -160,8 +160,8 @@ int main(int argc, char **argv)
     }
 
     struct selftest_summary s;
-    selftest_model_begin(&ops, &s, "1a2b3c4d", "12345678", "1.0.1 alpha");
-    CHECK(!strcmp(line_of("CiukiOS self-test"), "CiukiOS self-test format=1 run=1a2b3c4d build=12345678 os=1.0.1_alpha"));
+    selftest_model_begin(&ops, &s, "1a2b3c4d", "12345678", "1.0.0-beta.1");
+    CHECK(!strcmp(line_of("CiukiOS self-test"), "CiukiOS self-test format=1 run=1a2b3c4d build=12345678 os=1.0.0-beta.1"));
     struct selftest_result results[ARRAY_SIZE(table)];
     selftest_model_run(&ops, table, ARRAY_SIZE(table), results, &s);
 
@@ -188,7 +188,7 @@ int main(int argc, char **argv)
     CHECK(strstr(log_text, "\n\nDetails:\nalpha.pass line=0 modes=101:640x480x8,111:640x480x16\neta.long p0="));
 
     /* Records: BEGIN, one DATA per check (+ continuations), details, END. */
-    CHECK(strstr(serial, "event=BEGIN format=1 build=12345678 os=1.0.1_alpha\r\n"));
+    CHECK(strstr(serial, "event=BEGIN format=1 build=12345678 os=1.0.0-beta.1\r\n"));
     CHECK(strstr(serial, "event=DATA check=alpha.pass status=pass ms=7 count=3 label=ok\r\n"));
     CHECK(strstr(serial, "event=DATA check=eta.long part=2 "));
     CHECK(strstr(serial, "event=DATA check=eta.long part=detail p0="));

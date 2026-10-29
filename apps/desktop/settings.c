@@ -1,6 +1,7 @@
 /* SPDX-License-Identifier: MIT
  * desktop.cfg parser and writer (settings.h). Integer-only, no I/O. */
 #include "settings.h"
+#include "icon_labels.h"
 #include "theme.h"
 #include "wallpaper.h"
 #include <stdio.h>
@@ -641,27 +642,9 @@ int cfg_icon_rename(struct ciuki_settings *s, const char *old_name, const char *
     return 1;
 }
 
-static int icon_label_key(char *out, const char *name)
-{
-    static const char hex[] = "0123456789abcdef";
-    size_t n = strlen(name); if (n > 765) return 0;
-    memcpy(out, "iconlabel.", 10);
-    for (size_t i=0;i<n;i++) { unsigned c=(unsigned char)name[i]; out[10+i*2]=hex[c>>4]; out[11+i*2]=hex[c&15]; }
-    out[10+n*2]='='; out[11+n*2]=0; return 1;
-}
 int cfg_icon_label(const struct ciuki_settings *s, const char *name, char *out, size_t size)
 {
-    char key[1540]; if (!s || !name || !out || !size || !icon_label_key(key,name)) return 0;
-    size_t n=strlen(key);
-    for (const char *p=s->extra; *p;) {
-        const char *end=strchr(p,'\n'); if (!end) break;
-        if (!strncmp(p,key,n)) {
-            size_t len=(size_t)(end-p)-n; if (!len || len>=size) return 0;
-            memcpy(out,p+n,len); out[len]=0; return 1;
-        }
-        p=end+1;
-    }
-    return 0;
+    return s && icon_label_read(s->extra,name,out,size);
 }
 int cfg_icon_label_set(struct ciuki_settings *s, const char *name, const char *label)
 {

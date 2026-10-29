@@ -21,7 +21,8 @@ def inputs():
     paths=[p for d in (ROOT/'apps/w32srv',ROOT/'sdk/win32') for p in d.rglob('*') if p.is_file() and '__pycache__' not in p.parts]
     paths += [ROOT/'scripts/win32/facades.py',ROOT/'scripts/win32/stubs.py',ROOT/'scripts/win32/stub_signatures.py',ROOT/'scripts/win32/census.py',
               ROOT/'docs/design/research/win32-layer-2026-10-14.md', ROOT/'sdk/libreg/casefold.h',ROOT/'build/tools/ciuki-sdk/manifest.json',
-              ROOT/'src/kernel/include/ciuki/abi.h',ROOT/'apps/desktop/shell_link.h',ROOT/'apps/desktop/protocol.c',ROOT/'apps/desktop/protocol.h']
+              ROOT/'src/kernel/include/ciuki/abi.h',ROOT/'src/kernel/include/ciuki/w32_transport.h',
+              ROOT/'apps/desktop/shell_link.h',ROOT/'apps/desktop/protocol.c',ROOT/'apps/desktop/protocol.h']
     return {str(p.relative_to(ROOT)):hashlib.sha256(p.read_bytes()).hexdigest() for p in sorted(paths)}
 
 def validate_payloads():

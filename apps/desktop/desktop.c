@@ -2646,7 +2646,8 @@ static void links_directory(struct links_scan *s, const char *path, unsigned des
         /* Whole entries are cleared: snapshots compare by bytes. */
         struct desk_link_entry *e=&s->out[s->count]; memset(e,0,sizeof(*e));
         if (!link_reuse(s,file,&stamp,&e->launch)) { s->reads++; if (link_read(NULL,file,&e->launch)) continue; }
-        snprintf(e->source,sizeof(e->source),"%s",file); e->desktop=desktop; s->stamps[s->count++]=stamp;
+        snprintf(e->source,sizeof(e->source),"%s",file); e->desktop=desktop;
+        e->source_size=stamp.size; e->source_modified=stamp.mtime; s->stamps[s->count++]=stamp;
     }
     closedir(dir);
 }

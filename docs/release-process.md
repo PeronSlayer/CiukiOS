@@ -47,7 +47,7 @@ disk: every converted disk must compare equal to its original logical sectors.
   their configured hashes; a URL-only offer is insufficient.
 - [GitHub CLI release create](https://cli.github.com/manual/gh_release_create):
   explicitly target the source commit and upload all artifacts with a notes file;
-  stable releases do not use `--prerelease`; alpha/beta channels do. Dry runs never invoke `gh`.
+  stable releases do not use `--prerelease`; alpha/beta/rc stages do. Dry runs never invoke `gh`.
 
 The present Setup CD is El Torito hard-disk emulation, without a hybrid USB
 boot layout (`build_cd.py`). Distribute it as a CD ISO and state this limit;
@@ -75,19 +75,23 @@ It audits FAT files (including nested guest images), ISO contents and source
 archives; private bytes are also checked by content against the configured
 private roots on the release workstation. Keep those roots available for audit.
 
-Release channels. `--channel stable` (default) publishes `v<version>-stable.<n>`
-titled `CiukiOS <version> — stable <n>`, not a prerelease. `--channel alpha` (or
-`beta`) publishes `v<version>-alpha.<n>` titled `CiukiOS <version> alpha`
-(` <n>` appended only when n > 1), with `gh release create --prerelease`; the
-source's `config/version.json` stage must equal the channel. `n` counts earlier
-tags of that version and channel, local and (outside dry runs) remote. All
-other checks, artifacts and approvals are the same for every channel.
+Release channels are derived from the full SemVer version. Tags are exactly
+`v<version>`; titles use the human name, for example `CiukiOS 1.0.0 Beta 1`.
+Alpha, beta and rc use GitHub's prerelease flag. Approval and audits apply to
+every channel. Existing tags are refused locally and, during publication, remotely.
+
+Alpha, beta and release-candidate releases also include `docs/release-notes-1.0-<channel>.md`
+from the built source commit in `RELEASE-NOTES.md`; empty or missing notes
+are refused. Stable retains its generated notes and matching changelog section.
+This keeps qualification limits and source terms tied to the approved revision.
+GitHub's [release documentation](https://docs.github.com/en/repositories/releasing-projects-on-github/managing-releases-in-a-repository)
+defines the prerelease flag; the channel-to-document selection is CiukiOS policy.
 
 Public text rule: the tool's disk README, VM README and `RELEASE-NOTES.md`
 describe hardware generically (late-1990s/early-2000s desktops and laptops,
 component classes). Packaging refuses if they name a specific PC model, and a
 host test fails if the CHANGELOG section of the version or
-`docs/release-notes-1.0-alpha.md` does.
+either `docs/release-notes-1.0-alpha.md` or `docs/release-notes-1.0-beta.md` does.
 
 Fetch release tags before an offline preview. For example:
 
@@ -95,14 +99,14 @@ Fetch release tags before an offline preview. For example:
 python3 scripts/release_stable.py --version 1.0.0 --approved-image-sha256 <sha256> --dry-run
 python3 scripts/release_stable.py --version 1.0.0 --approved-image-sha256 <sha256>
 # alpha pre-release (tag v1.0.0-alpha.1, GitHub prerelease):
-python3 scripts/release_stable.py --version 1.0.0 --channel alpha --approved-image-sha256 <sha256> --dry-run
-python3 scripts/release_stable.py --version 1.0.0 --channel alpha --approved-image-sha256 <sha256>
+python3 scripts/release_stable.py --version 1.0.0-alpha.1 --approved-image-sha256 <sha256> --dry-run
+python3 scripts/release_stable.py --version 1.0.0-alpha.1 --approved-image-sha256 <sha256>
 ```
 
 Dry run validates approval and both inputs and prints the planned artifacts,
 conversions and publication command without writing release outputs or using
-the network. Its next stable number uses local tags. Publication checks remote
-tags too, uses `v<version>-stable.<n>` and title `CiukiOS <version> — stable <n>`,
+the network. It refuses an existing exact tag locally. Publication checks remote
+tags too, uses `v<version>` and the human title (for example `CiukiOS 1.0.0 Beta 1`),
 and refuses an existing destination. Packaging stages on disk, then retains
 only the new stable release directory under `build/releases/`; unrelated files
 there must be relocated by the lead first. Failed preparation preserves the
@@ -123,3 +127,21 @@ Host verification (one suite at a time):
 ```bash
 nice -n 19 python3 -m unittest discover -s tests/host -p 'test_release_stable.py' -v
 ```
+
+## Semantic version identity
+
+[SemVer 2.0.0](https://semver.org/spec/v2.0.0.html) sections 9–11 define
+pre-release identifiers, build metadata and precedence. CiukiOS uses its official
+regular expression, restricts release stages to `alpha.N`, `beta.N`, `rc.N`
+(N >= 1), and keeps metadata out of release tags. `config/version.json` stores
+only the full release version; stage and human name are derived. The native API
+in `docs/developer-api.md` and on-disk formats define the public compatibility
+boundary; breaking either after 1.0.0 requires a new MAJOR.
+
+Pass the full version to `--version`; there is no `--channel`. A tag is exactly
+`v<version>`. GitHub prerelease is true exactly when a pre-release part exists.
+The same image-bound owner approval is mandatory for every channel. RC notes
+come from `docs/release-notes-1.0-rc.md`; alpha/beta notes keep their existing
+filenames. Metadata is `+build.<build id>.g<short commit>` and never affects
+ordering. Offline previews check local tags; publication also checks remote
+refs and refuses a reused version instead of incrementing a counter.

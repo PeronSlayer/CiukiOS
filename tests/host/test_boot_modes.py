@@ -159,7 +159,7 @@ class LoaderTests(unittest.TestCase):
     @unittest.skipUnless(shutil.which('nasm'), 'requires nasm')
     def test_loader_image_keeps_its_fixed_size_and_hint(self):
         with scratch() as folder:
-            for version in (None, '0.9.0 pre-alpha', loader_budget.load()['display']):
+            for version in (None, '0.9.0', loader_budget.load()['display'], '1.0.0 Release Candidate 1'):
                 binary = Path(folder) / 'ciukldr.bin'
                 listing = Path(folder) / 'ciukldr.lst'
                 loader_budget.assemble(binary, listing, version)

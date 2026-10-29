@@ -35,6 +35,7 @@ struct w32_process {
     uint32_t peak_handles, peak_threads, exit_reason;
     struct w32_diagnostic_state *diagnostics;
     bool closing, gui, input_idle;
+    bool service_pending; /* accepted client retired: server must drain its hangup */
     uint64_t launch_feedback_until; /* monotonic ms; zero after presentation/idle */
 };
 struct w32_apc_node {
@@ -48,6 +49,7 @@ struct w32_thread {
     struct trap_frame *frame;
     uint32_t suspend, apcs;
     bool safe, ending, terminate_requested;
+    bool session_pending;
     uint32_t terminate_code;
     int32_t relative_priority;
 };
@@ -132,6 +134,7 @@ bool w32_apc_deliver(struct proc_thread *t, struct trap_frame *tf);
 uint32_t w32_context_call(struct proc_thread *t, struct ciuki_w32_context_args *a);
 void w32_user_return(struct proc_thread *t, struct trap_frame *tf);
 void w32_timer_poll(void);
+bool w32_service_ready(struct proc_thread *, bool desktop);
 uint32_t w32_message_call(struct proc_thread *t, struct ciuki_w32_message_args *a);
 void w32_messages_thread_died(struct proc_thread *t);
 void w32_queue_destroy(struct w32_object *o);

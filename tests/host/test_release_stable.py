@@ -45,7 +45,8 @@ def write_json(path, value):
     path.write_text(json.dumps(value), encoding="utf-8")
 
 
-def fixture(root):
+def fixture(root, stage="stable"):
+    version = "1.0.0" + ("-" + stage + ".1" if stage != "stable" else "")
     directory = root / "build/f0"
     directory.mkdir(parents=True)
     volume = root / "fixture.fat"
@@ -70,7 +71,7 @@ def fixture(root):
         stream.seek(2048 * 512)
         shutil.copyfileobj(source_stream, stream)
     volume.unlink()
-    disk = {"schema_version": 1, "version": "1.0.0 alpha", "git_revision": COMMIT,
+    disk = {"schema_version": 1, "version": version, "version_full": version + "+build.fixture.g" + COMMIT[:12], "git_revision": COMMIT,
             "git_dirty": False, "image": image.name, "image_sha256": release.digest(image),
             "payloads": [{"path": n, "size": len(b), "sha256": hashlib.sha256(b).hexdigest()}
                          for n, b in payloads.items()]}
@@ -92,14 +93,14 @@ def fixture(root):
               "components": [{"id": "system", "class": "copyleft", "paths": ["/system/"],
                               "archives": ["CIUKIOS.ZIP", "WINE100.TXZ"],
                               "licence_files": ["third_party/wine/COPYING.LIB"]}]}
-    blobs = {"config/version.json": json.dumps({"version": "1.0.0", "stage": "alpha"}).encode(),
+    blobs = {"config/version.json": json.dumps({"version": version}).encode(),
              "config/cd-components.json": json.dumps(config).encode(),
              "config/wine-pin.json": json.dumps({"archive_sha256": release.digest(wine)}).encode(),
              "config/wine-upper.json": b"{}\n", "scripts/win32/recipe.py": b"# fixture recipe\n",
              "third_party/wine/patches/0001.patch": b"fixture patch\n",
              "third_party/wine/SOURCE-OFFER.txt": b"fixture source offer\n",
              "third_party/wine/COPYING.LIB": b"fixture component notice\n",
-             "CHANGELOG.md": "# Changelog\n\n## 1.0.0 alpha (unreleased)\n\nFixture release.\n\n## 0.9.2\nOld.\n".encode()}
+             "CHANGELOG.md": f"# Changelog\n\n## {version} (unreleased)\n\nFixture release.\n\n## 0.9.2\nOld.\n".encode()}
     source_files = {}
     with zipfile.ZipFile(tree / "SOURCES/CIUKIOS.ZIP", "w") as archive:
         for name, data in blobs.items():
@@ -110,13 +111,16 @@ def fixture(root):
             entry.external_attr = 0o100644 << 16
             archive.writestr(entry, data)
             source_files[entry.filename] = ("100644", hashlib.sha1(f"blob {len(data)}\0".encode() + data).hexdigest())
+    # Release text is read from the built commit, outside this fixture's source-tree includes.
+    for channel in ("alpha", "beta", "rc"):
+        blobs[f"docs/release-notes-1.0-{channel}.md"] = f"# Fixture {channel} notes\n\n{channel} limitations.\n".encode()
     for package in release.build_games_disk.PACKAGES:
         blobs[f"third_party/games/{package}/UPSTREAM.json"] = json.dumps(
             {"install": {"files": []}, "license_files": []}).encode()
     iso = directory / "ciukios-setup.iso"
     run("xorriso", "-as", "mkisofs", "-quiet", "-iso-level", "1", "-o", iso, tree)
     cd = {"schema_version": 1,
-          "build": {"version": disk["version"], "git_revision": COMMIT, "git_dirty": False,
+          "build": {"version": disk["version"], "version_full": disk["version_full"], "git_revision": COMMIT, "git_dirty": False,
                     "source_revision": COMMIT, "source_matches_build": True,
                     "disk_image_sha256": disk["image_sha256"]},
           "iso": {"sha256": release.digest(iso), "bytes": iso.stat().st_size},
@@ -232,16 +236,12 @@ class StableReleaseTests(unittest.TestCase):
         original_command = release.command
         def transport(*args, root=release.ROOT):
             self.calls.append(args)
-            if args[:2] == ("git", "tag"):
-                if "-alpha." in args[-1]:
-                    return "v1.0.0-alpha.1\nv0.9.2-alpha.8"
-                return "v1.0.0-stable.1\nv0.9.2-stable.8"
+            if args[:2] == ("git", "for-each-ref"):
+                return "v0.9.2"
             if args[0] == "gh":
                 self.network.append(args)
                 if args[1] == "api":
-                    if "-alpha." in args[-1]:
-                        return '[{"ref": "refs/tags/v1.0.0-alpha.2"}]'
-                    return '[{"ref": "refs/tags/v1.0.0-stable.2"}]'
+                    return '[]'
                 return "https://example.invalid/synthetic-release"
             return original_command(*args, root=root)
         for name, value in (("command", transport),
@@ -277,6 +277,7 @@ class StableReleaseTests(unittest.TestCase):
                  ("disk", ("git_revision",), "unknown", "source commit"),
                  ("disk", ("image_sha256",), "0" * 64, "approval"),
                  ("disk", ("version",), "0.9.2 alpha", "version"),
+                 ("cd", ("build", "version_full"), "1.0.0+build.other.gabc", "metadata"),
                  ("cd", ("build", "git_dirty"), True, "dirty"),
                  ("cd", ("build", "source_revision"), "f" * 40, "source commit"),
                  ("cd", ("build", "git_revision"), "f" * 40, "source commit"),
@@ -319,7 +320,7 @@ class StableReleaseTests(unittest.TestCase):
         package.assert_not_called()
         self.assertFalse(destination.exists())
         self.assertFalse((self.root / "build/releases").exists())
-        self.assertIn("v1.0.0-stable.2", printed)
+        self.assertIn("v1.0.0", printed)
         for artifact in release.artifacts({"version": "1.0.0"}):
             self.assertIn(artifact, printed)
         self.assertIn("streamOptimized", printed)
@@ -328,12 +329,12 @@ class StableReleaseTests(unittest.TestCase):
         self.assertFalse(list((self.root / "build/codex").glob("stable-audit-*")))
 
     def test_package_every_conversion_checksums_and_publication(self):
-        previous = self.root / "build/releases/v0.9.2-stable.1"
+        previous = self.root / "build/releases/v0.9.2"
         previous.mkdir(parents=True)
         (previous / "old").write_text("previous release")
         with io.StringIO() as output, redirect_stdout(output):
             destination = release.release(self.root, "1.0.0", self.disk["image_sha256"], False)
-        self.assertEqual(destination.name, "v1.0.0-stable.3")
+        self.assertEqual(destination.name, "v1.0.0")
         self.assertFalse(previous.exists())
         self.assertEqual({p.name for p in destination.iterdir()}, set(release.artifacts({"version": "1.0.0"})))
         for line in (destination / "SHA256SUMS").read_text().splitlines():
@@ -406,7 +407,7 @@ class StableReleaseTests(unittest.TestCase):
         self.assertNotIn("Old.", notes)
         self.assertEqual(len(self.network), 2)
         publish = self.network[-1]
-        self.assertEqual(publish[:4], ("gh", "release", "create", "v1.0.0-stable.3"))
+        self.assertEqual(publish[:4], ("gh", "release", "create", "v1.0.0"))
         self.assertNotIn("--prerelease", publish)
         self.assertEqual(publish[publish.index("--target") + 1], COMMIT)
 
@@ -536,7 +537,7 @@ class StableReleaseTests(unittest.TestCase):
                 io.StringIO() as output, redirect_stdout(output):
             with self.assertRaisesRegex(release.Refusal, "upload failure"):
                 release.release(self.root, "1.0.0", self.disk["image_sha256"], False)
-        self.assertTrue((self.root / "build/releases/v1.0.0-stable.3/prepared").is_file())
+        self.assertTrue((self.root / "build/releases/v1.0.0/prepared").is_file())
 
     def test_missing_source_notices_and_unlisted_iso_refused(self):
         info = self.info()
@@ -557,14 +558,14 @@ class StableReleaseTests(unittest.TestCase):
                     release.audit_inputs(current, Path(temporary))
 
     def test_failed_preparation_preserves_old_release(self):
-        previous = self.root / "build/releases/v0.9.2-stable.1"
+        previous = self.root / "build/releases/v0.9.2"
         previous.mkdir(parents=True)
         with patch.object(release, "package", side_effect=release.Refusal("conversion failed")), \
                 io.StringIO() as output, redirect_stdout(output):
             with self.assertRaisesRegex(release.Refusal, "conversion failed"):
                 release.release(self.root, "1.0.0", self.disk["image_sha256"], False)
         self.assertTrue(previous.exists())
-        self.assertFalse((previous.parent / "v1.0.0-stable.3").exists())
+        self.assertFalse((previous.parent / "v1.0.0").exists())
         self.assertFalse(any(call[1:3] == ("release", "create") for call in self.network))
 
     def test_unrelated_output_and_existing_destination_refused(self):
@@ -575,46 +576,54 @@ class StableReleaseTests(unittest.TestCase):
         with self.assertRaisesRegex(release.Refusal, "unrelated"):
             release.release(self.root, "1.0.0", self.disk["image_sha256"], True)
         unrelated.unlink()
-        (directory / "v1.0.0-stable.2").mkdir()
+        (directory / "v1.0.0").mkdir()
         with self.assertRaisesRegex(release.Refusal, "already exists"):
             release.release(self.root, "1.0.0", self.disk["image_sha256"], True)
 
-    def test_alpha_channel_dry_run_and_publication(self):
-        with io.StringIO() as output, redirect_stdout(output):
-            release.release(self.root, "1.0.0", self.disk["image_sha256"], True, "alpha")
-            printed = output.getvalue()
-        self.assertFalse(self.network)
-        self.assertIn('"tag": "v1.0.0-alpha.2"', printed)   # dry run counts local tags only
-        self.assertIn('"title": "CiukiOS 1.0.0 alpha 2"', printed)
-        self.assertIn("--prerelease", printed)
-        with io.StringIO() as output, redirect_stdout(output):
-            destination = release.release(self.root, "1.0.0", self.disk["image_sha256"], False, "alpha")
-        self.assertEqual(destination.name, "v1.0.0-alpha.3")
-        publish = self.network[-1]
-        self.assertEqual(publish[3], "v1.0.0-alpha.3")
-        self.assertIn("--prerelease", publish)
-        self.assertEqual(publish[publish.index("--title") + 1], "CiukiOS 1.0.0 alpha 3")
-        self.assertIn("pre-release", (destination / "RELEASE-NOTES.md").read_text())
+    def test_prerelease_stages(self):
+        for stage in ("alpha", "beta", "rc"):
+            with self.subTest(stage=stage), tempfile.TemporaryDirectory(dir=self.root) as temporary:
+                root = Path(temporary)
+                disk, _, _, blobs, source_files = fixture(root, stage)
+                version = "1.0.0-" + stage + ".1"
+                with patch.object(release, "git_bytes", lambda root, commit, name: blobs[name]), \
+                     patch.object(release, "source_files", lambda *args: deepcopy(source_files)):
+                    with io.StringIO() as output, redirect_stdout(output):
+                        release.release(root, version, disk["image_sha256"], True)
+                        printed = output.getvalue()
+                    self.assertIn('"tag": "v' + version + '"', printed)
+                    self.assertIn("--prerelease", printed)
+                    self.assertIn("Fixture " + stage + " notes", release.inputs(root, version, disk["image_sha256"])["channel_notes"])
+                    with patch.object(release, "git_bytes", side_effect=lambda root, commit, name: b" " if name.endswith(f"{stage}.md") else blobs[name]):
+                        with self.assertRaisesRegex(release.Refusal, "empty .* release notes"):
+                            release.inputs(root, version, disk["image_sha256"])
+                    policy_path = root / "config/release-policy.json"
+                    policy = json.loads(policy_path.read_text())
+                    policy['stable']['owner_approved'] = False
+                    write_json(policy_path, policy)
+                    with self.assertRaisesRegex(release.Refusal, "approval"):
+                        release.inputs(root, version, disk["image_sha256"])
 
-    def test_alpha_title_has_no_number_for_first_release(self):
-        self.assertEqual(release.release_title("1.0.0", "alpha", 1), "CiukiOS 1.0.0 alpha")
-        self.assertEqual(release.release_title("1.0.0", "alpha", 2), "CiukiOS 1.0.0 alpha 2")
-        self.assertEqual(release.release_title("1.0.0", "stable", 2), "CiukiOS 1.0.0 \u2014 stable 2")
-        self.assertEqual(release.next_number("1.0.0", ["v1.0.0-stable.5", "v1.0.0-alpha.1"], "alpha"), 2)
+    def test_exact_tag_refusal_local_and_remote(self):
+        for remote in (False, True):
+            with patch.object(release, "release_tags", return_value=["v1.0.0"]):
+                with self.assertRaisesRegex(release.Refusal, "tag already exists"):
+                    release.release(self.root, "1.0.0", self.disk["image_sha256"], not remote)
 
-    def test_channel_refusals(self):
-        with self.assertRaisesRegex(release.Refusal, "channel must be"):
-            release.inputs(self.root, "1.0.0", self.disk["image_sha256"], "nightly")
-        blobs = dict(self.blobs)
-        blobs["config/version.json"] = json.dumps({"version": "1.0.0", "stage": "beta"}).encode()
-        with patch.object(release, "git_bytes", lambda root, commit, name: blobs[name]):
-            with self.assertRaisesRegex(release.Refusal, "not the alpha channel|differs from built"):
-                release.inputs(self.root, "1.0.0", self.disk["image_sha256"], "alpha")
+    def test_full_version_title_and_flag(self):
+        for value, title in (("1.0.0", "CiukiOS 1.0.0"),
+                             ("1.0.0-alpha.2", "CiukiOS 1.0.0 Alpha 2"),
+                             ("1.0.0-beta.1", "CiukiOS 1.0.0 Beta 1"),
+                             ("1.0.0-rc.1", "CiukiOS 1.0.0 Release Candidate 1")):
+            self.assertEqual(release.release_title(value), title)
+            info = dict(version=value, tag="v" + value, commit=COMMIT, title=title)
+            command = release.publication_command(info, self.root)
+            self.assertEqual("--prerelease" in command, "-" in value)
 
     def test_generated_public_files_name_no_pc_models(self):
         destination = None
         with io.StringIO() as output, redirect_stdout(output):
-            destination = release.release(self.root, "1.0.0", self.disk["image_sha256"], False, "alpha")
+            destination = release.release(self.root, "1.0.0", self.disk["image_sha256"], False)
         texts = [destination / "RELEASE-NOTES.md"]
         for suffix in ("-disk.zip", "-qemu.zip", "-vmware.zip", "-virtualbox.zip"):
             with zipfile.ZipFile(destination / ("ciukios-1.0.0" + suffix)) as archive:
@@ -630,11 +639,14 @@ class StableReleaseTests(unittest.TestCase):
         self.assertIsNotNone(release.PUBLIC_FORBIDDEN.search("Armada E500"))
 
     def test_real_changelog_and_public_doc_name_no_pc_models(self):
-        section = release.changelog_section((ROOT / "CHANGELOG.md").read_text(), "1.0.1")
-        self.assertIn("Known issues", section)
-        self.assertIsNone(release.PUBLIC_FORBIDDEN.search(section))
-        doc = (ROOT / "docs/release-notes-1.0-alpha.md").read_text()
-        self.assertIsNone(release.PUBLIC_FORBIDDEN.search(doc))
+        for value in ("1.0.0-alpha.1", "1.0.0-alpha.2", "1.0.0-beta.1"):
+            section = release.changelog_section((ROOT / "CHANGELOG.md").read_text(), value)
+            if value != "1.0.0-alpha.1":
+                self.assertIn("Known issues", section)
+            self.assertIsNone(release.PUBLIC_FORBIDDEN.search(section))
+        for channel in ("alpha", "beta", "rc"):
+            doc = (ROOT / f"docs/release-notes-1.0-{channel}.md").read_text()
+            self.assertIsNone(release.PUBLIC_FORBIDDEN.search(doc))
 
     def test_cli_refuses_without_approval(self):
         result = run(sys.executable, ROOT / "scripts/release_stable.py", "--help")
@@ -656,14 +668,26 @@ class SmallReleaseTests(unittest.TestCase):
         expected = hashlib.sha1(f"blob {len(data)}\0".encode() + data).hexdigest()
         self.assertEqual(files, {"ciukios/config/version.json": ("100644", expected)})
 
-    def test_numbering_and_changelog(self):
-        self.assertEqual(release.next_number("1.0.0", []), 1)
-        self.assertEqual(release.next_number("1.0.0", ["v1.0.0-stable.1", "v1.0.0-stable.10",
-                                                     "v1.0.0-stable.01", "v1.0.1-stable.99"]), 11)
-        self.assertEqual(release.changelog_section("## 1.0.0 alpha\nnew\n## 1.0.1\nold", "1.0.0"),
-                         "## 1.0.0 alpha\nnew")
-        with self.assertRaises(release.Refusal):
-            release.changelog_section("## 1.0.01\nwrong", "1.0.0")
+    def test_tag_discovery_keeps_exact_collision_and_ignores_prefixes(self):
+        for version in ('1.0.0', '1.0.0-beta.1', '1.0.0-rc.1'):
+            tag = 'v' + version
+            with patch.object(release, 'command', side_effect=[tag + '\n' + tag + '0',
+                 json.dumps([{'ref': 'refs/tags/' + tag}, {'ref': 'refs/tags/' + tag + '1'}])]) as command:
+                self.assertIn(tag, release.release_tags(ROOT, version, True))
+                self.assertEqual(command.call_count, 2)
+                self.assertEqual(command.call_args_list[0].args[:2], ('git', 'for-each-ref'))
+            with patch.object(release, 'command', return_value=tag + '0') as command:
+                self.assertNotIn(tag, release.release_tags(ROOT, version, False))
+                self.assertEqual(command.call_count, 1)
+
+    def test_full_version_changelog(self):
+        both = "## Versioning\nscheme\n## 1.0.0-beta.1 (formerly labelled 1.0.1 beta)\nb\n## 1.0.0-alpha.2\na\n## 1.0.0\nstable"
+        self.assertIn("\nb", release.changelog_section(both, "1.0.0-beta.1"))
+        self.assertEqual(release.changelog_section(both, "1.0.0-alpha.2"), "## 1.0.0-alpha.2\na")
+        self.assertEqual(release.changelog_section(both, "1.0.0"), "## 1.0.0\nstable")
+        for value in ("1.0.0-beta.10", "1.0.1"):
+            with self.assertRaises(release.Refusal):
+                release.changelog_section(both, value)
 
     def test_push_prereleases_remain_suspended(self):
         policy = json.loads((ROOT / "config/release-policy.json").read_text())

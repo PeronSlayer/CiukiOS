@@ -1,6 +1,103 @@
 # Changelog
 
-## 1.0.1 alpha — 2026-10-25
+## Versioning
+
+CiukiOS follows [Semantic Versioning 2.0.0](https://semver.org/spec/v2.0.0.html).
+The public API is the documented native API (`docs/developer-api.md`) and the
+on-disk formats. After 1.0.0, breaking either requires a new MAJOR; compatible
+additions increment MINOR, compatible fixes PATCH.
+
+| Stage | Version | Git tag | GitHub prerelease |
+|---|---|---|---|
+| Development | `0.y.z` | none or `v0.y.z` | yes |
+| Alpha | `1.0.0-alpha.N` | `v1.0.0-alpha.N` | yes |
+| Beta | `1.0.0-beta.N` | `v1.0.0-beta.N` | yes |
+| Release candidate | `1.0.0-rc.N` | `v1.0.0-rc.N` | yes |
+| Stable | `1.0.0`, then `1.0.1`, `1.1.0`, `2.0.0` | `v<version>` | no |
+
+N starts at 1 without leading zeroes. Build identity is
+`+build.<build id>.g<short commit>`; metadata does not affect precedence and
+never appears in tags. Human names include `CiukiOS 1.0.0 Beta 1` and
+`CiukiOS 1.0.0 Release Candidate 1`.
+
+| Former label | Published | New identity |
+|---|---|---|
+| `v0.8.3-…-b847`, `v0.8.3-…-b849` (`legacy-0.8`) | yes, GitHub prereleases | unchanged; recorded as `0.8.3+b847…`, `0.8.3+b849.g868cac9e` |
+| 0.9.0 pre-alpha | no | `0.9.0` |
+| 0.9.2 pre-alpha | no | `0.9.2` |
+| 1.0.0 alpha (hardware images of 2026-10-21/22) | no | `1.0.0-alpha.1`, distinguished by `+build` |
+| 1.0.1 alpha (2026-10-25) | no | `1.0.0-alpha.2` |
+| 1.0.2/1.0.1 beta (2026-10-29) | no | `1.0.0-beta.1` |
+
+## 1.0.0-beta.1 (formerly labelled 1.0.2/1.0.1 beta) — unreleased
+
+Changes since 1.0.0-alpha.2. CiukiOS remains dedicated to Ciuki: *Classic computing, one woof at a time.* Release-image acceptance and self-test qualification are required before publication; hardware qualification continues.
+
+### User security and accounts
+
+- Kernel-enforced Administrator, Standard user and Guest roles, inherited process credentials, private profiles, creator-owned files and session isolation across native, Win32 and DOS programs. System files, machine settings, raw disks and other users' profiles have enforced access checks.
+- A SYSTEM account service stores salted PBKDF2-HMAC-SHA-256 password verifiers, applies password and last-administrator rules, and recovers interrupted account and ownership transactions. First-boot provisioning retries temporary entropy and volume-publication failures.
+- Ready disk and VM images automatically log on as the password-less administrator CiukiUser. Setup creates a named first administrator and requires a recovery password for the hidden CiukiAdministrator account. Guest is disabled by default.
+- Welcome logon, Log Off, password changes, account pictures, screen-saver and resume locks, and a trusted Ctrl+Alt+Del screen. User Accounts now completes background operations across its pages instead of staying busy.
+- SYSTEM services mediate administrator disk tools, driver changes, boot settings, Registry Checker and registry backups. Logs and crash reports use each user's profile; standby and disk timers follow the active user's power policy. Security acceptance cases and self-test reports cover isolation and policy enforcement.
+
+### Win32 and Wine components
+
+- More reliable installer wizard pages, control repainting, window destruction and focus. Closing an unresponsive program and shutting down use bounded waits, a "not responding" dialog and Force actions.
+- Windows CD AutoPlay and a native InstallShield 5 bootstrap run supported NE setup stubs without the deferred Win16 subsystem. Temporary files use the active profile, 8.3 engine paths work, and bootstrap errors appear in a system-modal dialog.
+- Additional Wine 10.0 components include DirectPlay libraries, oledlg and wininet. WinINet cache, cookies and history folders resolve within the profile; unavailable WinINet TLS is reported explicitly.
+- GDI paths and Windows/enhanced metafile recording and playback; Win32 serial communication functions on system serial ports and winmm joystick access through the game-port path. MIDI format-0 diagnostics and the export census are corrected.
+- Faster indexed user-address lookups and one shared Win32 clock update per tick reduce overhead while several programs run.
+
+### 3D/OpenGL
+
+- Expanded software OpenGL for the Quake III Arena demo: multitexturing, compiled vertex arrays, texture environment addition, depth/stencil formats, gamma and full-screen presentation. The demo reaches its menu and game path in the host runtime harness.
+- A common 3D driver service validates copied commands, accounts resources per context, bounds waits and falls back to software when the device or requested state cannot be admitted.
+- Probe-gated S3 Savage acceleration with background qualification, pixel-format selection, texture and blend admission, VRAM-resident render targets and direct full-screen scanout. Native SDK OpenGL uses the same engine as Win32 OpenGL.
+- Additional guarded backends for ATI Radeon R100/R200, ATI Mach64, Matrox G200/G400 and VMware SVGA3D, with a shared GPU-family host harness. Matrox's deeper mipmapping remains incomplete; Quake III uses software there. NVIDIA NV04–NV20 is explicitly software-only for 3D.
+- BIOS VBE mode setting on flat panels, larger BIOS state saves, palette-width handling and isolated BIOS-service quarantine improve full-screen entry and return.
+
+### Networking and LAN
+
+- Win32 Winsock AF_IPX datagrams and SPX connections share the kernel IPX hub with DOS VMs. Socket filtering, broadcast, peer framing and the Windows-style frame-type setting support mixed DOS/Windows LAN workloads.
+- Wine DirectPlay TCP/IP and IPX service providers and lobby integration; automated multi-guest LAN cases cover framing, hosting, joining and three-player sessions. These cases require separate runtime qualification.
+- NetSurf keeps JavaScript enabled and gains CSS custom properties with fallbacks and inheritance, modern colour syntax, sRGB color-mix() and flexbox gap fixes. Image fetch reuse, SVG sizing and bounded layout slices improve page rendering.
+
+### DOS games and sound
+
+- DOS games start full screen for graphics by default, with per-program screen preferences and Alt+Enter to return to a window; the DOS prompt remains windowed.
+- Faster CLI/STI and VGA/DAC paths, flip-driven direct presentation for unobscured DOS windows, and held IRQ delivery through guest IRET improve game timing. Full-screen OPL/Sound Blaster fast paths reduce audio overhead under load.
+- Restored INT 33h mouse handling and protected-mode callbacks, coordinate mapping and click-to-capture in a window.
+- Duke Nukem 3D shareware 1.3D joins the bundled games with its licence and Sound Blaster setup. A twenty-title DOS test catalogue adds installer, sound, gameplay and IPX cases; test-media entries are not automatically bundled or cleared for redistribution. Sound setup uses the VM's BLASTER resources, including IRQ 7.
+
+### Half-Life runtime
+
+- The original InstallShield 5 installer completes in the host runtime harness. The main menu and t0a0 map run through the production Win32 libraries in both software and OpenGL rendering paths.
+- Static-control repainting, unchanged ShowWindow/ShowCursor/ClipCursor calls and MSRLE end-of-frame handling are corrected. Half-Life and its commercial data are not included.
+
+### Desktop and Files
+
+- An application-starting cursor covers launches from the desktop, Start, Run, Files and shortcuts until a first frame, failure or timeout.
+- Programs, native applications, shortcuts and media show their own icons through a shared extraction/cache path. The system icon inventory retains Tango and the approved Ciuki portrait, with attributed supplementary families for missing symbols.
+- Empty removable drives retain their letters across ejects. Saved display preferences survive Safe Mode; an unavailable saved mode falls back with an explanatory notice.
+- ACPI S5 provides a bounded soft-off fallback when APM is unavailable. Desktop shutdown handles busy workers and unresponsive Win32 clients. Data-format and preference-save audits improve error handling; supported dirty NTFS volumes remain read-only and journal replay or hibernation is refused.
+- Automated desktop acceptance and an unattended self-test boot report display, storage, input, DOS, audio, security and other hardware paths.
+
+### Setup CD
+
+- Setup provisions the first administrator and recovery password, installs machine registry hives and includes the account services. Radeon firmware is supplied with its MIT notice.
+- Optical reads use bounded 64 KiB read-ahead and block transfers, with invalidation and error coverage for InstallShield payloads.
+- Release packages retain the Setup ISO, raw disk, QEMU, VirtualBox, VMware and OVA formats, with corresponding sources, notices, manifests and checksums. Alpha and beta packaging uses the matching release-notes document from the built source revision.
+
+### Known issues
+
+- This beta has incomplete hardware and VM-host qualification. A merged backend or passing host harness does not establish that every adapter, LAN game or original installer works on hardware.
+- 3D acceleration is limited to qualified devices and states; software fallback can be slow. NVIDIA 3D is software-only; Matrox cannot accelerate the full Quake III state set.
+- Direct3D through wined3d and the remaining Win16 subsystem are deferred until after the beta. Win32 compatibility is incomplete; WinINet TLS is unavailable.
+- NetSurf remains an ES5-era browser with partial modern CSS support; some current sites will not work.
+- Only approved shareware, demo and freeware data may be included. Commercial game data and private test media are excluded; the DOS test catalogue is broader than the bundled set.
+
+## 1.0.0-alpha.2 (formerly labelled 1.0.1 alpha) — 2026-10-25
 
 CiukiOS is a modern retro-gaming operating system dedicated to Ciuki, a dog: a 32-bit protected-mode kernel with a Windows 95/98-class desktop, DOS games in virtual machines, Win32 programs and a network stack. *Classic computing, one woof at a time.*
 
@@ -43,23 +140,23 @@ CiukiOS is a modern retro-gaming operating system dedicated to Ciuki, a dog: a 3
 
 ### How to try it
 
-- **QEMU:** extract `ciukios-1.0.1-qemu.zip` and run `run-qemu.sh` (Linux, macOS) or `run-qemu.cmd` (Windows).
-- **VirtualBox:** extract `ciukios-1.0.1-virtualbox.zip` (VDI disk) and run `create-vm.sh` or `create-vm.cmd`, or import `ciukios-1.0.1-vm.ova`.
-- **VMware:** extract `ciukios-1.0.1-vmware.zip` (VMDK disk) and open `ciukios.vmx`.
-- **Setup ISO:** `ciukios-1.0.1-setup.iso` boots the CiukiOS Setup from a CD (it is not a hybrid USB image).
-- **Real hardware:** write the raw disk image from `ciukios-1.0.1-disk.zip` to a whole disk with Rufus (DD mode), balenaEtcher or `dd`; this erases the destination. Targets are late-1990s and early-2000s desktops and laptops with an i686 CPU, BIOS, VBE 2.0+ video, PS/2 input, parallel ATA and 128 MiB of RAM or more.
+- **QEMU:** extract `ciukios-1.0.0-alpha.2-qemu.zip` and run `run-qemu.sh` (Linux, macOS) or `run-qemu.cmd` (Windows).
+- **VirtualBox:** extract `ciukios-1.0.0-alpha.2-virtualbox.zip` (VDI disk) and run `create-vm.sh` or `create-vm.cmd`, or import `ciukios-1.0.0-alpha.2-vm.ova`.
+- **VMware:** extract `ciukios-1.0.0-alpha.2-vmware.zip` (VMDK disk) and open `ciukios.vmx`.
+- **Setup ISO:** `ciukios-1.0.0-alpha.2-setup.iso` boots the CiukiOS Setup from a CD (it is not a hybrid USB image).
+- **Real hardware:** write the raw disk image from `ciukios-1.0.0-alpha.2-disk.zip` to a whole disk with Rufus (DD mode), balenaEtcher or `dd`; this erases the destination. Targets are late-1990s and early-2000s desktops and laptops with an i686 CPU, BIOS, VBE 2.0+ video, PS/2 input, parallel ATA and 128 MiB of RAM or more.
 
-## Development log, 2026-10-20 to 2026-10-22 (hardware image `3423912f8463…` of 2026-10-22)
+## 1.0.0-alpha.1 (formerly labelled 1.0.0 alpha) — Development log, 2026-10-20 to 2026-10-22 (hardware image `3423912f8463…` of 2026-10-22)
 
-Covers all changes merged on `main` since 0.9.2 on 2026-10-20. The Setup CD installer (f9) has been deferred to a later release (owner decision 2026-10-21 20:29, dev diary 2026-10-21-07); the 1.0 Alpha release ships as the hardware disk image `build/hw/ciukios-hw.img`. Full hardware qualification on real hardware is pending for this image.
+Covers all changes merged on `main` since 0.9.2 on 2026-10-20. The Setup CD installer (f9) has been deferred to a later release (owner decision 2026-10-21 20:29, dev diary 2026-10-21-07); the 1.0.0-alpha.1 image ships as the hardware disk image `build/hw/ciukios-hw.img`. Full hardware qualification on real hardware is pending for this image.
 
 ### Kernel and resource management
 
-- Trial of image `a4d9454e…` (dev diary 2026-10-22-07) and the sixth image (2026-10-22-09): desktop CPU cut on the T23 model from 40.6 % to 2.1 % (shortcut and sound workers, pixman region code for damage) (f2-95), audio producer priority (f1-101), single pointer and EC volume poll every 2 s with proven SMI time excluded from budgets (f2-96), music decoder cost and per-stage record (f4-37), credits and About (f2-97).
+- Trial of image `a4d9454e…` (dev diary 2026-10-22-07) and the sixth image (2026-10-22-09): desktop CPU cut on the reference laptop from 40.6 % to 2.1 % (shortcut and sound workers, pixman region code for damage) (f2-95), audio producer priority (f1-101), single pointer and EC volume poll every 2 s with proven SMI time excluded from budgets (f2-96), music decoder cost and per-stage record (f4-37), credits and About (f2-97).
 - Trial of image `5a10eef4…` (dev diary 2026-10-22-05) and the fifth image (2026-10-22-06): f1-100 (no periodic EC I/O — the EC event line is routed to SMI#, two 2.1 ms SMIs per read), f1-96b (UHCI ring walk stale status; fallback ladder before quarantine; re-plug), f2-92 (the desktop draws with the Savage engine: late readiness, bounded waits, write/offscreen operations, honest indicator), f6-22 (e100 receive mask: DHCP works; network state records; NetSurf lines complete).
 - Trial of image `b453bc92…` rejected (dev diary 2026-10-22-03); thirteen corrective merges on 2026-10-22 (dev diary 2026-10-22-04): Savage first-fill priming (f1-95), boot-log classes (f0-56), 2D acceleration YES/NO indicator (f1-97), unified DOS kernel actually bound (f3-61), holds without preemption points (f1-93b), priority inheritance and desktop share (f1-98), Display properties worker (f2-88b), NetSurf budget and exit (f6-20), desktop pointer merging (f2-91), USB 64 KiB transfers (f1-96), SMI attribution and EC poll (f1-94), entropy worker in an idle task and kernel PDEs with Accessed preset (f6-21/b).
-- Trial of image `8f59e221…` on the T23 (2026-10-21, dev diary 2026-10-21-10) rejected: seven corrective merges on 2026-10-22 — f1-92 (`125fefa2`: an issued ATA command ends only on its device deadline; since f3-49b a cancelled request was treated as a device fault, quarantining the drive and turning C: read-only), f1-93 (`c394506a`: native volume holds never span cold device reads), f6-19 (`d64787e0`: NetSurf gets its window channel from every launch route, Programs entry with icon, entropy initialises on the Pentium III), f2-88 (`8a181714`: Display properties decodes its preview off the UI thread), f2-89 (`bb8d652f`: removable media popup painted), f2-90/f2-90b (`5d28b71d`, `ce19c3bb`: wallpaper in the first desktop frame), f0-55 (`6f121d69`: boot splash progress bar).
-- f1-87 (`c19230eb`): T23 trial fixes — tagged volume holds with a missing-tag control, audio refill priority, the windowed DOS VM decoupled from the presenter, `usbscan=0` loader token, `device_overrun` attribution record.
+- Trial of image `8f59e221…` on the reference laptop (2026-10-21, dev diary 2026-10-21-10) rejected: seven corrective merges on 2026-10-22 — f1-92 (`125fefa2`: an issued ATA command ends only on its device deadline; since f3-49b a cancelled request was treated as a device fault, quarantining the drive and turning C: read-only), f1-93 (`c394506a`: native volume holds never span cold device reads), f6-19 (`d64787e0`: NetSurf gets its window channel from every launch route, Programs entry with icon, entropy initialises on the Pentium III), f2-88 (`8a181714`: Display properties decodes its preview off the UI thread), f2-89 (`bb8d652f`: removable media popup painted), f2-90/f2-90b (`5d28b71d`, `ce19c3bb`: wallpaper in the first desktop frame), f0-55 (`6f121d69`: boot splash progress bar).
+- f1-87 (`c19230eb`): Reference laptop trial fixes — tagged volume holds with a missing-tag control, audio refill priority, the windowed DOS VM decoupled from the presenter, `usbscan=0` loader token, `device_overrun` attribution record.
 - f1-90 (`3c50bb79`): device CPU budget accounted per task with a max-min fair share; the audio refill worker has its own 2 ms per 10 ms budget and a direct interrupt wake; `device_top` and `audio_refill_overrun` records; contract R1/R2 amended.
 - f1-89 (`551bd15a`): reserved cache publication and FAT transactions — bounded logical holds, writer turn with a wait metric, in-flight readers block publication, single-page transactions, no barrier per 8 KiB overflow chunk, guarded lookups never read the disk under the guard (strict FS gate exit 0, 10 MiB copy replay 1,278 commands, 4,678 crash cuts clean).
 - Fixed (`dbb0d714`, `cc81cbb6`): Addressed peer thread metadata pin contention where concurrent walks of a process memory map yielded `EBUSY`, allowing task walks to wait out metadata pins and avoiding duplicate pins on pre-pinned caller copies (`test_peer_walk_copy`).
@@ -135,7 +232,7 @@ Covers all changes merged on `main` since 0.9.2 on 2026-10-20. The Setup CD inst
 - Toolchain update (`5fd91e4c`): Requalified host toolchain pins for Clang, LLD, and LLVM from 23.1.1 to 23.1.3 across SDK, applications, upper DLLs, and kernel tests.
 - f0-50, f0-51, f0-53 (`a57de459`, `27db294d`, `79b9536a`): Host regression repairs, including scheduler name unification (`CIUKI_SCHED_NORMAL`), firmware record headers, bounds assertions, gate test links, build image license inventories, and directive index hygiene.
 
-## 0.9.2 pre-alpha (unreleased, `main`, from 2026-10-20)
+## 0.9.2 (formerly labelled 0.9.2 pre-alpha) (unreleased, `main`, from 2026-10-20)
 
 Version identity moved from 0.9.0 to 0.9.2 on 2026-10-20 (owner decision,
 dev diary 2026-10-20-01). It covers everything merged on `main` since 0.9.0
@@ -346,7 +443,7 @@ closed with the Windows 98 Resource Kit in f0-42b); diary 2026-10-19-04,
   (2026-10-16-02).
 - 3D: contract draft for native Savage 3D (f7-00), review pending.
 
-## 0.9.0 pre-alpha (not released, `main`, 2026-10-09 to 2026-10-19)
+## 0.9.0 (formerly labelled 0.9.0 pre-alpha) (not released, `main`, 2026-10-09 to 2026-10-19)
 
 First version of the Ciuki VMM line. The 0.8 line is frozen on branch
 `legacy-0.8`; prerelease 0.8.3 build 849 (`868cac9`) is its last release.

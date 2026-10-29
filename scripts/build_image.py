@@ -259,7 +259,7 @@ def strip_payloads(sources, stage):
 
 
 def read_version():
-    """{'number', 'stage', 'display'} from config/version.json, the single
+    """SemVer identity (version, core, stage, number, display) from config/version.json, the single
     source of the CiukiOS version (validated by scripts/ciuki_version.py)."""
     spec = importlib.util.spec_from_file_location("ciuki_version", ROOT / "scripts/ciuki_version.py")
     module = importlib.util.module_from_spec(spec)
@@ -1029,7 +1029,7 @@ def build_with_stage(kernel, out, boot_cfg, stage):
     # Refuse a kernel compiled with another version before the long steps; the
     # record is absent only for kernels built before the version existed.
     built = json.loads((kernel.parent / "build-clock.json").read_text()).get("version")
-    wanted = read_version()["display"]
+    wanted = read_version()["version"]
     require(built in (None, wanted),
             f"kernel built as '{built}', config/version.json says '{wanted}'; run make kernel")
     options = boot_cfg.read_bytes() if boot_cfg else DEFAULT_CONFIG
@@ -1075,7 +1075,7 @@ def build_with_stage(kernel, out, boot_cfg, stage):
         run("nasm", "-f", "bin", ROOT / "src/boot/mbr.asm", "-o", mbr_path)
         # The menu title carries the version; tests assemble the loader
         # without the define and get 'unknown'.
-        run("nasm", "-f", "bin", f"-dCIUKI_VERSION='{wanted}'",
+        run("nasm", "-f", "bin", f"-dCIUKI_VERSION='{read_version()['display']}'",
             ROOT / "src/boot/ciukldr.asm", "-o", loader_path)
         loader = prepare_loader(loader_path.read_bytes())
         loader_path.write_bytes(loader)
@@ -1197,7 +1197,9 @@ def write_manifest(image, kernel, image_sha, payloads, metadata, *, directories=
         "schema_version": 1,
         # The version the kernel was compiled with (build() has checked it
         # against config/version.json).
-        "version": clock_record.get("version", read_version()["display"]),
+        "version": clock_record.get("version", read_version()["version"]),
+        "version_full": clock_record.get("version_full", "unknown"),
+        "version_display": clock_record.get("version_display", read_version()["display"]),
         "git_revision": rev,
         "git_dirty": dirty,
         "image": image.name,

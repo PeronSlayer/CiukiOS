@@ -66,6 +66,34 @@ coordinates are not a new persistent desktop-layout format. Map Network
 Drive and Disconnect remain absent: no mapping/file-sharing service exists in
 this source state (FM-36 / NW-12).
 
+## Navigation/desktop merge integration (fx-files-nav-merge)
+
+The merge retains the Microsoft [list-view ordering and placement distinction](https://learn.microsoft.com/en-us/windows/win32/controls/list-view-window-styles):
+Files and desktop share the stable merge sort and ordinary entry-key comparator in
+`apps/files/entry_order.h` (name, size, registered type, modification date,
+then case-sensitive name for a deterministic tie). Files keeps its Details
+column numbering; desktop maps its persisted Name/Type/Size/Date keys to it.
+The same sorter orders desktop placement indices while preserving their action
+and filesystem identities. The desktop retains fixed system-icon precedence
+and column-major placement;
+Files retains row-major placement and its search/Recycle Bin keys. Their
+placement and persistence operate on different view records and stay local.
+The shared comparator performs no allocation or I/O. The shared sort allocates
+its temporary buffer before changing the array; allocation failure is
+recoverable and leaves the array untouched. No ABI record is added.
+Microsoft's [Line Up contract](https://learn.microsoft.com/en-us/windows/win32/controls/lvm-arrange)
+still distinguishes one-shot grid snapping from persistent Auto Arrange.
+
+The worker snapshot carries both namespace display names and navigation
+preferences. Publishing either must preserve the other. Typed addresses and
+combo selections both resolve the current Computer/Documents display names
+to their stable namespace paths before address resolution; the MRU stores
+paths, so a later caption rename cannot invalidate a history entry. File
+addresses continue through the existing file launcher and Back/Forward keeps
+the signed history movement described by [ITravelLog::Travel](https://learn.microsoft.com/en-us/windows/win32/api/shdeprecated/nf-shdeprecated-itravellog-travel).
+The local Resource Kit `wrkappg_1.htm` confirms F2, F4 and Ctrl+Z; namespace
+labels continue to follow [SetNameOf capability semantics](https://learn.microsoft.com/en-us/windows/win32/api/shobjidl_core/nf-shobjidl_core-ishellfolder-setnameof).
+
 ## Reference behaviour and implementation decision
 
 The Windows 98 Resource Kit, `wrkc25_3.htm` (Associating File Types with
