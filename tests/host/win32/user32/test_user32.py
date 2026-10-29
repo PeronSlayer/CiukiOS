@@ -119,6 +119,11 @@ class User32Tests(unittest.TestCase):
                      'SendMessage latency_ms=1', 'paint latency_ms=0'):
             self.assertIn('TRACE fx-w32idle '+line,output)
         self.assertIn('TRACE fx-w32idle disconnected session wake drained, application timeout preserved',output)
+        for line in ('timer publication race: 10/55/1000 ms, no sleep',
+                     'nested session duplicate consumed, callback once, timeout=30 ms',
+                     'repeated internal wakes: queue checked, finite timeout=7 ms',
+                     'observed due timer: waits for new input, no spin'):
+            self.assertIn('TRACE fx-w32idle-r2 '+line,output)
         print(output,end='')
 
     def test_public_pe32_layout(self):

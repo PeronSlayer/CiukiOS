@@ -517,27 +517,37 @@ DWORD W32API MsgWaitForMultipleObjectsEx(DWORD n, const HANDLE *handles,
   for (UINT i = 0; i < n; i++)
     values[i] = U32_PTR(handles[i]);
   DWORD start = u32_ticks();
+  BOOL check_only = 0;
   for (;;) {
     u32_pump();
+    DWORD mark_time = u32_ticks();
     u32_mark();
-    DWORD elapsed = u32_ticks() - start;
+    DWORD now = u32_ticks(), elapsed = now - start;
     DWORD slice = ms == W32_INFINITE ? W32_INFINITE : elapsed >= ms ? 0 : ms - elapsed;
+    BOOL timer_due = 0;
     for (UINT i = 0; i < U32_TIMERS; i++)
       if ((mask & QS_TIMER) && u32_timers[i].tid == u32_tid()) {
-        int32_t left = (int32_t)(u32_timers[i].due - u32_ticks());
-        if (left > 0 && (DWORD)left < slice)
+        int32_t left = (int32_t)(u32_timers[i].due - now);
+        if (left <= 0 && (int32_t)(u32_timers[i].due - mark_time) > 0) {
+          slice = 0;
+          timer_due = 1;
+        } else if (left > 0 && (DWORD)left < slice)
           slice = left;
       }
+    /* Publication can precede the deadline while the clock read above has
+     * already reached it. Publish the due timer and never sleep in that gap. */
+    if (timer_due)
+      u32_mark();
     struct ciuki_w32_wait_args a = {
         .header = K32_HEADER(W32_WAIT, a),
         .handles = U32_PTR(values),
         .count = n,
         .all = !!(flags & MWMO_WAITALL),
         .alertable = !!(flags & MWMO_ALERTABLE),
-        .timeout = slice,
+        .timeout = check_only ? 0 : slice,
         .wake_mask = mask,
         .reserved = (flags & MWMO_INPUTAVAILABLE ? 0 : W32_WAIT_NEW_INPUT) |
-                    (u32_desktop.disconnected ? W32_WAIT_SESSION : W32_WAIT_SERVICES)};
+                    (check_only ? 0 : u32_desktop.disconnected ? W32_WAIT_SESSION : W32_WAIT_SERVICES)};
     UINT saved = u32_suspend();
     int32_t status = u32_backend.call(&a, sizeof(a));
     u32_resume(saved);
@@ -545,12 +555,17 @@ DWORD W32API MsgWaitForMultipleObjectsEx(DWORD n, const HANDLE *handles,
       u32_fail(a.error ? a.error : 87);
       return W32_WAIT_FAILED;
     }
-    if (a.result == W32_WAIT_SERVICE)
+    if (a.result == W32_WAIT_SERVICE) {
+      /* Drain on the next pump, then query application readiness without
+       * services. A repeated internal wake cannot hide input or the timeout. */
+      check_only = 1;
       continue;
+    }
     if (a.result != W32_WAIT_TIMEOUT)
       return a.result;
     if (ms != W32_INFINITE && (DWORD)(u32_ticks() - start) >= ms)
       return W32_WAIT_TIMEOUT;
+    check_only = 0;
   }
 }
 DWORD W32API MsgWaitForMultipleObjects(DWORD n, const HANDLE *h, BOOL all,

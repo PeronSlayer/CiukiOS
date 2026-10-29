@@ -1,7 +1,7 @@
 /* Private registry-dispatch implementation. Notifications are relayed by
  * owning USER threads; desktop alone starts/resets the coordinator.
  * SPDX-License-Identifier: LGPL-2.1-or-later */
-struct wr_end_window {struct w32r_window w; unsigned queried,delivered,ended;};
+struct wr_end_window {struct w32r_window w; unsigned queried,delivered,ended,notified;};
 /* G3: a HOLD session (the desktop's Shut Down, Restart, Log Off) has no
  * deadline: the desktop watches the window in turn for hangs and ends a
  * hung process (its windows are then skipped). After every window agreed it
@@ -93,7 +93,7 @@ static uint32_t wr_power_turn(struct wr_server *s,uint32_t pid,const struct w32r
         w->delivered=1;r->key=w->w.hwnd;r->type=W32R_POWERBROADCAST;r->count=p->event;r->disposition=p->lparam;return 0;
     }
     if(!w->delivered || a->key!=w->w.hwnd || a->flags>1)return 87;
-    w->delivered=0;
+    w->delivered=0;w->notified=0;
     if(!a->flags && p->event<=1){p->denied=1;p->at=p->count;return 0;}
     if(a->flags){p->granted++;w->queried=1;}
     p->deadline=0;
@@ -171,7 +171,7 @@ static uint32_t wr_end_call(struct wr_server *s,uint32_t pid,const struct w32r_r
     if(!w->delivered || a->key!=w->w.hwnd || a->flags>1)return 87;
     if(!e->stage){w->queried=1;if(!a->flags && !(e->flags&4)){e->veto=1;e->at=e->count;}}
     else w->ended=1;
-    w->delivered=0;e->at++;wr_end_advance(s);return 0;
+    w->delivered=0;w->notified=0;e->at++;wr_end_advance(s);return 0;
 }
 
 /* Notify the next undelivered turn. The kernel latch coalesces notifications
@@ -182,14 +182,18 @@ void wr_session_wake(struct wr_server *s)
     wr_end_advance(s);
     struct wr_end *e=s->ending;
     if (e && e->stage<2) {
-        if (e->at<e->count && !e->windows[e->at].delivered)
+        if (e->at<e->count && !e->windows[e->at].delivered && !e->windows[e->at].notified) {
+            e->windows[e->at].notified=1;
             s->session_notify(e->windows[e->at].w.pid,e->windows[e->at].w.tid);
+        }
         return;
     }
     wr_power_advance(s);
     struct wr_power *p=s->power;
-    if (p && p->at<p->count && !p->windows[p->at].delivered)
+    if (p && p->at<p->count && !p->windows[p->at].delivered && !p->windows[p->at].notified) {
+        p->windows[p->at].notified=1;
         s->session_notify(p->windows[p->at].w.pid,p->windows[p->at].w.tid);
+    }
 }
 uint64_t wr_deadline(struct wr_server *s)
 {

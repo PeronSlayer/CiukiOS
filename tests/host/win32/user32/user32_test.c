@@ -3342,6 +3342,9 @@ static void run(void) {
   CHECK(GetWindow(windows[0], 5) == child);
   CHECK(!UnregisterClassA("USER fixture", 0) && GetLastError() == 1412);
   test_idle_wait();
+  test_idle_timer_race();
+  test_idle_nested_session();
+  test_idle_service_retries();
   puts("STEP send");
   test_send();
   puts("STEP queues");

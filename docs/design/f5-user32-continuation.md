@@ -133,6 +133,20 @@ changed the system palette) and
 
 ## fx-w32idle: blocking message waits
 
+Round 2 refines the same blocking contract using the Microsoft references and
+Wine's [wait_message implementation](https://raw.githubusercontent.com/wine-mirror/wine/master/dlls/win32u/message.c):
+internal event processing retains an absolute application timeout and checks
+queue readiness again. A timer that reaches its deadline after readiness was
+published must cause an immediate check, never an infinite sleep. Session and
+power turns notify once per pending state; nested USER loops consume duplicate
+latches and defer session RPCs until the active callback returns. After an
+internal wake, USER checks application objects/queue without internal services
+before retrying, so repeated service activity cannot hide input or a timeout.
+The service refreshes its monotonic clock on entering each loop and immediately
+before dispatching each request. Its session, power and shutdown windows thus
+start at request time even after an indefinite idle sleep. These are host-tested
+race and loop-order requirements, not guest residency measurements.
+
 Research and implementation decision (host evidence only): Microsoft
 [GetMessage](https://learn.microsoft.com/en-us/windows/win32/api/winuser/nf-winuser-getmessage),
 [WaitMessage](https://learn.microsoft.com/en-us/windows/win32/api/winuser/nf-winuser-waitmessage),

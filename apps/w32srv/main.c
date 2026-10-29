@@ -153,6 +153,7 @@ int main(int argc,char **argv)
     signal(SIGTERM,stop);signal(SIGINT,stop);
     /* Readiness covers both the next fragment and newly connected clients. */
     while(!stopping){
+        s.now=now(); /* every wake starts a fresh request-time interval */
         int busy=0;
 #if !defined(__linux__)
         /* --- sec-user-03: the session DESKTOP connects once to call-101
@@ -194,7 +195,9 @@ int main(int argc,char **argv)
             if(r<=0){wr_exit(&s,clients[i].session.pid);wr_session_close(&clients[i].session);close(clients[i].fd);clients[i].fd=-1;continue;}
             if(m.fd_count){for(unsigned j=0;j<m.fd_count;j++)close(m.fds[j]);}
             if(m.length!=256||m.fd_count||m.sender_pid!=clients[i].session.pid)continue;
-            struct w32r_packet packet,reply;memcpy(&packet,m.data,256);wr_packet(&s,&clients[i].session,&packet,&reply);busy=1;
+            struct w32r_packet packet,reply;memcpy(&packet,m.data,256);
+            s.now=now(); /* transport/earlier clients can take time too */
+            wr_packet(&s,&clients[i].session,&packet,&reply);busy=1;
             memset(&m,0,sizeof(m));m.length=256;memcpy(m.data,&reply,256);
             if(ciuki_channel_send(clients[i].fd,&m,1)<0){wr_exit(&s,clients[i].session.pid);wr_session_close(&clients[i].session);close(clients[i].fd);clients[i].fd=-1;}
         }

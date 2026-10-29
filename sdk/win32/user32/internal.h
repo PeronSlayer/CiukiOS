@@ -105,6 +105,7 @@ struct u32_pending_event {
 };
 struct u32_thread {
   BOOL session_active;
+  BOOL session_deferred;
   DWORD id;
   HWND focus, active;
   MSG last;
