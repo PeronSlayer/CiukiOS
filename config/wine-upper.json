@@ -2374,7 +2374,7 @@
   "core_pe_sha256": {
     "advapi32.dll": "b200a891537a7bdbfbd00477bfda3cf81f9084bac2753f908c23d93861200fd7",
     "avifil32.dll": "851be577cb735ec7e476499d6469139820df1985ae84193d9ef0bca81992f763",
-    "ciukishell.dll": "ddb83ae3dc8bfcba5ca86472221cc8b52ea4e429e9411d914c673cd287a74ec3",
+    "ciukishell.dll": "1e4fdbdc86d9c4e8f1a92498103f294fd02036cbf535615c832fc34e070715d4",
     "comctl32.dll": "8d7eb0beb67752e31f5ff2bc5d51cebd0e1da19d496a029dcefec0909143d1e3",
     "comdlg32.dll": "859b99b4b82f4aa5bfe8cd8586c1d7743fc4c92131777990aef2561cbce79c8c",
     "crtdll.dll": "1c56dd2bb2f3de7bc972924b8beaa6dad647c77bc09f5a6a915006344aeb36b4",
