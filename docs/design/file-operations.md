@@ -1,5 +1,99 @@
 # File operations and launching (G8)
 
+## Files navigation and views (fx-files-nav)
+
+Research checked against the current Files controller before implementation:
+
+- The owner's Windows 98 Resource Kit `wrkappg_1.htm`, “Shortcuts in
+  Windows Explorer”, specifies F4 for the address combo, Backspace for the
+  parent folder and Ctrl+Z for Undo. `wrkc25_3.htm` describes extension-based
+  file associations. These local reference texts are not redistributed.
+- Microsoft's [history versus autocomplete explanation](https://devblogs.microsoft.com/oldnewthing/20050620-36/?p=35273)
+  distinguishes previously entered locations from filesystem suggestions.
+  Use separate lists: a per-user, 25-location MRU and prefix-filtered paths.
+- Microsoft [ITravelLog::GetTravelEntry](https://learn.microsoft.com/en-us/windows/win32/api/shdeprecated/nf-shdeprecated-itravellog-gettravelentry)
+  and [ITravelLog::Travel](https://learn.microsoft.com/en-us/windows/win32/api/shdeprecated/nf-shdeprecated-itravellog-travel)
+  describe relative history entries and signed-distance navigation. Reuse the
+  model's history cursor rather than replaying visits as new navigations.
+- Microsoft [FOLDERFLAGS](https://learn.microsoft.com/en-us/windows/win32/api/shobjidl_core/ne-shobjidl_core-folderflags)
+  describes automatic arrangement; [LVM_ARRANGE](https://learn.microsoft.com/en-us/windows/win32/controls/lvm-arrange)
+  specifies snapping icons to the nearest grid position. Auto Arrange is a
+  saved folder preference; Line Up is a one-shot command in icon views.
+- Microsoft [HDN_DIVIDERDBLCLICK](https://learn.microsoft.com/en-us/windows/win32/controls/hdn-dividerdblclick)
+  and [LVM_SETCOLUMNWIDTH](https://learn.microsoft.com/en-us/windows/win32/controls/lvm-setcolumnwidth)
+  specify divider double-click notification and content auto-sizing. Measure
+  all entries in the current filtered listing, including icon/name padding.
+- Palle Gronbek's contemporary *Get going with Windows 98* (KnowWare,
+  1999), [publisher's manual](https://knowware.dk/down/get-going-with-windows-98.pdf),
+  pp. 14, 36 and 39, describes Line Up's invisible grid, column-heading
+  sorting and Undo. The publisher's full PDF was consulted.
+
+Current Microsoft API pages document modern supported platforms; they are
+used for control semantics, not as proof of Windows 98 platform availability.
+Back/Forward list selection moves the existing history cursor by the chosen
+distance without appending a new visit or discarding forward entries. A new
+navigation after Back still truncates the forward stack. Extension changes
+require Yes/No confirmation only for a file whose extension is displayed;
+case-only extension changes do not prompt. The directive supplies the warning
+wording. No kernel ABI or desktop message is added. The public toolkit gains
+`du_icon_position` and two appended `du_widget` members (icon positions and
+editable-combo suggestion mode); the ABI oracle checks their layout and the
+generated SDK reference includes them. Native toolkit clients are rebuilt
+with the updated header and library.
+
+The existing toolkit has no cascading submenus: View / Arrange Icons opens
+the same kind of second popup used by the existing shell operations. It offers
+Name, Type, Size, Date and Auto Arrange. Details widths and Auto Arrange are
+kept separately for each canonical folder and search view, bounded to 64
+views. History is newest first with case-insensitive deduplication. State
+lives in the active profile's `Application Data/CiukiOS/Files/navigation.dat`;
+profile-less sessions use `/system/settings/files.navigation`. Publication
+uses exclusive temporary creation, complete writes, sync, close and rename;
+malformed records are rejected before changing the loaded state. Read-only
+storage keeps the current window's state and reports that it was not saved.
+Filesystem suggestions include folders and files. Accepting a file uses the
+existing shell/document launcher while retaining the current folder; an
+unselected suggestion never overrides an explicitly typed folder on Enter.
+Close waits asynchronously for outstanding preference publication.
+Storage, completion enumeration and Undo availability reads run on the Files
+worker, with revision checks before publication. No new worker thread or
+kernel service is added.
+
+Manual icon coordinates belong to the current listing. Turning Auto Arrange
+on compacts them in sort order; Line Up snaps them once without changing the
+toggle. The saved preference survives navigation and reopening; manual pixel
+coordinates are not a new persistent desktop-layout format. Map Network
+Drive and Disconnect remain absent: no mapping/file-sharing service exists in
+this source state (FM-36 / NW-12).
+
+## Navigation/desktop merge integration (fx-files-nav-merge)
+
+The merge retains the Microsoft [list-view ordering and placement distinction](https://learn.microsoft.com/en-us/windows/win32/controls/list-view-window-styles):
+Files and desktop share the stable merge sort and ordinary entry-key comparator in
+`apps/files/entry_order.h` (name, size, registered type, modification date,
+then case-sensitive name for a deterministic tie). Files keeps its Details
+column numbering; desktop maps its persisted Name/Type/Size/Date keys to it.
+The same sorter orders desktop placement indices while preserving their action
+and filesystem identities. The desktop retains fixed system-icon precedence
+and column-major placement;
+Files retains row-major placement and its search/Recycle Bin keys. Their
+placement and persistence operate on different view records and stay local.
+The shared comparator performs no allocation or I/O. The shared sort allocates
+its temporary buffer before changing the array; allocation failure is
+recoverable and leaves the array untouched. No ABI record is added.
+Microsoft's [Line Up contract](https://learn.microsoft.com/en-us/windows/win32/controls/lvm-arrange)
+still distinguishes one-shot grid snapping from persistent Auto Arrange.
+
+The worker snapshot carries both namespace display names and navigation
+preferences. Publishing either must preserve the other. Typed addresses and
+combo selections both resolve the current Computer/Documents display names
+to their stable namespace paths before address resolution; the MRU stores
+paths, so a later caption rename cannot invalidate a history entry. File
+addresses continue through the existing file launcher and Back/Forward keeps
+the signed history movement described by [ITravelLog::Travel](https://learn.microsoft.com/en-us/windows/win32/api/shdeprecated/nf-shdeprecated-itravellog-travel).
+The local Resource Kit `wrkappg_1.htm` confirms F2, F4 and Ctrl+Z; namespace
+labels continue to follow [SetNameOf capability semantics](https://learn.microsoft.com/en-us/windows/win32/api/shobjidl_core/nf-shobjidl_core-ishellfolder-setnameof).
+
 ## Reference behaviour and implementation decision
 
 The Windows 98 Resource Kit, `wrkc25_3.htm` (Associating File Types with

@@ -8,6 +8,7 @@
  * (shell.h). Integer-only. */
 #include "desktop.h"
 #include "version_name.h"
+#include "../files/entry_order.h"
 #include "../libdeskui/deskui.h"
 #include "shell_icons.h"
 #include "input_text.h"
@@ -2488,6 +2489,10 @@ static int layout_compare(const struct desktop *d, int a, int b)
     int c=desktop_icon_compare(&x,&y,d->sh.cfg.icon_sort);
     return c ? c : strcmp(icon_position_name(d,a),icon_position_name(d,b));
 }
+static int layout_order(const void *a, const void *b, const void *context)
+{
+    return layout_compare(context,*(const int *)a,*(const int *)b);
+}
 static int icons_layout(struct desktop *d)
 {
     d->sh.background_valid=0;
@@ -2496,7 +2501,7 @@ static int icons_layout(struct desktop *d)
     int *order=NULL, saved=1;
     struct ciuki_settings *positions=NULL;
     if (d->sh.cfg.icon_auto_arrange && d->sh.icon_count) {
-        order=malloc((size_t)d->sh.icon_count*2*sizeof(*order));
+        order=malloc((size_t)d->sh.icon_count*sizeof(*order));
         if (!order) { snprintf(d->notice,sizeof(d->notice),"Not enough memory to arrange desktop icons"); return 0; }
         if (!d->safe_mode) {
             positions=malloc(sizeof(*positions));
@@ -2504,14 +2509,11 @@ static int icons_layout(struct desktop *d)
             *positions=d->sh.cfg;
         }
         /* Sort placement indices, preserving every filesystem/action index. */
-        int n=d->sh.icon_count, *temp=order+n;
+        int n=d->sh.icon_count;
         for (int k=0;k<n;k++) order[k]=k;
-        for (int span=1;span<n;span*=2) for (int start=0;start<n;start+=span*2) {
-            int mid=start+span<n ? start+span : n, end=start+span*2<n ? start+span*2 : n;
-            int left=start,right=mid;
-            for (int k=start;k<end;k++)
-                temp[k]=left<mid && (right==end || layout_compare(d,order[left],order[right])<=0) ? order[left++] : order[right++];
-            memcpy(order+start,temp+start,(size_t)(end-start)*sizeof(*order));
+        if (!fm_stable_sort(order,(size_t)n,sizeof(*order),layout_order,d)) {
+            free(positions); free(order);
+            snprintf(d->notice,sizeof(d->notice),"Not enough memory to arrange desktop icons"); return 0;
         }
     }
     for (int slot = 0; slot < d->sh.icon_count; slot++) {
@@ -2552,30 +2554,27 @@ static void desktop_arrange(struct desktop *d, int sort, int automatic)
 }
 static int desktop_icon_compare(const struct fm_entry *a, const struct fm_entry *b, int mode)
 {
-    int c=0;
-    if (mode==2) c=a->meta.size<b->meta.size ? -1 : a->meta.size>b->meta.size ? 1 : 0;
-    else if (mode==3) c=a->meta.modified<b->meta.modified ? -1 : a->meta.modified>b->meta.modified ? 1 : 0;
-    else if (mode==1) {
-        char x[32],y[32]; c=strcasecmp(fm_type_name(a,x,sizeof(x)),fm_type_name(b,y,sizeof(y)));
-    }
-    if (!c) c=strcasecmp(a->name,b->name);
-    if (!c) c=strcmp(a->name,b->name);
-    return c;
+    /* Settings use Name/Type/Size/Date; Files Details uses Name/Size/Type/Date. */
+    unsigned column=mode==1 ? 2u : mode==2 ? 1u : (unsigned)mode;
+    return fm_entry_order(a,b,column);
+}
+static int desktop_entry_order(const void *a, const void *b, const void *context)
+{
+    return desktop_icon_compare(a,b,*(const int *)context);
 }
 static void desktop_icon_sort(struct desktop *d)
 {
     struct fm_model *m=d->sh.folder ? &d->sh.folder->model : NULL;
     if (!m || d->sh.cfg.icon_sort<0 || d->sh.cfg.icon_sort>3) return;
-    for (unsigned i=1;i<m->count;i++) {
-        struct fm_entry entry=m->entries[i]; unsigned at=i;
-        while (at && desktop_icon_compare(&entry,&m->entries[at-1],d->sh.cfg.icon_sort)<0) {
-            m->entries[at]=m->entries[at-1]; at--;
-        }
-        m->entries[at]=entry;
-        if (d->sh.cfg.icon_auto_arrange) {
-            if (m->active==i) m->active=at; else if (m->active>=at && m->active<i) m->active++;
-            if (m->anchor==i) m->anchor=at; else if (m->anchor>=at && m->anchor<i) m->anchor++;
-        }
+    char active[FM_NAME]="",anchor[FM_NAME]="";
+    if (m->active<m->count) strcpy(active,m->entries[m->active].name);
+    if (m->anchor<m->count) strcpy(anchor,m->entries[m->anchor].name);
+    if (!fm_stable_sort(m->entries,m->count,sizeof(*m->entries),desktop_entry_order,&d->sh.cfg.icon_sort)) {
+        snprintf(d->notice,sizeof(d->notice),"Not enough memory to sort desktop icons"); return;
+    }
+    if (d->sh.cfg.icon_auto_arrange) for (unsigned i=0;i<m->count;i++) {
+        if (!strcmp(active,m->entries[i].name)) m->active=i;
+        if (!strcmp(anchor,m->entries[i].name)) m->anchor=i;
     }
 }
 static void icons_build(struct desktop *d)

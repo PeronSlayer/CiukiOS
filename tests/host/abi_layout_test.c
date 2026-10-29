@@ -59,6 +59,16 @@ _Static_assert(DESK_V3_LEASE_CARRIER == 2u, "fx-q3hang CDS carrier lease action"
 #include "../../apps/desktop/settings_catalog.h"
 _Static_assert(DESK_CLIP_DISPLAY==11 && DESK_CLIP_DISPLAY_REPLY==12 && DESK_CLIP_DISPLAY_EVENT==5,"G5b owner-display wire IDs");
 #include "../../apps/libdeskui/deskui.h"
+/* fx-files-nav: additive native toolkit layout, no kernel/wire record changes. */
+_Static_assert(sizeof(struct du_icon_position)==8,"fx-files-nav du_icon_position size");
+_Static_assert(_Alignof(struct du_icon_position)==4,"fx-files-nav du_icon_position alignment");
+_Static_assert(__builtin_offsetof(struct du_icon_position,x)==0,"fx-files-nav du_icon_position.x");
+_Static_assert(__builtin_offsetof(struct du_icon_position,y)==4,"fx-files-nav du_icon_position.y");
+#if defined(__i386__)
+_Static_assert(sizeof(struct du_widget)==1540,"fx-files-nav du_widget size");
+_Static_assert(__builtin_offsetof(struct du_widget,icon_positions)==1532,"fx-files-nav du_widget.icon_positions");
+_Static_assert(__builtin_offsetof(struct du_widget,suggestions)==1536,"fx-files-nav du_widget.suggestions");
+#endif
 /* G16B native common-dialog contracts; no kernel or wire IDs added. */
 _Static_assert(DU_FILE_ALLOW_MULTIPLE==32u,"G16B DU_FILE_ALLOW_MULTIPLE");
 _Static_assert(DU_FILE_READONLY_BOX==64u,"G16B DU_FILE_READONLY_BOX");

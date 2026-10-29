@@ -6,6 +6,7 @@
 #include "model.h"
 #include "operations.h"
 #include "backup.h"
+#include "navigation.h"
 #include <ciuki/abi.h>
 #include "../libdeskui/deskui.h"
 
@@ -37,6 +38,16 @@ struct files_drive_label {
     struct desk_launch_record autoplay_record;
 };
 struct files_app {
+    struct fm_navigation navigation;
+    struct fm_completions completions;
+    struct du_item address_items[FM_ADDRESSES];
+    char address_text[FM_ADDRESSES][FM_PATH];
+    struct du_icon_position *icon_positions;
+    unsigned icon_capacity, navigation_revision;
+    int navigation_loaded, navigation_dirty, navigation_closing, undo_available, address_completing;
+    char history_labels[FM_HISTORY][FM_PATH];
+    int rename_confirmed;
+    char rename_pending[FM_NAME];
     unsigned job_publication;
     unsigned icon_generation;   /* fx-exeicons: du_file_icons_generation() the rows show */
     uint64_t job_ui_ns;
@@ -64,7 +75,7 @@ struct files_app {
     struct fm_search_query find_edit;
     int find_page, find_initial, find_again, find_running;
     char find_from[16], find_to[16], find_size[32];
-    struct du_menu_item file_items[20], edit_items[12], view_items[13], go_items[14], help_items[3];
+    struct du_menu_item file_items[20], edit_items[12], view_items[16], go_items[14], help_items[3];
     struct du_menu_item popup[64]; unsigned popup_count;
     struct files_operations *operations;
     int shell_action; char shell_action_path[FM_PATH];

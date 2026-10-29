@@ -732,6 +732,16 @@ static void system_name_tests(void)
     assert(!strcmp(app.places[2].name,"My work") && !strcmp(du_get(&ui,100)->text,"My work"));
     assert(!files_display_path(&app,display,"/Documents") && !strcmp(display,"My work"));
     files_event(&ui,&commit,&app); assert(!strcmp(app.model.path,"/Documents") && !du_dialog_id(&ui));
+    /* fx-files-nav-merge: address acceptance retains both namespace labels and
+     * the navigation MRU. Combo selection follows the same path as Enter. */
+    assert(app.navigation_loaded && app.navigation.count);
+    assert(!strcmp(app.navigation.addresses[0],"/Documents"));
+    struct du_event select_address={.type=DU_EV_SELECT,.id=100};
+    du_set_text(du_get(&ui,100),"Work & play"); files_event(&ui,&select_address,&app);
+    assert(!app.model.path[0] && !du_dialog_id(&ui));
+    du_set_text(du_get(&ui,100),"My work"); files_event(&ui,&select_address,&app);
+    assert(!strcmp(app.model.path,"/Documents") && !du_dialog_id(&ui));
+    assert(!strcmp(app.navigation.addresses[0],"/Documents"));
     assert(!files_display_path(&app,display,"/Documents/Desktop") && !strcmp(display,"C:\\Documents\\Desktop"));
     files_properties_path(&app,"/Documents"); tick();
     assert(strstr(ui.dialog.title,"My work Properties") && strstr(ui.dialog.text,"My work"));

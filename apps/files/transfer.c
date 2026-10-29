@@ -370,3 +370,5 @@ int fm_view_save(struct fm_model *m,int attributes)
     if (r) f->unlink(f->ctx,temporary);
     return r;
 }
+
+#include "navigation.inc"

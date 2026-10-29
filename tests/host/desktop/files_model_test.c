@@ -3,6 +3,7 @@
  * selection, sorting, type names, find, create/rename, and incremental
  * copy/move/delete/properties jobs with short I/O and injected errors. */
 #include "../../../apps/libdeskui/deskui.h" /* before <time.h>: the CiukiOS ABI header defines CLOCKS_PER_SEC */
+#include "../../../apps/files/entry_order.h"
 #include "fake_vfs.h"
 #include "../../../apps/files/transfer_ui.h"
 #include <assert.h>
@@ -217,8 +218,35 @@ static void fx17_tests(void)
     puts("PASS Files fx-17: drive letters, move from a read-only stick keeps both copies, removal mid-copy names the drive, read-only delete/copy/rename name the file");
 }
 
+struct sort_probe { int key, original; };
+static int probe_order(const void *a, const void *b, const void *context)
+{
+    const struct sort_probe *x=a,*y=b;
+    return *(const int *)context*(x->key<y->key ? -1 : x->key>y->key);
+}
+static void sort_stability_tests(void)
+{
+    const struct sort_probe input[]={{2,0},{1,1},{2,2},{0,3},{1,4},{0,5},{2,6}};
+    struct sort_probe values[7];
+    for (int direction=-1;direction<=1;direction+=2) {
+        memcpy(values,input,sizeof(values));
+        assert(fm_stable_sort(values,7,sizeof(*values),probe_order,&direction));
+        for (unsigned i=1;i<7;i++) {
+            assert(direction*(values[i-1].key-values[i].key)<=0);
+            if (values[i-1].key==values[i].key) assert(values[i-1].original<values[i].original);
+        }
+    }
+    int direction=1;
+    assert(fm_stable_sort(NULL,0,sizeof(*values),probe_order,&direction));
+    assert(fm_stable_sort(values,1,sizeof(*values),probe_order,&direction));
+    memcpy(values,input,sizeof(values));
+    assert(!fm_stable_sort(values,SIZE_MAX,sizeof(*values),probe_order,&direction));
+    assert(!memcmp(values,input,sizeof(values)));
+}
+
 int main(void)
 {
+    sort_stability_tests();
     fx17_tests();
     read_accounting();
     computer_tests();

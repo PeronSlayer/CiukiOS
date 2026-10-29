@@ -88,7 +88,7 @@ void du_combo_drop(struct du_ui *u, struct du_widget *w, int open)
     if (!w->count || w->disabled) return;
     if (u->combo_open && u->combo_open != w) du_combo_drop(u, u->combo_open, 0);
     du_tip_hide(u);
-    u->combo_open = w; u->combo_hot = w->value >= 0 ? w->value : 0; u->combo_pressed = 0;
+    u->combo_open = w; u->combo_hot = w->value >= 0 ? w->value : w->suggestions==2 ? -1 : 0; u->combo_pressed = 0;
     combo_show(u, w, u->combo_hot);
     du_invalidate(u, combo_list(u, w)); du_invalidate(u, w->box);
 }
@@ -126,7 +126,11 @@ static int combo_find(const struct du_widget *w, int from, unsigned ch)
 int du_combo_key(struct du_ui *u, struct du_widget *w, unsigned code)
 {
     int up = code == DU_KEY_UP, down = code == DU_KEY_DOWN;
-    if (code == DU_KEY_F4 || (down && (u->modifiers & DU_ALT))) { du_combo_drop(u, w, 1); return 1; }
+    if (code == DU_KEY_F4 || (down && (u->modifiers & DU_ALT))) {
+        if (w->suggestions) du_post(u,DU_EV_CHANGE,w->id,1);
+        du_combo_drop(u, w, 1); return 1;
+    }
+    if (w->suggestions && (up || down)) { du_combo_drop(u,w,1); return 1; }
     if (w->count && (up || down || code == DU_KEY_HOME || code == DU_KEY_END ||
                      (!w->editable && (code == DU_KEY_LEFT || code == DU_KEY_RIGHT || code == DU_KEY_PGUP || code == DU_KEY_PGDN)))) {
         int cur = w->value, next = cur;
@@ -166,7 +170,10 @@ int du_combo_press(struct du_ui *u, struct du_widget *w, int button, int x, int 
     }
     clear_capture(u, w);   /* the open list takes the whole interaction, including the release */
     if (u->combo_open == w) du_combo_drop(u, w, 0);
-    else { w->pressed = 1; du_combo_drop(u, w, 1); u->combo_pressed = 1; }
+    else {
+        if (w->suggestions) du_post(u,DU_EV_CHANGE,w->id,1);
+        w->pressed = 1; du_combo_drop(u, w, 1); u->combo_pressed = 1;
+    }
     return 1;
 }
 
@@ -242,10 +249,16 @@ void du_combo_overlay_key(struct du_ui *u, unsigned code)
     struct du_widget *w = u->combo_open; if (!w) return;
     int rows = combo_rows(u, w), last = (int)w->count - 1, hot = u->combo_hot;
     if (code == DU_KEY_ESC || code == DU_KEY_F4 || ((u->modifiers & DU_ALT) && code == DU_KEY_DOWN)) { du_combo_drop(u, w, 0); return; }
-    if (code == DU_KEY_ENTER || code == DU_KEY_SPACE) {
-        int pick = hot; du_combo_drop(u, w, 0); combo_choose(u, w, pick); return;
+    if (code == DU_KEY_ENTER || (code == DU_KEY_SPACE && !w->suggestions)) {
+        int pick = hot; du_combo_drop(u, w, 0);
+        if (pick<0 && w->suggestions) du_post(u,DU_EV_COMMIT,w->id,0);
+        else combo_choose(u, w, pick);
+        return;
     }
     if (code == DU_KEY_TAB) { du_combo_drop(u, w, 0); return; }
+    if (w->suggestions && code!=DU_KEY_UP && code!=DU_KEY_DOWN && code!=DU_KEY_PGUP && code!=DU_KEY_PGDN) {
+        du_edit_key(u,w,code); return;
+    }
     if (code == DU_KEY_UP) hot--; else if (code == DU_KEY_DOWN) hot++;
     else if (code == DU_KEY_PGUP) hot -= rows - 1; else if (code == DU_KEY_PGDN) hot += rows - 1;
     else if (code == DU_KEY_HOME) hot = 0; else if (code == DU_KEY_END) hot = last;

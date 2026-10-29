@@ -29,12 +29,14 @@ enum {
     C_GO_DOCUMENTS = 300, C_GO_GAMES, C_GO_CONTROL, C_GO_DESKTOP, C_MUSIC, C_GO_RECYCLE, C_RESTORE, C_EMPTY_BIN, C_BIN_PROPS, C_DELETE_NOW,
     C_OPTIONS = 310, C_ATTRIBUTES = 311,
     C_CLEANUP = 312, C_FORMAT = 313, C_COPY_DISK = 314, C_BACKUP = 315, C_DEFRAG = 316, C_CONVERT = 317, C_AUTOPLAY = 318,
+    C_ARRANGE = 360, C_AUTO_ARRANGE, C_LINE_UP, D_EXTENSION,
+    C_HISTORY_BASE = 600, /* 400..491 belong to Send To / New templates */
     T_JOB = 1, T_MEDIA, T_BROWSER, T_DRAG_REFRESH
 };
 #define PANE_TOP 92
 #define STATUS_H 20
 
-enum scan_kind { SCAN_NAVIGATE, SCAN_REFRESH, SCAN_HISTORY, SCAN_TREE, SCAN_MEDIA, SCAN_OPEN, SCAN_SEARCH };
+enum scan_kind { SCAN_NAVIGATE, SCAN_REFRESH, SCAN_HISTORY, SCAN_TREE, SCAN_MEDIA, SCAN_OPEN, SCAN_SEARCH, SCAN_COMPLETE, SCAN_PREFS, SCAN_ADDRESS };
 struct files_scan {
     struct files_app state; /* Owned data only; never a UI or live model. */
     struct fm_vfs source;
@@ -42,7 +44,7 @@ struct files_scan {
     unsigned revision;
     enum scan_kind kind;
     char target[FM_PATH];
-    int delta, error, changed, labels_changed, metadata_only, clipboard_valid;
+    int delta, error, changed, labels_changed, metadata_only, clipboard_valid, navigation_error;
     uint64_t clipboard_key;
     uint16_t index[FM_ENTRIES*2];
     uint8_t seen[FM_ENTRIES], dirty[FM_ENTRIES];
@@ -79,6 +81,7 @@ static int disk_dialog_result(struct files_app *, const struct du_event *);
 static void disk_allocation_completed(struct files_app *);
 static int disk_target(const struct files_app *);
 static int disk_close_request(struct files_app *);
+static void navigation_flush(struct files_app *);
 
 static const struct du_menu_item file_template[] = {
     {"&Open", C_OPEN, 0, 0, DU_ITEM_DEFAULT}, {"Open &With...", FILES_OPEN_WITH, 0, 0, 0},
@@ -100,8 +103,8 @@ static const struct du_menu_item edit_template[] = {
 static const struct du_menu_item view_template[] = {
     {"Lar&ge Icons", C_ICONS, 0, 0, DU_ITEM_RADIO}, {"&List", C_LIST, 0, 0, DU_ITEM_RADIO},
     {"&Details", C_DETAILS, 0, 0, DU_ITEM_RADIO}, {NULL, 0, 0, 0, DU_ITEM_SEPARATOR},
-    {"Sort by &Name", C_SORT_NAME, 0, 0, DU_ITEM_RADIO}, {"Sort by &Size", C_SORT_SIZE, 0, 0, DU_ITEM_RADIO},
-    {"Sort by &Type", C_SORT_TYPE, 0, 0, DU_ITEM_RADIO}, {"Sort by &Modified", C_SORT_MODIFIED, 0, 0, DU_ITEM_RADIO},
+    {"Arrange &Icons...", C_ARRANGE, 0, 0, 0},
+    {"&Line Up Icons", C_LINE_UP, 0, 0, 0},
     {NULL, 0, 0, 0, DU_ITEM_SEPARATOR}, {"&Refresh", C_REFRESH, DU_KEY_F5, 0, 0},
     {"&Attributes column", C_ATTRIBUTES, 0, 0, 0}, {"Folder &Options...", C_OPTIONS, 0, 0, 0},
     {"&File Types...",FILES_TYPES,0,0,0}};
@@ -267,9 +270,62 @@ static void shrink(const uint32_t *src, uint32_t *dst, int size)
 /* ---- widgets and layout ---- */
 static struct du_widget *W(struct files_app *a, int id) { return du_get(a->ui, id); }
 
+static struct fm_folder_view *folder_view(struct files_app *a)
+{ return fm_folder_view(&a->navigation,a->model.path,a->model.searching); }
+static void navigation_changed(struct files_app *a)
+{ a->navigation_dirty=1; a->navigation_revision++; }
+static void navigation_flush(struct files_app *a)
+{
+    if (a->navigation_dirty && a->navigation_loaded && !a->reading && !a->loading && !a->job_active)
+        (void)scan_submit(a,SCAN_PREFS,NULL,0);
+}
+static unsigned width_key(const struct files_app *a,unsigned column)
+{
+    if (!fm_is_recycle(a->model.path) && a->model.searching && column==4u+(unsigned)a->attribute_column) return 5;
+    return column;
+}
+static void address_history(struct files_app *a)
+{
+    struct du_widget *w=W(a,W_ADDRESS);
+    du_combo_drop(a->ui,w,0); a->address_completing=0;
+    w->suggestions=1;
+    for (unsigned i=0;i<a->navigation.count;i++) {
+        if (fm_display_path(a->address_text[i],a->navigation.addresses[i])) a->address_text[i][0]=0;
+        a->address_items[i]=(struct du_item){.text={a->address_text[i]}};
+    }
+    du_combo_set(w,a->address_items,a->navigation.count,-1);
+}
+static void icon_layout(struct files_app *a,int reset,int snap)
+{
+    struct du_widget *w=W(a,W_LIST); unsigned count=a->model.count;
+    if (count>a->icon_capacity) {
+        void *p=realloc(a->icon_positions,count*sizeof(*a->icon_positions));
+        if (!p) { w->icon_positions=NULL; return; }
+        a->icon_positions=p; a->icon_capacity=count;
+    }
+    int cols=(w->box.w-4-16)/76; if (cols<1) cols=1;
+    int auto_arrange=folder_view(a)->auto_arrange;
+    for (unsigned i=0;i<count;i++) {
+        struct fm_entry *e=&a->model.entries[i];
+        if (reset || auto_arrange || !e->icon_placed) { e->icon_x=(int)i%cols*76; e->icon_y=(int)i/cols*68; e->icon_placed=1; }
+        if (snap) {
+            e->icon_x=(e->icon_x+38)/76*76; e->icon_y=(e->icon_y+34)/68*68;
+            /* A single grid slot holds one item; find the next free slot. */
+            for (unsigned j=0;j<i;) {
+                if (e->icon_x==a->model.entries[j].icon_x && e->icon_y==a->model.entries[j].icon_y) {
+                    e->icon_x+=76; if (e->icon_x>=cols*76) { e->icon_x=0; e->icon_y+=68; } j=0;
+                } else j++;
+            }
+        }
+        a->icon_positions[i]=(struct du_icon_position){e->icon_x,e->icon_y};
+    }
+    w->icon_positions=auto_arrange?NULL:a->icon_positions;
+}
+
 static const struct { int id; const char *label; const char *icon; int width; } toolbar[] = {
-    {C_BACK, "Back", "action:back", 46}, {C_FORWARD, "Forward", "action:forward", 54}, {C_UP, "Up", "action:up", 40},
+    {C_BACK, "Back", "action:back", 46}, {C_FORWARD, "Forward", "action:forward", 66}, {C_UP, "Up", "action:up", 40},
     {C_CUT, "Cut", "action:cut", 40}, {C_COPY, "Copy", "action:copy", 40}, {C_PASTE, "Paste", "action:paste", 44},
+    {FILES_UNDO, "Undo", "action:undo", 44},
     {C_DELETE, "Delete", "action:delete", 48}, {C_PROPERTIES, "Properties", "action:properties", 70},
     {C_VIEWS, "Views", "action:views", 56}};
 
@@ -343,6 +399,11 @@ void files_layout(struct files_app *a)
         if (!a->model.path[0]) {
             list->columns[1].title = "Capacity"; list->columns[3].title = "Free Space";
         }
+    }
+    struct fm_folder_view *saved=folder_view(a);
+    for (unsigned c=0;c<list->column_count;c++) {
+        int width=saved->widths[width_key(a,c)];
+        if (width) list->columns[c].width=width;
     }
     struct du_widget *status = W(a, W_STATUS);
     status->box = (struct du_rect){0, h - STATUS_H, w, STATUS_H};
@@ -724,6 +785,7 @@ void files_update(struct files_app *a)
     list->sort = bin ? bin_header_of_key[m->sort < 6 ? m->sort : 0] :
         m->sort == FM_SORT_LOCATION ? 4 + a->attribute_column :
         m->searching && !a->attribute_column && m->sort == 4 ? -1 : (int)m->sort; list->descending = m->descending;
+    icon_layout(a,0,0);
     du_set_text(list, a->loading ? "Loading..." : bin ? "The Recycle Bin is empty." : m->searching ? "No files or folders were found." : "This folder is empty.");
     struct du_widget *address = W(a, W_ADDRESS);
     if (du_focused(a->ui) != W_ADDRESS) du_set_text(address, display);
@@ -768,6 +830,7 @@ void files_update(struct files_app *a)
     int root = computer;
     W(a, C_BACK)->disabled = !m->history_at;
     W(a, C_FORWARD)->disabled = m->history_at + 1 >= m->history_count;
+    W(a,FILES_UNDO)->disabled = !a->undo_available || a->loading || a->job_active;
     W(a, C_UP)->disabled = (uint8_t)root;
     W(a, C_CUT)->disabled = W(a, C_COPY)->disabled = computer || bin || !selected;
     W(a, C_DELETE)->disabled = computer || !selected;
@@ -795,6 +858,7 @@ void files_update(struct files_app *a)
     set_flag(a->file_items, 11, C_NEW_TEXT, DU_ITEM_DISABLED, a->loading || computer || m->searching);
     set_flag(a->file_items, 11, C_PROPERTIES, DU_ITEM_DISABLED, a->loading || ((computer || m->searching) && !selected));
     unsigned file_count=sizeof(file_template)/sizeof(*file_template), edit_count=sizeof(edit_template)/sizeof(*edit_template);
+    set_flag(a->edit_items,edit_count,FILES_UNDO,DU_ITEM_DISABLED,!a->undo_available || a->loading || a->job_active);
     const int selection_actions[]={FILES_SHORTCUT,FILES_SEND_TO};
     for (unsigned i=0;i<2;i++) set_flag(a->file_items,file_count,selection_actions[i],DU_ITEM_DISABLED,computer || bin || !selected);
     const int new_actions[]={FILES_NEW_SHORTCUT,FILES_NEW_BITMAP,FILES_NEW_REGISTERED};
@@ -821,8 +885,8 @@ void files_update(struct files_app *a)
     set_flag(a->view_items, 10, C_ICONS, DU_ITEM_CHECKED, list->view == DU_ICONS);
     set_flag(a->view_items, 10, C_LIST, DU_ITEM_CHECKED, list->view == DU_LIST);
     set_flag(a->view_items, 10, C_DETAILS, DU_ITEM_CHECKED, list->view == DU_DETAILS);
-    set_flag(a->view_items,12,C_ATTRIBUTES,DU_ITEM_CHECKED,a->attribute_column);
-    for (unsigned c = 0; c < 4; c++) set_flag(a->view_items, 10, C_SORT_NAME + (int)c, DU_ITEM_CHECKED, m->sort == c);
+    set_flag(a->view_items,sizeof(view_template)/sizeof(*view_template),C_ATTRIBUTES,DU_ITEM_CHECKED,a->attribute_column);
+    set_flag(a->view_items,sizeof(view_template)/sizeof(*view_template),C_LINE_UP,DU_ITEM_DISABLED,list->view!=DU_ICONS);
     struct du_widget *places = W(a, W_PLACES);
     int place = -1;
     for (unsigned i = 0; i < a->place_count; i++) {
@@ -839,7 +903,7 @@ void files_update(struct files_app *a)
 /* ---- inline rename ---- */
 static void rename_hide(struct files_app *a)
 {
-    W(a, W_RENAME)->hidden = 1; a->rename_index = -1; a->rename_new = 0;
+    W(a, W_RENAME)->hidden = 1; a->rename_index = -1; a->rename_new = 0; a->rename_confirmed=0;
     du_focus(a->ui, W_LIST); a->ui->dirty = 1;
 }
 
@@ -864,8 +928,16 @@ static void rename_commit(struct files_app *a)
     char name[FM_NAME]; snprintf(name, sizeof(name), "%s", W(a, W_RENAME)->text);
     unsigned index = (unsigned)a->rename_index;
     char original[FM_NAME]; strcpy(original, a->rename_original);
-    rename_hide(a);
-    if (index >= a->model.count || strcmp(a->model.entries[index].name, original)) { files_update(a); return; }
+    if (index >= a->model.count || strcmp(a->model.entries[index].name, original)) { rename_hide(a); files_update(a); return; }
+    if (!a->rename_confirmed && strcmp(name,original) && fm_extension_changes(&a->model,index,name)) {
+        snprintf(a->rename_pending,sizeof(a->rename_pending),"%s",name);
+        W(a,W_RENAME)->hidden=1;
+        du_message(a->ui,D_EXTENSION,"Rename",
+            "If you change a file name extension, the file may become unusable.\n\nAre you sure you want to change it?",
+            DU_DLG_ICON_WARNING,yes_no,2,0,1);
+        return;
+    }
+    a->rename_confirmed=0; rename_hide(a);
     if (strcmp(name, original)) {
         int r = fm_rename_undo(&a->model, index, name);
         if (r) {
@@ -1059,6 +1131,9 @@ static void *scan_run(void *arg)
         struct files_scan *s = w->pending; w->pending = NULL; w->busy = 1;
         pthread_mutex_unlock(&w->lock);
         struct files_app *a = &s->state;
+        if (!a->navigation_loaded) {
+            (void)fm_navigation_load(&s->source,&a->navigation); a->navigation_loaded=1;
+        }
         system_labels_read(a,&s->source);
         if (!a->view_loaded) {
             struct fm_vfs adapter=a->model.fs; a->model.fs=s->source;
@@ -1071,7 +1146,16 @@ static void *scan_run(void *arg)
             s->clipboard_valid=!fm_clipboard_load(&a->model); a->model.fs=adapter;
         }
 #endif
-        if (s->kind == SCAN_SEARCH) s->error = fm_search(&a->model, &a->find_edit);
+        if (s->kind==SCAN_ADDRESS) {
+            char resolved[FM_PATH]; int directory=0;
+            s->error=fm_address_resolve(&a->model,s->target,resolved,&directory);
+            if (!s->error) { strcpy(s->target,resolved); if (directory) s->kind=SCAN_NAVIGATE; }
+        }
+        if (s->error) { /* Preserve a failed address resolution. */ }
+        else if (s->kind==SCAN_COMPLETE) s->error=fm_complete(&a->model,s->target,&a->completions);
+        else if (s->kind==SCAN_ADDRESS) { /* Launch on publication, through the existing shell resolver. */ }
+        else if (s->kind==SCAN_PREFS) { /* storage-only request */ }
+        else if (s->kind == SCAN_SEARCH) s->error = fm_search(&a->model, &a->find_edit);
         else if (s->kind == SCAN_OPEN) s->error = scan_sniff(s);
         else {
             if (s->kind == SCAN_MEDIA || s->kind == SCAN_REFRESH ||
@@ -1127,6 +1211,16 @@ static void *scan_run(void *arg)
                 tree_build(a);
             }
         }
+        if (!s->error && (s->kind==SCAN_NAVIGATE || s->kind==SCAN_HISTORY || s->kind==SCAN_ADDRESS)) {
+            fm_address_visit(&a->navigation,s->kind==SCAN_ADDRESS?s->target:a->model.path); a->navigation_dirty=1;
+        }
+        if (a->navigation_dirty && !scan_cancelled(s))
+            s->navigation_error=fm_navigation_save(&s->source,&a->navigation);
+        if (!scan_cancelled(s) && s->kind!=SCAN_COMPLETE) {
+            struct fm_undo_log log;
+            int error=fm_undo_load(&s->source,&log);
+            a->undo_available=!error && log.count; if (!error) fm_undo_free(&log);
+        }
         pthread_mutex_lock(&w->lock);
         struct files_scan *old = w->result;
         if (scan_cancelled(s) || w->stopping) { w->busy = 0; pthread_mutex_unlock(&w->lock); scan_free(s); }
@@ -1161,6 +1255,8 @@ static int scan_submit(struct files_app *a, enum scan_kind kind, const char *pat
     s->state.tree = calloc(FILES_TREE, sizeof(*s->state.tree));
     if (!s->state.tree) { free(s); return -ENOMEM; }
     struct files_app *b = &s->state;
+    b->navigation=a->navigation; b->navigation_loaded=a->navigation_loaded;
+    b->navigation_dirty=a->navigation_dirty; b->navigation_revision=a->navigation_revision;
     memcpy(b->system_labels,a->system_labels,sizeof(b->system_labels));
     memcpy(b->tree, a->tree, FILES_TREE * sizeof(*b->tree)); b->tree_count = a->tree_count;
     b->games_available = a->games_available;
@@ -1207,7 +1303,7 @@ static int scan_submit(struct files_app *a, enum scan_kind kind, const char *pat
     a->tree_dirty = 0;
     a->reading = 1;
     a->find_running = kind == SCAN_SEARCH || (kind == SCAN_REFRESH && a->model.searching);
-    if (kind == SCAN_NAVIGATE || kind == SCAN_HISTORY || kind == SCAN_REFRESH || kind == SCAN_SEARCH) {
+    if (kind == SCAN_NAVIGATE || kind == SCAN_HISTORY || kind == SCAN_REFRESH || kind == SCAN_SEARCH || kind==SCAN_ADDRESS) {
         a->loading = 1;
         snprintf(a->loading_path, sizeof(a->loading_path), "%s", (kind == SCAN_REFRESH || kind == SCAN_SEARCH) ? a->model.path : s->target);
         if (kind == SCAN_HISTORY) {
@@ -1240,6 +1336,20 @@ static void scan_poll(struct files_app *a)
     if (!s) return;
     if (scan_cancelled(s)) { scan_free(s); return; }
     struct files_app *b = &s->state;
+    if (!a->navigation_loaded) { a->navigation=b->navigation; a->navigation_loaded=1; address_history(a); }
+    else if (!s->error && (s->kind==SCAN_NAVIGATE || s->kind==SCAN_HISTORY || s->kind==SCAN_ADDRESS)) {
+        memcpy(a->navigation.addresses,b->navigation.addresses,sizeof(a->navigation.addresses));
+        a->navigation.count=b->navigation.count;
+        address_history(a);
+    }
+    if (a->navigation_revision==b->navigation_revision) a->navigation_dirty=0;
+    if (s->navigation_error) snprintf(a->note,sizeof(a->note),"Folder view settings could not be saved: %s",reason(s->navigation_error));
+    if (s->kind!=SCAN_COMPLETE && a->undo_available!=b->undo_available) {
+        a->undo_available=b->undo_available;
+        W(a,FILES_UNDO)->disabled=!a->undo_available || a->job_active || a->loading;
+        set_flag(a->edit_items,sizeof(edit_template)/sizeof(*edit_template),FILES_UNDO,DU_ITEM_DISABLED,W(a,FILES_UNDO)->disabled);
+        du_invalidate(a->ui,W(a,FILES_UNDO)->box);
+    }
     if (memcmp(a->system_labels,b->system_labels,sizeof(a->system_labels))) {
         memcpy(a->system_labels,b->system_labels,sizeof(a->system_labels));
         places_build(a);
@@ -1258,6 +1368,27 @@ static void scan_poll(struct files_app *a)
     }
     a->reading = a->find_running = 0;
     du_timer_stop(a->ui, T_BROWSER);
+    if (s->kind==SCAN_COMPLETE) {
+        struct du_widget *edit=W(a,W_ADDRESS);
+        if (!s->error && a->address_completing && du_focused(a->ui)==W_ADDRESS && !strcmp(edit->text,s->target)) {
+            du_combo_drop(a->ui,edit,0);
+            a->completions=b->completions;
+            for (unsigned i=0;i<a->completions.count;i++) {
+                snprintf(a->address_text[i],FM_PATH,"%s",a->completions.paths[i]);
+                a->address_items[i]=(struct du_item){.text={a->address_text[i]}};
+            }
+            edit->suggestions=2;
+            du_combo_set(edit,a->address_items,a->completions.count,-1); du_combo_drop(a->ui,edit,1);
+        }
+        scan_free(s); navigation_flush(a); return;
+    }
+    if (s->kind==SCAN_PREFS) { files_update(a); scan_free(s); navigation_flush(a); return; }
+    if (s->kind==SCAN_ADDRESS) {
+        a->loading=0;
+        if (s->error) error_box(a,"Files","Cannot open the address:",s->error);
+        else files_open_document(a,s->target);
+        files_update(a); scan_free(s); navigation_flush(a); return;
+    }
     if (s->clipboard_valid && s->clipboard_key==clipboard_key(&a->model) && clipboard_key(&a->model)!=clipboard_key(&b->model)) {
         fm_clipboard_clear(&a->model);
         a->model.clipboard=b->model.clipboard; a->model.clipboard_count=b->model.clipboard_count; a->model.cut=b->model.cut;
@@ -1266,7 +1397,7 @@ static void scan_poll(struct files_app *a)
         files_update(a);
     }
     if (s->kind == SCAN_MEDIA && !s->error && !s->changed && !s->labels_changed) {
-        scan_free(s); return; /* An unchanged poll must not repaint the window. */
+        scan_free(s); navigation_flush(a); return; /* An unchanged poll must not repaint the window. */
     }
     if (s->kind==SCAN_MEDIA && !s->error && metadata_apply(a,s)) { scan_free(s); return; }
     int tree_changed = a->tree_dirty;
@@ -1305,7 +1436,9 @@ static void scan_poll(struct files_app *a)
                 if (!strcmp(n->entries[i].name, m->entries[j].name) &&
                     (!m->searching || (n->entries[i].result && m->entries[j].result &&
                     !strcmp(n->result_paths[n->entries[i].result-1], m->result_paths[m->entries[j].result-1]))))
-                    n->entries[i].selected = m->entries[j].selected;
+                    { n->entries[i].selected = m->entries[j].selected;
+                      n->entries[i].icon_x=m->entries[j].icon_x; n->entries[i].icon_y=m->entries[j].icon_y;
+                      n->entries[i].icon_placed=m->entries[j].icon_placed; }
             free(m->entries); m->entries = n->entries; n->entries = NULL;
             free(m->result_paths); m->result_paths = n->result_paths; n->result_paths = NULL;
             m->result_count = n->result_count; m->searching = n->searching; m->query = n->query;
@@ -1360,6 +1493,7 @@ static void scan_poll(struct files_app *a)
         a->ntfs_notified=1;
         du_message(a->ui,D_INFO,"Some NTFS volumes could not be opened",a->ntfs_notice,DU_DLG_ICON_WARNING,NULL,0,0,0);
     }
+    navigation_flush(a);
 }
 static void scan_stop(struct files_app *a)
 {
@@ -1374,16 +1508,22 @@ static void scan_stop(struct files_app *a)
     pthread_cond_destroy(&w->changed); pthread_mutex_destroy(&w->lock);
     free(w); a->worker = NULL;
 }
-int files_navigate(struct files_app *a, const char *path)
+static int navigate_as(struct files_app *a,const char *path,enum scan_kind kind)
 {
+    if (kind==SCAN_ADDRESS) {
+        if (a->system_labels[0][0] && !strcmp(path,a->system_labels[0])) path=FM_COMPUTER;
+        else if (a->system_labels[1][0] && !strcmp(path,a->system_labels[1])) path=profile_home();
+    }
     char target[FM_PATH]; int r = fm_posix_path(target, path);
     if (r) { error_box(a, "Files", "Cannot open the folder.", r); return r; }
     if (a->rename_index >= 0) rename_hide(a);
     a->note[0] = 0; a->select_created = a->refresh_checkpoint = a->pending_command = 0;
-    r = scan_submit(a, SCAN_NAVIGATE, target, 0);
+    r = scan_submit(a, kind, target, 0);
     if (r) error_box(a, "Files", "Cannot open the folder.", r);
     return r;
 }
+int files_navigate(struct files_app *a,const char *path)
+{ return navigate_as(a,path,SCAN_NAVIGATE); }
 
 /* ---- opening ---- */
 void files_launch_failed(struct files_app *a, int error)
@@ -1926,6 +2066,10 @@ static void files_service(struct du_ui *u,void *ctx)
     unsigned icons=du_file_icons_generation();
     if (icons!=a->icon_generation) { a->icon_generation=icons; if (!a->loading) files_update(a); }
     disk_service(a);
+    navigation_flush(a);
+    if (a->navigation_closing && !a->reading && !a->navigation_dirty) {
+        a->navigation_closing=0; if (a->close) a->close(a); return;
+    }
     if (a->show_folder_options && !a->loading && !a->job_active && !du_dialog_id(a->ui)) { a->show_folder_options=0;folder_options(a); }
     if (a->property_request[0] && !a->loading && !a->job_active && !du_dialog_id(a->ui)) {
         files_properties_path(a,a->property_request); a->property_request[0]=0;
@@ -2197,6 +2341,27 @@ static void popup_add(struct files_app *a, const char *label, int id, unsigned f
         a->popup[a->popup_count++] = (struct du_menu_item){label, id, 0, 0, flags};
 }
 
+static void history_popup(struct files_app *a,int forward)
+{
+    struct fm_model *m=&a->model; a->popup_count=0;
+    int step=forward?1:-1;
+    for (int i=(int)m->history_at+step;i>=0 && (unsigned)i<m->history_count;i+=step) {
+        fm_display_path(a->history_labels[i],m->history[i]);
+        popup_add(a,a->history_labels[i],C_HISTORY_BASE+i,0);
+    }
+    struct du_widget *b=W(a,forward?C_FORWARD:C_BACK);
+    if (a->popup_count) du_popup(a->ui,a->popup,a->popup_count,b->box.x,b->box.y+b->box.h,b->id);
+}
+static void arrange_popup(struct files_app *a)
+{
+    static const char *const labels[]={"by &Name","by &Size","by &Type","by &Date"};
+    a->popup_count=0;
+    for (unsigned k=0;k<4;k++) popup_add(a,labels[k],C_SORT_NAME+(int)k,DU_ITEM_RADIO|(a->model.sort==k?DU_ITEM_CHECKED:0));
+    popup_add(a,NULL,0,DU_ITEM_SEPARATOR);
+    popup_add(a,"&Auto Arrange",C_AUTO_ARRANGE,(folder_view(a)->auto_arrange?DU_ITEM_CHECKED:0)|(W(a,W_LIST)->view!=DU_ICONS?DU_ITEM_DISABLED:0));
+    du_popup(a->ui,a->popup,a->popup_count,120,42,C_ARRANGE);
+}
+
 #include "operations_ui.inc"
 
 static void context(struct files_app *a, const struct du_event *e)
@@ -2269,15 +2434,13 @@ static void context(struct files_app *a, const struct du_event *e)
         popup_add(a, "&List", C_LIST, DU_ITEM_RADIO | (list->view == DU_LIST ? DU_ITEM_CHECKED : 0));
         popup_add(a, "&Details", C_DETAILS, DU_ITEM_RADIO | (list->view == DU_DETAILS ? DU_ITEM_CHECKED : 0));
         popup_add(a, NULL, 0, DU_ITEM_SEPARATOR);
-        popup_add(a, "Sort by &Name", C_SORT_NAME, DU_ITEM_RADIO | (m->sort == 0 ? DU_ITEM_CHECKED : 0));
-        popup_add(a, "Sort by &Size", C_SORT_SIZE, DU_ITEM_RADIO | (m->sort == 1 ? DU_ITEM_CHECKED : 0));
-        popup_add(a, "Sort by &Type", C_SORT_TYPE, DU_ITEM_RADIO | (m->sort == 2 ? DU_ITEM_CHECKED : 0));
-        popup_add(a, "Sort by &Modified", C_SORT_MODIFIED, DU_ITEM_RADIO | (m->sort == 3 ? DU_ITEM_CHECKED : 0));
+        popup_add(a, "Arrange &Icons...", C_ARRANGE, 0);
+        popup_add(a, "&Line Up Icons", C_LINE_UP, list->view==DU_ICONS?0:DU_ITEM_DISABLED);
         popup_add(a, NULL, 0, DU_ITEM_SEPARATOR);
         popup_add(a, "Refres&h", C_REFRESH, 0);
         popup_add(a, NULL, 0, DU_ITEM_SEPARATOR);
         popup_add(a, "&Paste", C_PASTE, !m->searching && m->clipboard_count ? 0 : DU_ITEM_DISABLED);
-        popup_add(a,"Paste &Shortcut",FILES_PASTE_SHORTCUT,!m->searching && m->clipboard_count?0:DU_ITEM_DISABLED); popup_add(a,"&Undo",FILES_UNDO,0);
+        popup_add(a,"Paste &Shortcut",FILES_PASTE_SHORTCUT,!m->searching && m->clipboard_count?0:DU_ITEM_DISABLED); popup_add(a,"&Undo",FILES_UNDO,a->undo_available?0:DU_ITEM_DISABLED);
         popup_add(a, NULL, 0, DU_ITEM_SEPARATOR);
         popup_add(a, "New &Folder", C_NEW_FOLDER, m->searching ? DU_ITEM_DISABLED : 0); popup_add(a, "New &Text Document", C_NEW_TEXT, m->searching ? DU_ITEM_DISABLED : 0);
         popup_add(a,"New &Shortcut...",FILES_NEW_SHORTCUT,m->searching ? DU_ITEM_DISABLED : 0); popup_add(a,"New &Bitmap Image",FILES_NEW_BITMAP,m->searching ? DU_ITEM_DISABLED : 0); popup_add(a,"New &Document...",FILES_NEW_REGISTERED,m->searching ? DU_ITEM_DISABLED : 0);
@@ -2328,6 +2491,12 @@ static void command(struct files_app *a, int id)
     m->find_length = 0;
     if (a->rename_index >= 0 && id != C_RENAME) rename_commit(a);
     if (du_dialog_id(a->ui)) return;
+    if (id>=C_HISTORY_BASE && id<C_HISTORY_BASE+FM_HISTORY) {
+        int at=id-C_HISTORY_BASE;
+        if (!a->loading && (unsigned)at<m->history_count) scan_submit(a,SCAN_HISTORY,NULL,at-(int)m->history_at);
+        return;
+    }
+    if (id==FILES_UNDO && !a->undo_available) return;
     /* Enter and Ctrl+V may arrive in the same input batch. Preserve Paste
      * for the accepted destination, then use the ordinary fm_job path. A new
      * navigation clears it; no operation can target the hidden old rows. */
@@ -2345,6 +2514,16 @@ static void command(struct files_app *a, int id)
                    id == C_NEW_FOLDER || id == C_NEW_TEXT || id == C_MUSIC || id == C_SAFE_REMOVE)) return;
     if (!in_bin && (id == C_RESTORE || id == C_EMPTY_BIN || id == C_BIN_PROPS)) return;
     switch (id) {
+    case C_ARRANGE: arrange_popup(a); break;
+    case C_AUTO_ARRANGE:
+        if (W(a,W_LIST)->view==DU_ICONS && !a->loading) {
+            struct fm_folder_view *v=folder_view(a); v->auto_arrange=!v->auto_arrange;
+            navigation_changed(a); icon_layout(a,v->auto_arrange,0); files_update(a);
+        }
+        break;
+    case C_LINE_UP:
+        if (W(a,W_LIST)->view==DU_ICONS && !a->loading) { icon_layout(a,0,1); files_update(a); }
+        break;
     case C_FIND: files_find(a); break;
     case C_FIND_STOP: if (a->find_running) files_find(a); break;
     case C_FIND_FOLDER: { char p[FM_PATH]; if (m->searching && m->active < m->count && !fm_entry_path(m, m->active, p) && !fm_parent(p, p)) files_navigate(a, p); break; }
@@ -2442,7 +2621,7 @@ static void command(struct files_app *a, int id)
     case C_LIST: set_view(a, DU_LIST); break;
     case C_DETAILS: set_view(a, DU_DETAILS); break;
     case C_SORT_NAME: case C_SORT_SIZE: case C_SORT_TYPE: case C_SORT_MODIFIED:
-        fm_sort(m, (unsigned)(id - C_SORT_NAME), 0); files_update(a); break;
+        fm_sort(m, (unsigned)(id - C_SORT_NAME), 0); icon_layout(a,1,0); files_update(a); break;
     case C_REFRESH: {
         if (a->loading) { char path[FM_PATH]; strcpy(path, a->loading_path); files_navigate(a, path); break; }
         for (unsigned d=3;d<26;d++) a->drive_labels[d].valid=0;
@@ -2479,6 +2658,11 @@ static void dialog_result(struct files_app *a, const struct du_event *e)
     if (operations_result(a,e)) return;
     if (disk_dialog_result(a,e)) return;
     switch (e->id) {
+    case D_EXTENSION:
+        if (e->index==0) {
+            du_set_text(W(a,W_RENAME),a->rename_pending); a->rename_confirmed=1; rename_commit(a);
+        } else { rename_hide(a); files_update(a); }
+        break;
     case D_FIND:
         if (e->index == 2) { a->find_page = (a->find_page + 1) % 3; find_dialog(a); }
         else if (e->index == 0) { a->note[0] = 0; int r = scan_submit(a, SCAN_SEARCH, NULL, 0); if (r) error_box(a, "Find", "Cannot start the search:", r); }
@@ -2515,6 +2699,9 @@ static void dialog_result(struct files_app *a, const struct du_event *e)
 int files_close_request(struct files_app *a)
 {
     if (files_disk_busy(a)) return disk_close_request(a);
+    if (!a->job_active && a->navigation_dirty) {
+        a->navigation_closing=1; navigation_flush(a); return 0;
+    }
     if (!a->job_active) return 1;
     if (du_dialog_id(a->ui)!=D_CANCEL_JOB && !a->close_pending)
         du_message(a->ui,D_CANCEL_JOB,"Cancel Operation?","Cancel the current operation and close Files?",DU_DLG_ICON_QUESTION,yes_no,2,1,1);
@@ -2548,7 +2735,9 @@ static void key(struct files_app *a, const struct du_event *e)
 {
     if (e->key == FM_FIND_KEY && !e->modifiers) { files_find(a); return; }
     int focus = du_focused(a->ui);
-    if (e->key == DU_KEY_F4 && !(e->modifiers & (DU_CTRL | DU_ALT | DU_SHIFT))) { command(a, C_ADDRESS); return; }
+    if (e->key == DU_KEY_F4 && !(e->modifiers & (DU_CTRL | DU_ALT | DU_SHIFT))) {
+        command(a,C_ADDRESS); address_history(a); du_combo_drop(a->ui,W(a,W_ADDRESS),1); return;
+    }
     /* G2: Shift+Delete bypasses the Recycle Bin (the plain Delete is a menu accelerator). */
     if (e->key == DU_KEY_DELETE && (e->modifiers & (DU_CTRL | DU_ALT | DU_SHIFT)) == DU_SHIFT && (focus == W_LIST || focus == W_TREE || focus == W_PLACES)) {
         command(a, C_DELETE_NOW); return;
@@ -2670,7 +2859,8 @@ static int drag_destination(struct files_app *a, int x, int y, char destination[
     if (du_contains(du_list_body(list), x, y)) {
         int i = du_list_hit(list, x, y);
         if (fm_is_recycle(a->model.path)) { *widget = W_LIST; snprintf(destination, FM_PATH, "%s", FM_RECYCLE); return 0; }   /* G2: dropping on the bin deletes */
-        if (i >= 0 && (unsigned)i < a->model.count && (a->model.entries[i].meta.type == FM_DIR || !a->model.path[0])) {
+        if (i >= 0 && (unsigned)i < a->model.count && (a->model.entries[i].meta.type == FM_DIR || !a->model.path[0]) &&
+            !(list->view==DU_ICONS && !folder_view(a)->auto_arrange && a->model.entries[i].selected)) {
             *widget = W_LIST; *index = i;
             return fm_entry_path(&a->model, (unsigned)i, destination);
         }
@@ -2713,7 +2903,15 @@ static unsigned drag_evaluate(struct files_app *a, int x, int y, unsigned keys, 
     *allowed = read_only_volume(a, target) ? 0 : read_only_volume(a, source) ? FM_EFFECT_COPY | FM_EFFECT_LINK : FM_EFFECTS;
     for (unsigned i = 0; i < a->drag_count && *allowed; i++) if (a->drag_types[i] == 'D' && fm_beneath(destination, a->drag_paths[i])) *allowed = 0;
     unsigned effect = fm_drop_effect(source, target, keys, *allowed);
-    if (effect && fm_drop_check(a->drag_paths, a->drag_count, destination, effect)) effect = FM_EFFECT_NONE;
+    if (effect && fm_drop_check(a->drag_paths, a->drag_count, destination, effect)) {
+        int reposition=effect==FM_EFFECT_MOVE && widget==W_LIST && index<0 &&
+            W(a,W_LIST)->view==DU_ICONS && !folder_view(a)->auto_arrange;
+        for (unsigned i=0;reposition && i<a->drag_count;i++) {
+            char parent[FM_PATH];
+            if (fm_parent(parent,a->drag_paths[i]) || !fm_same_path(parent,a->model.path)) reposition=0;
+        }
+        if (!reposition) effect=FM_EFFECT_NONE;
+    }
     /* Only a folder that will receive the items is highlighted. */
     drag_highlight(a, effect ? widget : 0, effect ? index : -1);
     return effect;
@@ -2779,6 +2977,33 @@ void files_drag_drop(struct files_app *a, uint32_t serial, int x, int y, unsigne
     drag_highlight(a, 0, -1);
     if (r) { error_box(a, "Files", "Cannot read the dragged items:", r); return; }
     if (chosen != effect || !(effect & FM_EFFECTS)) return;
+    if (effect==FM_EFFECT_MOVE && W(a,W_LIST)->view==DU_ICONS && !folder_view(a)->auto_arrange &&
+        fm_same_path(destination,a->model.path) && fm_drop_check(a->drag_paths,a->drag_count,destination,effect)==-EEXIST) {
+        struct du_widget *list=W(a,W_LIST); struct du_rect body=du_list_body(list);
+        int first=-1;
+        for (unsigned i=0;i<a->model.count;i++) {
+            char path[FM_PATH]; fm_entry_path(&a->model,i,path);
+            for (unsigned k=0;k<a->drag_count;k++) if (fm_same_path(path,a->drag_paths[k])) { first=(int)i; break; }
+            if (first>=0) break;
+        }
+        if (first>=0) {
+            int dx=x-body.x-38-a->model.entries[first].icon_x;
+            int dy=y-body.y+list->scroll*68-20-a->model.entries[first].icon_y;
+            for (unsigned i=0;i<a->model.count;i++) {
+                char path[FM_PATH]; fm_entry_path(&a->model,i,path);
+                for (unsigned k=0;k<a->drag_count;k++) if (fm_same_path(path,a->drag_paths[k])) {
+                    struct fm_entry *e=&a->model.entries[i]; e->icon_x+=dx; e->icon_y+=dy;
+                    if (e->icon_x<0) e->icon_x=0;
+                    if (e->icon_x>body.w-76) e->icon_x=body.w>76?body.w-76:0;
+                    if (e->icon_y<0) e->icon_y=0;
+                    if (e->icon_y>65536) e->icon_y=65536;
+                    break;
+                }
+            }
+            files_update(a);
+        }
+        return;
+    }
     if (effect==FM_EFFECT_LINK) {
         struct fm_model *target=calloc(1,sizeof(*target)); int r=-ENOMEM;
         if (target) { fm_init(target,&a->model.fs); strcpy(target->path,destination); r=fm_link_selection(target,a->drag_paths,a->drag_count); fm_destroy(target); free(target); }
@@ -2813,6 +3038,7 @@ void files_event(struct du_ui *u, const struct du_event *e, void *arg)
 {
     struct files_app *a = arg;
     (void)u;
+    if (a->navigation_closing && e->type!=DU_EV_TICK && e->type!=DU_EV_FOCUS) return;
     if (a->rename_index >= 0 && e->id != W_RENAME &&
         (e->type == DU_EV_SELECT || e->type == DU_EV_OPEN || e->type == DU_EV_SORT || e->type == DU_EV_CONTEXT))
         rename_commit(a);
@@ -2838,18 +3064,27 @@ void files_event(struct du_ui *u, const struct du_event *e, void *arg)
         if (e->id == W_RENAME) rename_commit(a);
         else if (e->id == W_ADDRESS) {
             char p[FM_PATH]; snprintf(p,sizeof(p),"%s",W(a,W_ADDRESS)->text);
-            const char *path=p;
-            if (a->system_labels[0][0] && !strcmp(p,a->system_labels[0])) path=FM_COMPUTER;
-            else if (a->system_labels[1][0] && !strcmp(p,a->system_labels[1])) path=profile_home();
-            du_focus(a->ui,W_LIST); files_navigate(a,path);
+            a->address_completing=0; du_focus(a->ui,W_LIST); navigate_as(a,p,SCAN_ADDRESS);
         }
         break;
     case DU_EV_CANCEL:
         if (e->id == W_RENAME) { rename_hide(a); files_update(a); }
-        else if (e->id == W_ADDRESS) { du_focus(a->ui, W_LIST); files_update(a); }
+        else if (e->id == W_ADDRESS) { a->address_completing=0; du_combo_drop(a->ui,W(a,W_ADDRESS),0); du_focus(a->ui, W_LIST); files_update(a); }
         break;
     case DU_EV_CHANGE:
-        if (e->id == W_SPLIT) { a->split = e->index; files_layout(a); files_update(a); }
+        if (e->id==W_ADDRESS) {
+            if (e->index==1) address_history(a);
+            else if (!a->loading && !a->job_active) {
+                du_combo_drop(a->ui,W(a,W_ADDRESS),0); a->address_completing=1;
+                scan_submit(a,SCAN_COMPLETE,W(a,W_ADDRESS)->text,0);
+            }
+        }
+        else if (e->id==W_LIST && e->index>=0 && (unsigned)e->index<W(a,W_LIST)->column_count && !a->loading) {
+            folder_view(a)->widths[width_key(a,(unsigned)e->index)]=W(a,W_LIST)->columns[e->index].width;
+            navigation_changed(a);
+        }
+        else if ((e->id==C_BACK || e->id==C_FORWARD) && e->index==1) history_popup(a,e->id==C_FORWARD);
+        else if (e->id == W_SPLIT) { a->split = e->index; files_layout(a); files_update(a); }
         else if (e->id == W_TREE) toggle_node(a, e->index);
         else if (e->id == C_VIEWS && e->index == 1) {
             struct du_widget *b = W(a, C_VIEWS), *list = W(a, W_LIST);
@@ -2861,7 +3096,11 @@ void files_event(struct du_ui *u, const struct du_event *e, void *arg)
         }
         break;
     case DU_EV_SELECT:
-        if (e->id == W_LIST) list_select(a, e);
+        if (e->id==W_ADDRESS) {
+            char path[FM_PATH]; snprintf(path,sizeof(path),"%s",W(a,W_ADDRESS)->text);
+            a->address_completing=0; du_focus(a->ui,W_LIST); navigate_as(a,path,SCAN_ADDRESS);
+        }
+        else if (e->id == W_LIST) list_select(a, e);
         else if (e->id == W_TREE && e->index >= 0 && (unsigned)e->index < a->tree_count) {
             if (a->model.searching || !fm_same_path(a->tree[e->index].path, a->model.path)) { char p[FM_PATH]; strcpy(p, a->tree[e->index].path); files_navigate(a, p); }
             du_focus(a->ui, W_TREE);
@@ -2891,6 +3130,7 @@ void files_event(struct du_ui *u, const struct du_event *e, void *arg)
     case DU_EV_KEY: key(a, e); break;
     default: break;
     }
+    navigation_flush(a);
 }
 
 static void copy_menu(struct du_menu_item *dst, const struct du_menu_item *src, unsigned n) { memcpy(dst, src, n * sizeof(*src)); }
@@ -2922,12 +3162,14 @@ int files_setup(struct files_app *a, struct du_ui *u, const struct fm_vfs *fs, c
         struct du_widget *b = du_add(u, DU_TOOLBUTTON, toolbar[i].id, zero, toolbar[i].label);
         b->icon = named(toolbar[i].icon, 22); b->icon_size = 22;
         snprintf(b->tip, sizeof(b->tip), "%s", toolbar[i].label);   /* G15: tooltip after the pointer rests on the button */
-        if (toolbar[i].id == C_VIEWS) b->dropdown = 12;
+        if (toolbar[i].id == C_VIEWS || toolbar[i].id==C_BACK || toolbar[i].id==C_FORWARD) b->dropdown = 12;
     }
     du_add(u, DU_SEPARATOR, W_TSEP1, zero, ""); du_add(u, DU_SEPARATOR, W_TSEP2, zero, ""); du_add(u, DU_SEPARATOR, W_TSEP3, zero, "");
     du_add(u, DU_SEPARATOR, W_BAND2, zero, "");
     du_add(u, DU_LABEL, W_ADDRESS_LABEL, zero, "A&ddress");
-    du_add(u, DU_EDIT, W_ADDRESS, zero, "Computer")->icon = named("place:computer", 16);
+    struct du_widget *address=du_add(u,DU_COMBO,W_ADDRESS,zero,"Computer");
+    address->editable=1; address->suggestions=1; address->value=-1;
+    address->icon=named("place:computer",16);
     du_add(u, DU_SEPARATOR, W_BAND3, zero, "");
     du_add(u, DU_HEADER, W_PLACES_HEADER, zero, "Places");
     struct du_widget *places = du_add(u, DU_TREE, W_PLACES, zero, "");
@@ -2972,6 +3214,10 @@ void files_destroy(struct files_app *a)
     for (unsigned i=0;a->drop_paths && i<a->drop_count;i++) free(a->drop_paths[i]);
     free(a->drop_paths); a->drop_paths=NULL; a->drop_count=0; free(a->bin_rows); a->bin_rows=NULL;
     free(a->band_original); free(a->band_hits); a->band_original=a->band_hits=NULL; a->band_capacity=0;
+    struct du_widget *address=W(a,W_ADDRESS),*list=W(a,W_LIST);
+    if (address) du_combo_drop(a->ui,address,0);
+    free(a->icon_positions); a->icon_positions=NULL; a->icon_capacity=0;
+    if (list) list->icon_positions=NULL;
     du_timer_stop(a->ui,T_MEDIA);
     du_timer_stop(a->ui,T_BROWSER);
     scan_stop(a);

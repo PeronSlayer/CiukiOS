@@ -5,6 +5,7 @@
  * Files model. Paths are absolute POSIX paths; FAT names compare without case. */
 #include "model.h"
 #include "operations.h"
+#include "entry_order.h"
 #include "../desktop/catalog.h"
 #include <stdlib.h>
 #include <stdio.h>
@@ -422,13 +423,17 @@ static int order(const struct fm_model *m, const struct fm_entry *a, const struc
         return descending ? -result : result;
     }
     if (column == FM_SORT_LOCATION && a->result && b->result) result = result_location_order(m->result_paths[a->result-1], m->result_paths[b->result-1]);
-    else if (column == 1) result = a->meta.size < b->meta.size ? -1 : a->meta.size > b->meta.size;
-    else if (column == 2) { char x[32], y[32]; result = compare(fm_type_name(a, x, sizeof(x)), fm_type_name(b, y, sizeof(y))); }
     else if (column == 4) result = a->meta.attributes < b->meta.attributes ? -1 : a->meta.attributes > b->meta.attributes;
-    else if (column == 3) result = a->meta.modified < b->meta.modified ? -1 : a->meta.modified > b->meta.modified;
-    if (!result) result = compare(a->name, b->name);
-    if (!result) result = strcmp(a->name, b->name);
+    else result = fm_entry_order(a,b,column);
+    if (!result) result = fm_entry_order(a,b,0);
     return descending ? -result : result;
+}
+
+struct sort_context { const struct fm_model *model; unsigned column; int descending; };
+static int entry_order(const void *a, const void *b, const void *context)
+{
+    const struct sort_context *c=context;
+    return order(c->model,a,b,c->column,c->descending);
 }
 
 void fm_sort(struct fm_model *m, unsigned column, int descending)
@@ -438,28 +443,17 @@ void fm_sort(struct fm_model *m, unsigned column, int descending)
     m->sort = column; m->descending = descending;
     if (m->count < 2) return;
     /* Stable bottom-up merge sort; focus/anchor follow entries, not indices. */
-    struct fm_entry *tmp = malloc(m->count * sizeof(*tmp));
-    if (!tmp) return;
     unsigned active_result = m->active < m->count ? m->entries[m->active].result : 0;
     unsigned anchor_result = m->anchor < m->count ? m->entries[m->anchor].result : 0;
     char active[FM_NAME] = "", anchor[FM_NAME] = "";
     if (m->active < m->count) strcpy(active, m->entries[m->active].name);
     if (m->anchor < m->count) strcpy(anchor, m->entries[m->anchor].name);
-    for (unsigned span = 1; span < m->count; span *= 2) for (unsigned start = 0; start < m->count; start += span * 2) {
-        unsigned middle = start + span, end = start + span * 2;
-        if (middle > m->count) middle = m->count;
-        if (end > m->count) end = m->count;
-        unsigned left = start, right = middle;
-        for (unsigned i = start; i < end; i++)
-            tmp[i] = left < middle && (right == end || order(m, &m->entries[left], &m->entries[right], column, descending) <= 0)
-                     ? m->entries[left++] : m->entries[right++];
-        memcpy(m->entries + start, tmp + start, (end - start) * sizeof(*tmp));
-    }
+    struct sort_context context={m,column,descending};
+    if (!fm_stable_sort(m->entries,m->count,sizeof(*m->entries),entry_order,&context)) return;
     for (unsigned i = 0; i < m->count; i++) {
         if (active_result ? m->entries[i].result == active_result : !strcmp(active, m->entries[i].name)) m->active = i;
         if (anchor_result ? m->entries[i].result == anchor_result : !strcmp(anchor, m->entries[i].name)) m->anchor = i;
     }
-    free(tmp);
 }
 
 #include "search.inc"
