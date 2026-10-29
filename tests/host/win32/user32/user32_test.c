@@ -120,6 +120,10 @@ __attribute__((weak)) BOOL W32API DeleteFileA(const char *name) {
 #endif
 HANDLE W32API GetProcessHeap(void) { return (HANDLE)1; }
 static unsigned allocations,allocation_calls;
+/* One-shot regression hook: recycle a retired GlobalAlloc block, poisoning
+ * its old payload so reconstruction must restore the serialized bytes. */
+static HANDLE global_reuse_once;
+static BOOL global_reuse_ready;
 void *W32API HeapAlloc(HANDLE h, DWORD flags, DWORD n) {
   (void)h;
   (void)flags;
@@ -145,9 +149,26 @@ BOOL W32API HeapFree(HANDLE h, DWORD flags, void *v) {
   return 1;
 }
 HANDLE W32API GlobalAlloc(DWORD flags, DWORD n) {
+  if (global_reuse_ready) {
+    HANDLE h=global_reuse_once;
+    CHECK(h && ((DWORD *)h)[-7]==n);
+    global_reuse_once=0;
+    global_reuse_ready=0;
+    memset(h,0,n);
+    allocations++;
+    allocation_calls++;
+    return h;
+  }
   return HeapAlloc((HANDLE)1, flags, n);
 }
 HANDLE W32API GlobalFree(HANDLE h) {
+  if (h && h==global_reuse_once) {
+    CHECK(!global_reuse_ready);
+    memset(h,0xa5,((DWORD *)h)[-7]);
+    global_reuse_ready=1;
+    allocations--;
+    return 0;
+  }
   HeapFree((HANDLE)1, 0, h);
   return 0;
 }
