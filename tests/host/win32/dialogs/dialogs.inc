@@ -188,6 +188,32 @@ static void test_templates(void) {
   ShowWindow(dlg, 5 /* SW_SHOW */);
   drain(dlg);
   CHECK(ctlcolor_static >= 2);
+  /* fx-hlrun: a visible text static paints at once when its text changes
+   * (WM_CTLCOLORSTATIC during SetWindowText) and leaves nothing to repaint;
+   * a hidden one does neither (Wine 10.0 dlls/user32/static.c
+   * STATIC_TryPaintFcn; Half-Life's launcher relies on it). */
+  HWND label = GetWindow(dlg, 5 /* GW_CHILD */);
+  CHECK(label && (GetWindowLongA(label, GWL_STYLE) & 0x1f) == 0 /* SS_LEFT */);
+  ctlcolor_static = 0;
+  CHECK(SetWindowTextA(label, "&Nome:") && ctlcolor_static == 1 && !GetUpdateRect(label, 0, 0));
+  ShowWindow(label, 0);
+  drain(dlg);
+  ctlcolor_static = 0;
+  CHECK(SetWindowTextA(label, "&Name:") && !ctlcolor_static && !GetUpdateRect(label, 0, 0));
+  ShowWindow(label, 5);
+  drain(dlg);
+  CHECK(ctlcolor_static >= 1);
+  /* An unchanged show command changes nothing: no repaint, same answer
+   * (Wine 10.0 dlls/win32u/window.c show_window). */
+  drain(dlg);
+  ctlcolor_static = 0;
+  CHECK(ShowWindow(dlg, 1 /* SW_SHOWNORMAL */) && ShowWindow(dlg, 5) && ShowWindow(dlg, 8 /* SW_SHOWNA */) &&
+        ShowWindow(label, 5));
+  CHECK(!GetUpdateRect(dlg, 0, 0) && !GetUpdateRect(label, 0, 0));
+  drain(dlg);
+  CHECK(!ctlcolor_static);
+  ShowWindow(label, 0);
+  CHECK(!ShowWindow(label, 0));
   DestroyWindow(dlg);
   /* WM_INITDIALOG returning FALSE keeps the focus the procedure chose. */
   init_focus_rule = 1;

@@ -10,7 +10,7 @@
 #define WS_SLOTS CIUKI_SOCKET_PROCESS_MAX
 struct ws_slot {
     uintptr_t handle;
-    int fd,type;
+    int fd,type,family;
     HWND window;
     HANDLE event;
     UINT message;
@@ -91,11 +91,11 @@ static int acquire(uintptr_t socket_,int *type) {
     unlock(); if(fd<0) fail(error); return fd;
 }
 static void release(int fd) { (void)native(CIUKI_SYS_CLOSE,(uintptr_t)fd,0,0,0); }
-static uintptr_t adopt(int fd,int type) {
+static uintptr_t adopt(int fd,int type,int family) {
     uintptr_t handle=WS_INVALID; int error=10024; lock();
     if(!starts) error=10093;
     else if(next_handle<0x7fffffffU) for(unsigned i=0;i<WS_SLOTS;i++) if(!sockets[i].handle) {
-        handle=next_handle++; sockets[i]=(struct ws_slot){.handle=handle,.fd=fd,.type=type}; break;
+        handle=next_handle++; sockets[i]=(struct ws_slot){.handle=handle,.fd=fd,.type=type,.family=family}; break;
     }
     unlock(); if(handle==WS_INVALID) { release(fd); fail(error); } return handle;
 }
@@ -105,7 +105,7 @@ int W32API WSAStartup(uint16_t version,void *out) {
     unsigned major=version&255,minor=version>>8; if(!out) return 10014; if(!major) return 10092;
     uint16_t negotiated=major>2 ? 0x0202 : major==2 ? (uint16_t)(2|((minor>2?2:minor)<<8)) : (uint16_t)(1|((minor?1:0)<<8));
     struct ws_data data={.version=negotiated,.high=0x0202,.max_sockets=WS_SLOTS,.max_udp=CIUKI_UDP_MAX};
-    static const char description[]="CiukiOS IPv4 sockets",status[]="Running";
+    static const char description[]="CiukiOS IPv4 and IPX sockets",status[]="Running";
     w32_copy(data.description,description,sizeof(description)); w32_copy(data.status,status,sizeof(status));
     lock(); if(starts==UINT32_MAX) { unlock(); return 10067; } starts++; unlock(); w32_copy(out,&data,sizeof(data)); return 0;
 }
@@ -121,51 +121,80 @@ int W32API WSACleanup(void) {
 }
 uintptr_t W32API socket(int family,int type,int protocol) {
     if(!initialized()) return WS_INVALID;
-    if(family!=AF_INET) return (uintptr_t)fail(10047);
-    if(type!=SOCK_STREAM && type!=SOCK_DGRAM && type!=3) return (uintptr_t)fail(10044);
+    if(family!=AF_INET && family!=AF_IPX) return (uintptr_t)fail(10047);
+    if(type!=SOCK_STREAM && type!=SOCK_DGRAM && type!=3 && !(family==AF_IPX && type==SOCK_SEQPACKET)) return (uintptr_t)fail(10044);
     int fd=native(CIUKI_SYS_SOCKET,(uintptr_t)family,(uintptr_t)type,(uintptr_t)protocol,0);
-    return fd<0 ? (uintptr_t)result(fd) : adopt(fd,type);
+    return fd<0 ? (uintptr_t)result(fd) : adopt(fd,type,family);
 }
 int W32API closesocket(uintptr_t socket_) {
     int fd=-1,error=10038; lock(); if(!starts) error=10093;
     else for(unsigned i=0;i<WS_SLOTS;i++) if(sockets[i].handle && sockets[i].handle==socket_) { fd=sockets[i].fd; sockets[i].handle=0; break; }
     unlock(); return fd<0 ? fail(error) : result(native(CIUKI_SYS_CLOSE,(uintptr_t)fd,0,0,0));
 }
+static int family_of(uintptr_t s) {
+    int family=AF_INET; lock();
+    for(unsigned i=0;i<WS_SLOTS;i++)if(sockets[i].handle==s) { family=sockets[i].family;break; }
+    unlock();return family;
+}
+static int address_in(void *out,const void *address,int length,int family) {
+    int need=family==AF_IPX?14:16;
+    if(!address)return -EFAULT;
+    if(length<need || (family!=AF_IPX && length!=16))return -EINVAL;
+    w32_fill(out,0,16);w32_copy(out,address,(uint32_t)need);return 0;
+}
 static int addressed(uint32_t op,uintptr_t socket_,const void *address,int length) {
     int fd=acquire(socket_,0); if(fd<0) return -1;
-    int r=length!=16 ? -EINVAL : !address ? -EFAULT : native(op,(uintptr_t)fd,(uintptr_t)address,16,0);
+    struct ciuki_sockaddr_in carrier;
+    int r=address_in(&carrier,address,length,family_of(socket_));
+    if(!r)r=native(op,(uintptr_t)fd,(uintptr_t)&carrier,16,0);
     release(fd); return result(r);
 }
 int W32API bind(uintptr_t s,const void *a,int n) { return addressed(CIUKI_SYS_BIND,s,a,n); }
 int W32API connect(uintptr_t s,const void *a,int n) { int r=addressed(CIUKI_SYS_CONNECT,s,a,n);async_connect(s,r);return r; }
 int W32API listen(uintptr_t s,int backlog) { int fd=acquire(s,0); if(fd<0)return -1; int r=native(CIUKI_SYS_LISTEN,(uintptr_t)fd,(uintptr_t)backlog,0,0); release(fd);if(r>=0) { lock();for(unsigned i=0;i<WS_SLOTS;i++)if(sockets[i].handle==s)sockets[i].listening=1;unlock(); }return result(r); }
 uintptr_t W32API accept(uintptr_t s,void *a,int *n) {
-    int fd=acquire(s,0); if(fd<0)return WS_INVALID;
-    int r=(a && !n) || (!a && n) ? -EFAULT : n && *n<16 ? -EFAULT : native(CIUKI_SYS_ACCEPT,(uintptr_t)fd,(uintptr_t)a,(uintptr_t)n,0);
+    int type=0,fd=acquire(s,&type); if(fd<0)return WS_INVALID;
+    int family=family_of(s),need=family==AF_IPX?14:16,cap=16;
+    struct ciuki_sockaddr_in carrier;
+    int r=(a && !n) || (!a && n) ? -EFAULT : n && *n<need ? -EFAULT :
+        native(CIUKI_SYS_ACCEPT,(uintptr_t)fd,a?(uintptr_t)&carrier:0,n?(uintptr_t)&cap:0,0);
+    if(r>=0 && a) { w32_copy(a,&carrier,(uint32_t)need);*n=need; }
     release(fd);async_rearm(s,8);if(r<0)return (uintptr_t)result(r);
-    uintptr_t child=adopt(r,SOCK_STREAM);if(child!=WS_INVALID)async_inherit(s,child);return child;
+    uintptr_t child=adopt(r,type,family);if(child!=WS_INVALID)async_inherit(s,child);return child;
 }
 int W32API shutdown(uintptr_t s,int how) { int fd=acquire(s,0); if(fd<0)return -1; int r=native(CIUKI_SYS_SHUTDOWN,(uintptr_t)fd,(uintptr_t)how,0,0); release(fd); return result(r); }
 static int name_call(uintptr_t s,int peer,void *a,int *n) {
     int fd=acquire(s,0); if(fd<0)return -1;
-    int r=!a||!n||*n<16 ? -EFAULT : native(CIUKI_SYS_SOCKNAME,(uintptr_t)fd,(uintptr_t)peer,(uintptr_t)a,(uintptr_t)n);
+    int need=family_of(s)==AF_IPX?14:16,cap=16;struct ciuki_sockaddr_in carrier;
+    int r=!a||!n||*n<need ? -EFAULT : native(CIUKI_SYS_SOCKNAME,(uintptr_t)fd,(uintptr_t)peer,(uintptr_t)&carrier,(uintptr_t)&cap);
+    if(r>=0) { w32_copy(a,&carrier,(uint32_t)need);*n=need; }
     release(fd); return result(r);
 }
 int W32API getsockname(uintptr_t s,void *a,int *n) { return name_call(s,0,a,n); }
 int W32API getpeername(uintptr_t s,void *a,int *n) { return name_call(s,1,a,n); }
 static int transfer_ex(uintptr_t s,void *data,int n,int flags,void *address,intptr_t length,int sending,unsigned extra,unsigned *moved,unsigned *received_flags) {
     int type=0,fd=acquire(s,&type); if(fd<0)return -1; int r;
+    int ipx=family_of(s)==AF_IPX,need=ipx?14:16,capacity=16; intptr_t original_length=length;
+    void *original_address=address;struct ciuki_sockaddr_in carrier;
     if(n<0) r=-EINVAL;
     else if(flags&~(sending?0:2)) r=-EOPNOTSUPP;
     else if((n && !data)||(!address && length)||(address && !length)) r=-EFAULT;
-    else if(address && sending && length!=16) r=-EINVAL;
-    else if(address && !sending && *(int *)length<16) r=-EFAULT;
+    else if(address && sending && (length<need || (!ipx && length!=16))) r=-EINVAL;
+    else if(address && !sending && *(int *)length<need) r=-EFAULT;
     else {
+        if(ipx && address) {
+            if(sending) { w32_fill(&carrier,0,16);w32_copy(&carrier,address,14);length=16; }
+            else length=(intptr_t)&capacity;
+            address=&carrier;
+        }
         unsigned bytes=(unsigned)n;
         if(type==SOCK_STREAM && bytes>CIUKI_SOCKET_IO_MAX) bytes=CIUKI_SOCKET_IO_MAX;
         uint32_t output_flags=0;
         struct ciuki_socket_io io={.size=sizeof(io),.version=CIUKI_SOCKET_IO_V2,.fd=fd,.buffer=WP(data),.bytes=bytes,.flags=(uint32_t)(sending?MSG_NOSIGNAL:flags)|extra,.address=WP(address),.address_length=(uint32_t)length,.reserved={sending?0:WP(&output_flags),0}};
         r=native(sending?CIUKI_SYS_SENDTO:CIUKI_SYS_RECVFROM,(uintptr_t)&io,0,0,0);
+        if(r>=0 && ipx && original_address && !sending) {
+            w32_copy(original_address,&carrier,14);*(int *)original_length=14;
+        }
         if(r>=0) { if(moved)*moved=(unsigned)r;if(received_flags)*received_flags=output_flags; }
         if(r>=0 && (output_flags&MSG_TRUNC))r=-EMSGSIZE;
     }
@@ -206,7 +235,34 @@ static int option_map(int *level,int name) {
     return -1;
 }
 static int socket_option(uintptr_t s,int level,int option,void *value,intptr_t length,int setting) {
-    int fd=acquire(s,0); if(fd<0)return -1; int name=option_map(&level,option),r;
+    int fd=acquire(s,0); if(fd<0)return -1;
+    if(family_of(s)==AF_IPX && (level==NSPROTO_IPX || level==NSPROTO_SPX)) {
+        int n=setting?(int)length:length?*(int *)length:0;
+        unsigned need=option==IPX_ADDRESS?24:(option==IPX_GETNETINFO || option==IPX_GETNETINFO_NORIP)?20:4;
+        int r;
+        if(!value || (!setting&&!length) || n<(int)need)r=-EFAULT;
+        else {
+            unsigned cap=(unsigned)n;
+            struct ciuki_socket_option q={.size=sizeof(q),.version=1,.fd=fd,.operation=(unsigned)setting,
+                .level=level,.name=option,.value=WP(value),.length=setting?(unsigned)n:WP(&cap)};
+            r=native(CIUKI_SYS_SOCKOPT,(uintptr_t)&q,0,0,0);if(r>=0&&!setting)*(int *)length=(int)cap;
+        }
+        release(fd);return result(r);
+    }
+    if(family_of(s)==AF_IPX && level==0xffff && option==0x80) {
+        int n=setting?(int)length:length?*(int *)length:0,r;uint16_t shorts[2]={0};
+        if(!value || n<4)r=-EFAULT;
+        else {
+            if(setting)w32_copy(shorts,value,4);
+            struct ciuki_socket_linger linger={shorts[0],shorts[1]};unsigned cap=sizeof(linger);
+            struct ciuki_socket_option q={.size=sizeof(q),.version=1,.fd=fd,.operation=(unsigned)setting,
+                .level=SOL_SOCKET,.name=SO_LINGER,.value=WP(&linger),.length=setting?cap:WP(&cap)};
+            r=native(CIUKI_SYS_SOCKOPT,(uintptr_t)&q,0,0,0);
+            if(r>=0&&!setting) { shorts[0]=(uint16_t)linger.on;shorts[1]=(uint16_t)linger.seconds;w32_copy(value,shorts,4);*(int *)length=4; }
+        }
+        release(fd);return result(r);
+    }
+    int name=option_map(&level,option),r;
     int n=setting ? (int)length : length ? *(int *)length : 0;
     if(name<0) r=-ENOPROTOOPT;
     else if(!value||(!setting&&!length)||n<4) r=-EFAULT;
@@ -480,3 +536,49 @@ int W32API getaddrinfo(const char *node,const char *service,const struct ws_addr
 void W32API freeaddrinfo(struct ws_addrinfo *info) { const struct w32_services *services=w32_get_services(); if(!services||!services->free)return; while(info) { struct ws_addrinfo *next=info->next; services->free(services->opaque,info,sizeof(struct ws_answer)); info=next; } }
 
 #include "wsasync.inc"
+
+/* WinINet's Unicode resolver imports share the existing native IPv4 path. */
+int W32API GetAddrInfoW(const WCHAR *node,const WCHAR *service,const struct ws_addrinfo *hints,struct ws_addrinfo **out) {
+  char n[254],s[32];
+  if(out) *out=0;
+  if(node) {unsigned i=0;for(;node[i] && i<sizeof(n)-1;i++) {if(node[i]>127)return 11001;n[i]=(char)node[i];}if(node[i])return 11001;n[i]=0;}
+  if(service) {unsigned i=0;for(;service[i] && i<sizeof(s)-1;i++) {if(service[i]>127)return 10109;s[i]=(char)service[i];}if(service[i])return 10109;s[i]=0;}
+  /* This resolver does not return a canonical-name allocation, so the wide
+   * and narrow record layouts and allocation ownership are identical. */
+  return getaddrinfo(node ? n : 0,service ? s : 0,hints,out);
+}
+void W32API FreeAddrInfoW(struct ws_addrinfo *info) {freeaddrinfo(info);}
+const char *W32API inet_ntop(int family,const void *address,char *out,uint32_t cap) {
+  if(family!=AF_INET) {fail(10047);return 0;}
+  if(!address || !out) {fail(10014);return 0;}
+  const uint8_t *a=address;char text[16],*p=text;
+  for(unsigned i=0;i<4;i++) {p=decimal(p,a[i]);*p++=i==3 ? 0 : '.';}
+  unsigned n=(unsigned)(p-text);if(cap<n) {fail(10014);return 0;}
+  w32_copy(out,text,n);return out;
+}
+int W32API getnameinfo(const struct ciuki_sockaddr_in *address,int bytes,char *host,uint32_t hostcap,char *service,uint32_t servicecap,int flags) {
+  if(!initialized()) return 10093;
+  if(!address || bytes<16 || (host && !hostcap) || (service && !servicecap) || (!host && !service)) return 10014;
+  if(address->family!=AF_INET) return 10047;
+  if(flags&~31) return 10022;
+  char name[254],port[32];
+  if(host) {
+    if(!(flags&2) && ws_reverse(address->address,name,sizeof(name))) {
+      if(flags&1) for(unsigned i=0;name[i];i++) if(name[i]=='.') {name[i]=0;break;}
+    } else {
+      if(flags&4) return 11001;
+      if(!inet_ntop(AF_INET,&address->address,name,sizeof(name))) return 10014;
+    }
+    if(w32_strlen(name)>=hostcap) return 10014;
+  }
+  if(service) {
+    const char *protocol=(flags&16) ? "udp" : "tcp";
+    struct ws_servent *s=(flags&8) ? 0 : getservbyport(address->port,protocol);
+    if(s) w32_copy(port,s->name,w32_strlen(s->name)+1);
+    else *decimal(port,ntohs(address->port))=0;
+    if(w32_strlen(port)>=servicecap) return 10014;
+  }
+  if(host) w32_copy(host,name,w32_strlen(name)+1);
+  if(service) w32_copy(service,port,w32_strlen(port)+1);
+  return 0;
+}

@@ -15,11 +15,13 @@ import urllib.request
 
 import dos_titles
 import dos_fixtures
+import dos_game_extract
 from evidence import EvidenceNotRun, EvidenceError
 
 ROOT = Path(__file__).resolve().parents[2]
 CATALOG = 'tests/dos-titles/games20.json'
 PINS = 'config/dos-titles.json'
+INSTALL_PLANS = 'tests/dos-titles/install20.json'
 CACHE = 'build/downloads/dos-titles'
 MAX_BYTES = 96 * 1024**2
 MAX_FILES = 2048
@@ -71,7 +73,7 @@ def load(root=ROOT):
             require(pin['status'] == 'pinned' and isinstance(pin['sha256'], str) and dos_titles.SHA.fullmatch(pin['sha256']) and type(pin['size']) is int and 0 < pin['size'] <= MAX_BYTES, 'archive SHA-256 and size')
         # A provenance record is required for every new candidate, but existing
         # battery entries with inline licence member citations retain that form.
-        source = pin['licence']['source']
+        source = pin.get('provenance', pin['licence']['source'])
         # Older battery rows cite the licence inside the archive. Where an
         # installed package provenance record exists, it remains authoritative
         # for the archive name and digest too (not just licence classification).
@@ -83,6 +85,8 @@ def load(root=ROOT):
         if source.startswith('third_party/'):
             upstream = json.loads((root / source).read_text())
             require(upstream['archive'] == pin['archive'] and upstream['sha256'] == pin['sha256'] and upstream['size'] == pin['size'], 'upstream pin mismatch')
+            if 'provenance' in pin:
+                require(upstream.get('licence') == pin['licence'], 'upstream licence mismatch')
         calibration = title['calibration']
         if calibration is not None:
             validate_calibration(calibration)
@@ -99,7 +103,67 @@ def load(root=ROOT):
                 if lan[role + '_input'] is not None:
                     validate_keys(lan[role + '_input'])
     require(sum(t['lan'] is not None for t in data['titles']) >= 6, 'six IPX titles')
+    installation_plans(root, data['titles'])
     return data['titles'], pins
+
+
+def installation_plans(root=ROOT, titles=None):
+    """Cited proposals; unresolved screens cannot silently become runnable keys."""
+    data = json.loads((Path(root) / INSTALL_PLANS).read_text())
+    require(set(data) == {'schema_version', 'titles'} and type(data['schema_version']) is int and data['schema_version'] == 1, 'install plan schema')
+    if titles is None:
+        titles = json.loads((Path(root) / CATALOG).read_text())['titles']
+    require(isinstance(data['titles'], list) and len(data['titles']) == len(titles), 'install plan census')
+    plans = {}
+    for plan in data['titles']:
+        require(isinstance(plan, dict) and set(plan) == {'id', 'target', 'media', 'extract', 'sources', 'steps', 'comparison'}, 'install plan fields')
+        require(plan['id'] not in plans, 'duplicate install plan')
+        title = next((t for t in titles if t['id'] == plan['id']), None)
+        require(title is not None and plan['target'] == 'C:\\GAME\\' + title['target'] and plan['media'] == 'C:\\MEDIA\\' + title['target'], 'install destination/media')
+        recipe = plan['extract']
+        if recipe is None:
+            require(plan['id'] in ('descent', 'descent2'), 'only SOW titles lack extraction')
+        else:
+            require(plan['id'] not in ('descent', 'descent2') and isinstance(recipe, dict), 'SOW exclusion')
+            kind = recipe.get('format')
+            fields = {'zip': {'format'}, 'zip-split': {'format', 'parts'},
+                      'apogee-shr': {'format', 'member'}, 'zip-sfx': {'format', 'member'},
+                      'lha-sfx': {'format', 'member', 'offset'}}
+            require(kind in fields and set(recipe) == fields[kind], 'extraction recipe fields')
+            if kind == 'zip-split':
+                require(isinstance(recipe['parts'], list) and 1 < len(recipe['parts']) <= 8 and len(set(recipe['parts'])) == len(recipe['parts']), 'ordered split parts')
+            for name in recipe.get('parts', []) + ([recipe['member']] if 'member' in recipe else []):
+                dos_titles.dos_path(name)
+                require('/' not in name, 'container basename')
+            if kind == 'lha-sfx':
+                require(type(recipe['offset']) is int and 0 <= recipe['offset'] < MAX_BYTES, 'LHA prefix offset')
+        sources = plan['sources']
+        require(isinstance(sources, list) and 1 <= len(sources) <= 8, 'per-title manual/readme citations')
+        for source in sources:
+            require(isinstance(source, dict) and set(source) == {'member', 'sha256', 'kind'}, 'source fields')
+            require(isinstance(source['member'], str) and 1 <= len(source['member']) <= 128 and source['member'].isascii(), 'source member')
+            require(isinstance(source['sha256'], str) and dos_titles.SHA.fullmatch(source['sha256']), 'source hash')
+            require(source['kind'] in ('package-document', 'executable-help-needs-lead-inspection', 'installer-command-only'), 'source kind')
+        steps = plan['steps']
+        require(isinstance(steps, list) and [s.get('name') for s in steps] == ['desktop-dosvm', 'direct-zip' if plan['id'] in ('hexen', 'jazz') else 'original-installer', 'sound-setup', 'installed-return'], 'original installer/sound/return steps')
+        for step in steps:
+            require(set(step) == {'name', 'command', 'status', 'screen', 'goal'}, 'install step fields')
+            require(step['status'] == 'needs-lead-calibration', 'unreviewed install recipe must stay pending')
+            require(all(isinstance(step[k], str) and step[k].strip() for k in ('screen', 'goal')), 'calibration screen/goal')
+            if step['command'] is not None:
+                require(isinstance(step['command'], str) and step['command'].startswith(('C:\\MEDIA\\' + title['target'] + '\\', plan['target'] + '\\')), 'install command directory')
+                dos_titles.dos_path(step['command'][3:].replace('\\', '/'))
+        policy = plan['comparison']
+        require(isinstance(policy, dict) and set(policy) == {'reference_only', 'installer_only', 'config'}, 'comparison fields')
+        used = set()
+        for names in policy.values():
+            require(isinstance(names, list) and len(names) <= MAX_FILES, 'comparison names')
+            for name in names:
+                dos_titles.dos_path(name)
+                require(name not in used and name != title['executable'], 'duplicate/game-executable comparison exception')
+                used.add(name)
+        plans[plan['id']] = plan
+    return plans
 
 
 def validate_keys(keys):
@@ -195,7 +259,7 @@ def shortcut(title, role):
     # CiukiOS CIUKLNK3 (apps/desktop/shell_link.h), not MS-SHLLINK.
     # Each private overlay has one "Trial" entry, with a unique mnemonic.
     args = '"--name=' + title['name'] + '" ' + ('--network=ipx ' if role != 'single' else '')
-    args += '"\\' + title['target'] + '\\G20RUN.BAT"'
+    args += '"\\GAME\\' + title['target'] + '\\G20RUN.BAT"'
     fields = ['Trial ' + title['name'], '/Programs/dosbox', args, '', '']
     parts = [f.encode('utf-8') for f in fields]
     return b'CIUKLNK3' + struct.pack('<7Ii', 1, 0, *(len(p) for p in parts), 0) + b''.join(parts)
@@ -204,7 +268,7 @@ def shortcut(title, role):
 def batch(title, role):
     args = '' if role == 'single' else title['lan'][role + '_args']
     executable = title['executable'] if role == 'single' else title['lan'][role + '_executable']
-    return ('@ECHO OFF\r\nC:\r\nCD \\' + title['target'] + '\r\n' + executable + (' ' + args if args else '') + '\r\n').encode('ascii')
+    return ('@ECHO OFF\r\nC:\r\nCD \\GAME\\' + title['target'] + '\r\n' + executable + (' ' + args if args else '') + '\r\n').encode('ascii')
 
 
 def partition(image):
@@ -274,9 +338,9 @@ def stage(host, spec, image, overlay, directory, root=ROOT, identity=None, cance
     offset, size = partition(image)
     with host.export_writable(overlay, directory, offset, size) as volume:
         inner_offset, inner_size = nested_extent(volume)
-    nested = {'/' + title['target'] + '/' + path: source for path, source in files.items()}
+    nested = {'/GAME/' + title['target'] + '/' + path: source for path, source in files.items()}
     require('G20RUN.BAT' not in files, 'reserved fixture batch name')
-    nested['/' + title['target'] + '/G20RUN.BAT'] = batch(title, spec['role'])
+    nested['/GAME/' + title['target'] + '/G20RUN.BAT'] = batch(title, spec['role'])
     with host.export_writable(overlay, directory, offset + inner_offset, inner_size) as volume:
         records = copy_files(volume, nested, directory, cancel_event)
         dos_fixtures.run(['fsck.fat', '-n', volume])
@@ -317,7 +381,7 @@ def fetch(title, pin, root=ROOT, lead_pin=False):
             data = json.loads((root / PINS).read_text())
             data['titles'] = [pin if p['id'] == pin['id'] else p for p in data['titles']]
             (root / PINS).write_text(json.dumps(data, indent=2) + '\n')
-            source = root / pin['licence']['source']
+            source = root / pin.get('provenance', pin['licence']['source'])
             upstream = json.loads(source.read_text()); upstream.update(size=total, sha256=digest, status='pinned')
             source.write_text(json.dumps(upstream, indent=2) + '\n')
         temp.replace(target)
@@ -385,7 +449,26 @@ def acceptance_case(title, role='single'):
     return base
 
 
-def acceptance_cases(titles):
+def installation_case(title, plan):
+    """A reviewable, blocked case until the lead resolves the named screens."""
+    citations = '; '.join(s['member'] + ' SHA-256 ' + s['sha256'] for s in plan['sources'])
+    steps = [{'template': 'boot', 'prefix': 'b1', 'check': 'boot', 'settle': 15}]
+    for proposed in plan['steps']:
+        note = proposed['status'] + ': ' + proposed['screen'] + '. ' + proposed['goal']
+        if proposed['command']:
+            note += ' DOS command after the prompt is calibrated: ' + proposed['command']
+        steps.append({'name': proposed['name'], 'check': 'install' if proposed['name'] != 'sound-setup' else 'sound',
+                      'note': note + ' Sources: ' + citations})
+    return {'id': 'acc-install-' + title['id'], 'kind': 'acceptance', 'probe': 'acceptance',
+            'profile': 'qemu-t23', 'item': 3, 'timeout': 2400,
+            'title': title['name'] + ' original installation and sound setup',
+            'expected': {'evidence_kind': 'acceptance'},
+            'pending': {'directive': 'fx-games20c', 'requires': [], 'blocking': True,
+                        'reason': 'needs-lead-calibration: original installer, desktop DOS path, sound setup and natural return; see ' + INSTALL_PLANS},
+            'steps': steps}
+
+
+def acceptance_cases(titles, root=ROOT):
     cases = [acceptance_case(t) for t in titles]
     for title in titles:
         if title['lan'] is not None:
@@ -394,44 +477,74 @@ def acceptance_cases(titles):
                           'title': title['name'] + ' two-guest IPX host/join',
                           'expected': {'evidence_kind': 'acceptance'},
                           'guests': [acceptance_case(title, role) for role in ('host', 'join')]})
+    plans = installation_plans(root)
+    cases += [installation_case(t, plans[t['id']]) for t in titles]
     return cases
 
 
-def main(argv=None):
+def write_cases(path, titles, root=ROOT):
+    """Replace generated objects in place; preserve other cases and formatting."""
+    source = Path(path).read_text()
+    suite = json.loads(source)
+    generated = {c['id']: c for c in acceptance_cases(titles, root)}
+    decoder = json.JSONDecoder()
+    match = re.search(r'"cases"\s*:\s*\[', source)
+    require(match is not None, 'suite cases array')
+    at, edits = match.end(), []
+    for case in suite['cases']:
+        while source[at].isspace() or source[at] == ',':
+            at += 1
+        value, end = decoder.raw_decode(source, at)
+        require(value == case, 'suite case boundary')
+        replacement = generated.pop(case['id'], None)
+        if replacement is not None and value != replacement:
+            rendered = json.dumps(replacement, indent=1).replace('\n', '\n  ')
+            edits.append((at, end, rendered))
+        at = end
+    if generated:
+        rendered = ',\n'.join('  ' + json.dumps(c, indent=1).replace('\n', '\n  ') for c in generated.values())
+        edits.append((at, at, (',\n' if suite['cases'] else '\n') + rendered))
+    for start, end, value in reversed(edits):
+        source = source[:start] + value + source[end:]
+    Path(path).write_text(source)
+
+
+def main(argv=None, root=ROOT):
     ap = argparse.ArgumentParser(description=__doc__)
-    ap.add_argument('action', choices=('validate', 'fetch', 'pin-installed', 'write-cases'))
+    ap.add_argument('action', choices=('validate', 'fetch', 'extract', 'pin-installed', 'compare-installed', 'write-cases'))
     ap.add_argument('--title'); ap.add_argument('--lead-pin', action='store_true')
+    ap.add_argument('--archive-dir', type=Path, help='read-only pinned input cache for extract/compare-installed')
     ap.add_argument('--require-pins', action='store_true')
     args = ap.parse_args(argv)
-    titles, pins = load()
+    root = Path(root)
+    require(args.archive_dir is None or args.action in ('extract', 'compare-installed'), '--archive-dir is only for extract/compare-installed')
+    titles, pins = load(root)
     if args.action == 'write-cases':
-        path = ROOT / 'tests/suites/acc-t23.json'
-        suite = json.loads(path.read_text())
-        suite['cases'] = [c for c in suite['cases'] if 'dos_game' not in c and not c['id'].startswith('acc-ipx-')] + acceptance_cases(titles)
-        path.write_text(json.dumps(suite, indent=1) + '\n')
-        print('Wrote twenty single-title cases and their IPX pairs'); return 0
+        path = root / 'tests/suites/acc-t23.json'
+        write_cases(path, titles, root)
+        print('Wrote twenty gameplay cases, IPX pairs and twenty pending original-install/sound cases'); return 0
     if args.action != 'validate':
         require(args.title is not None, 'explicit --title required')
-        title, pin = title_for(args.title)
+        title, pin = title_for(args.title, root)
         if args.action == 'fetch':
-            print(json.dumps(fetch(title, pin, lead_pin=args.lead_pin), indent=2)); return 0
-        directory = ROOT / title['installed']['directory']
-        require(directory.is_dir() and not directory.is_symlink(), 'installed directory required')
-        files = []
-        for path in sorted(directory.rglob('*')):
-            require(not path.is_symlink(), 'installed symlink')
-            if path.is_file():
-                files.append({'path': path.relative_to(directory).as_posix(), 'size': path.stat().st_size, 'sha256': dos_fixtures.sha(path)})
+            print(json.dumps(fetch(title, pin, root, lead_pin=args.lead_pin), indent=2)); return 0
+        if args.action in ('extract', 'compare-installed'):
+            plan = installation_plans(root)[title['id']]
+            action = dos_game_extract.extract if args.action == 'extract' else dos_game_extract.compare_installed
+            result = action(title, pin, plan, root, args.archive_dir)
+            print(json.dumps(result, indent=2))
+            return 1 if result.get('status') == 'FAIL' else 0
+        files = dos_game_extract.scan_installed(title, root)
         validate_files(files)
         require(any(f['path'] == title['executable'] for f in files), 'executable missing')
         title['installed']['files'] = files
         data = {'schema_version': 1, 'titles': [title if t['id'] == title['id'] else t for t in titles]}
-        (ROOT / CATALOG).write_text(json.dumps(data, indent=2) + '\n')
+        (root / CATALOG).write_text(json.dumps(data, indent=2) + '\n')
         print('Pinned installed tree:', title['id'], len(files)); return 0
     if args.require_pins:
         for title in titles:
             pin = next(p for p in pins['titles'] if p['id'] == title['id'])
-            payload(title, pin)
+            payload(title, pin, root)
     print('PASS: twenty title definitions; %d lead-pins, %d installed trees pending' %
           (sum(p['status'] == 'lead-pins' for p in pins['titles']), sum(not t['installed']['files'] for t in titles)))
     return 0

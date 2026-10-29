@@ -110,3 +110,7 @@ so the relay is UI_STATE command 1 and LOGON's idempotent SECURE_ENTER
   desktop's start to its first composed frame; the desktop records
   `session_ready` in its startup stages and LOGON logs `start_ms`. Hardware
   timing on the Pentium III is lead evidence.
+
+  K8-8 in [the lead decisions](../directives/sec-lead-decisions.md) supersedes
+  this deadline with 30,000 ms; the first-frame readiness condition and
+  `start_ms` measurement stay the same.

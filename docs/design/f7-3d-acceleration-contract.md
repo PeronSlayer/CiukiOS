@@ -1001,3 +1001,135 @@ for speculative writes.
 F7-00 is complete when this source-backed contract and its handoff report are
 available. Lead cross-review/integration, production implementation, canonical
 builds, QEMU and physical T23 performance evidence remain subsequent work.
+
+
+## 10. ATI Radeon R100/R200 family (f7-24)
+
+The `radeon2d` descriptor nominates the R100/R200 backend as
+`R3D_UNQUALIFIED`: hardware admission requires the boot minimum, full-size and
+precision probes. R300/R4xx devices matched by the 2D driver remain in
+software. Submission uses the bounded MMIO register FIFO with CP disabled,
+claimed offscreen VRAM and state restoration; no DMA or firmware activation
+is introduced. See [the Radeon family design](f7-family-ati-radeon.md) for
+PCI IDs, source hashes, register citations, supported state and gates.
+
+The independent Radeon host decoder and H1 GL replay establish model
+behavior only. They provide no silicon qualification, T23 evidence, or
+Savage format/scanout qualification for this family. Integration 8's Savage
+implementation, precision checkpoints, RGB565/D24 tests and T23 lease fixture
+remain authoritative and unchanged in the default host build.
+
+## 11. Matrox G family integration (f7-25, integration 8)
+
+The Matrox descriptor is `R3D_UNQUALIFIED` until its per-boot qualification
+succeeds. The family implementation and its independent MMIO model are
+specified in [Matrox G family](f7-family-matrox-g.md). G200 has one texture
+unit; G400/G450/G550 have two. Unsupported state and failed qualification
+retain whole-context software fallback. Host model results do not qualify
+physical silicon.
+
+Integration 8 remains the reference for the Savage engine, precision header,
+GL fixtures and universal `render3d.h`. Matrox retains its separate
+`matrox/matrox3d_precision.h` envelope with disabled-stage checks for G200; Savage
+continues to use its unchanged, budget-aware family header. The default
+Win32 GL host build still uses the integration 8 Savage engine. The Matrox
+H1 fixture selects its own engine and backend through the shared
+`KERNEL_FAMILIES` table and `GL_KERNEL_FAMILY_MATROX`; T23-specific lease replay remains
+exclusive to the default Savage fixture.
+
+Source checks: Mesa 7.11.2 `mga_xmesa.c:504-515` selects one versus two
+texture units; Linux v6.1 `mga_drv.h:377-382,675-683` defines the engine-idle
+mask/test; X.Org 2.0.0 `mga_reg.h:544,561,609-610` agrees on texture-control
+and dual-stage register addresses. Primary distributions:
+[Mesa 7.11.2](https://archive.mesa3d.org/older-versions/7.x/7.11.2/),
+[Linux v6.1 mga](https://github.com/torvalds/linux/tree/v6.1/drivers/gpu/drm/mga),
+[X.Org mga 2.0.0](https://www.x.org/releases/individual/driver/xf86-video-mga-2.0.0.tar.gz).
+The pinned local source hashes and register-level decisions remain in the
+family design. This merge changes no register programming or public ABI.
+
+Round 1 of [f7-unify](../directives/f7-unify.md) keeps those source-backed
+family boundaries in one GL harness table: Savage (default), Radeon and
+Matrox each declare their define, sources, engine entry and replaced units.
+The source ranges above were checked against the pinned primary-source cache
+before resolving the merge; the Mesa and X.Org upstream archive indexes
+were also checked online. No register sequence, precision envelope or
+qualification predicate changes. Matrox format diagnostics use their own
+family name; T23 scanout and lease-flow assertions compile only for Savage.
+
+## 12. ATI Mach64 family integration (f7-27, integration 8)
+
+The [Mach64 family design](f7-family-ati-mach64.md) records the existing
+Rage Pro/Mobility backend, register sources, Q1–Q4 probes and containment
+rules. The descriptor is `R3D_UNQUALIFIED`; only qualification for the
+current device generation can expose capabilities. Host register models
+provide no silicon qualification. CPU MMIO and the claimed local VRAM heap
+remain the only transport and storage; no AGP or bus-master DMA is enabled.
+
+The private backend's optional `whole_context_fallback` policy preserves
+Mach64's AUTO-context latch after a refused state; it defaults to false for
+the other backends. Mach64 synchronizes its attachments during execute and
+has no on-demand `download` hook. Integration 6's reservation, scanout and
+download hooks and the qualified Savage implementation remain intact.
+
+Research recheck: [Mesa 7.11.2](https://archive.mesa3d.org/older-versions/7.x/7.11.2/),
+`mach64_context.c:180–200` and `mach64_tris.c:422–439`, confirms two exposed
+texture stages, one uploaded mip level and two fractional vertex bits.
+Keep the existing mip-filter and quarter-pixel admission refusals. The H1
+replay therefore remains software at 640×480 and 1024×768. No feature claim
+or precision tolerance is widened by this merge.
+
+Round 2 of [f7-unify](../directives/f7-unify.md) selects Mach64 beside Matrox
+in the same `KERNEL_FAMILIES` table and `kernel_engine.c`, using
+`GL_KERNEL_FAMILY_MACH64`. Its H1 test retains UBSan by default and optional
+ASan/LSan; the default Savage and existing Radeon/Matrox builds retain their
+sanitizer policies. Format diagnostics use `GL_MACH64_FORMAT`; T23 lease,
+scanout and lease-reacquisition assertions remain exclusive to Savage.
+
+Source comparison for this harness merge: Mesa `mach64_context.c:181–206`
+retains two units and no mipmapping; FreeBSD release/8.4.0
+[`mach64_dma.c:63–98`](https://cgit.freebsd.org/src/plain/sys/dev/drm/mach64_dma.c?h=release/8.4.0)
+and X.Org 6.9.6 `atimach64io.h:201–207` retain FIFO/idle rules. The
+[X.Org release index](https://xorg.freedesktop.org/archive/individual/driver/)
+provides the pinned mach64 6.9.6 archive. The owner-provided Resource Kit,
+chapter 30 `wrkc30_3.htm:426–436`, distinguishes local VRAM from AGP/GART
+heaps; this integration keeps the family's local-only allocation policy.
+No register programming or public ABI changes are introduced by the harness.
+
+## 13. VMware SVGA3D family integration (f7-31, integration 8)
+
+Research and repository comparison: 2026-10-28 (`date` checked). The
+[f7-31 family design](f7-family-vmware-svga3d.md) records the pinned protocol,
+capability gates, command/state citations, memory plan and Q1–Q4 model evidence.
+The VMware descriptor is `R3D_UNQUALIFIED`; registration alone admits no
+hardware features. The existing NVIDIA software-only decision stays in force.
+
+Linux v6.1 [`vmw_supports_3d`, lines 35–80](https://raw.githubusercontent.com/torvalds/linux/v6.1/drivers/gpu/drm/vmwgfx/vmwgfx_cmd.c)
+requires `SVGA_CAP_3D` and checks legacy FIFO hardware version or GB devcaps.
+Mesa 21.3.9 [`SVGA3D_FIFOReserve`, lines 107–128](https://gitlab.freedesktop.org/mesa/mesa/-/raw/mesa-21.3.9/src/gallium/drivers/svga/svga_cmd.c)
+encodes a command id and payload size before the body. VirtualBox commit
+`b6bea72111fcff48f31c57c9f66365b1d3301bb9`
+[`DevVGA-SVGA3d-ogl.cpp`, lines 1526–1527 and 5687–5697](https://raw.githubusercontent.com/VirtualBox/virtualbox/b6bea72111fcff48f31c57c9f66365b1d3301bb9/src/VBox/Devices/Graphics/DevVGA-SVGA3d-ogl.cpp)
+leaves TEXTURE_OPS empty and ignores colour/alpha combiner state. The pinned
+local copies were checked for these facts; raw online fetches failed in this
+sandbox. [Mesa's official SVGA3D documentation](https://docs.mesa3d.org/drivers/svga3d.html)
+was accessible online and confirms that the guest driver uses the host GPU.
+
+Decision: preserve integration 8's Savage engine, backend lifecycle hooks,
+native fullscreen lease checks and TinyGL-only GL host link. Reuse the
+existing Mach64 whole-context refusal hook for VMware; retain its original
+field position and submission order, without duplicate fields or code.
+Select VMware's host engine and three H1 scenarios only behind
+`GL_KERNEL_FAMILY_VMWARE` through the shared `KERNEL_FAMILIES` table and
+`kernel_engine.c`. Its `vmwaresvga` and `vmwaresvga-vbox` rows select the
+VMware and legacy VirtualBox OpenGL model semantics respectively. Both
+keep UBSan by default, with the existing optional ASan/LSan policy; all
+other family calls and sanitizer defaults stay unchanged.
+The VMware model uses the copied presentation path; it does not claim the
+Savage-specific direct-scanout or mode-reacquisition evidence. No hypervisor
+qualification follows from these host tests.
+
+Round 3 of [f7-unify](../directives/f7-unify.md) rechecked the pinned Linux,
+Mesa and VirtualBox ranges above before resolving the family merge.
+The shared service and header stay identical to integration 8; each
+family retains its tests, capability gates and refusal policy. Source
+research and host-only results are recorded in the round 3 report.

@@ -10,7 +10,7 @@
 #define BAK "accounts.db.bak"
 #define TXN "accounts.db.txn"
 #define INTENT_MAX (192u + ACCT_OWNER_BODY_MAX + ACCT_FILE_MAX)
-struct workspace {
+struct acct_store_workspace {
     uint8_t intent[INTENT_MAX], bytes[ACCT_FILE_MAX];
     uint8_t current_bytes[ACCT_FILE_MAX];
     size_t intent_bytes, db_bytes;
@@ -31,13 +31,25 @@ static int durable(struct acct_store *s, const char *p, const void *v, size_t n)
     if(!e) e=s->io.barrier(s->io.ctx);
     return e;
 }
-static struct workspace *alloc(struct acct_store *s)
+static struct acct_store_workspace *alloc(struct acct_store *s)
 {
-    struct workspace *w=s->kernel.allocate(s->kernel.ctx,sizeof(*w));
+    struct acct_store_workspace *w=s->kernel.allocate(s->kernel.ctx,sizeof(*w));
     if(w) memset(w,0,sizeof(*w)); return w;
 }
-static int finish(struct acct_store *s, struct workspace *w, int e)
+static int finish(struct acct_store *s, struct acct_store_workspace *w, int e)
 { acct_wipe(w,sizeof(*w)); s->kernel.deallocate(s->kernel.ctx,w,sizeof(*w)); return e; }
+void acct_store_close(struct acct_store *s)
+{
+    if(s->pending_intent) {
+        finish(s,s->pending_intent,0);
+        s->pending_intent=NULL;
+    }
+}
+/* A refusal can occur before any bytes reach TXN. Retain the exact sealed
+ * output, not just its reservation, including after a partial write/flush.
+ * The serialized service retries these identical bytes before orphan recovery. */
+static int persist_intent(struct acct_store *s, struct acct_store_workspace *w)
+{ return acct_boot_result(s,ACCT_BOOT_INTENT,durable(s,TXN,w->intent,w->intent_bytes)); }
 static int read_db(struct acct_store *s, const char *p, uint8_t *bytes, struct acct_db *d, size_t *n)
 {
     int e=s->io.read(s->io.ctx,p,bytes,ACCT_FILE_MAX,n);
@@ -77,7 +89,10 @@ static int bindings(struct acct_store *s, const struct acct_db *d)
     for(unsigned i=0;i<d->count;++i) {
         char root[64]={0}; struct acct_owner_binding b={0};
         int e=s->owner.binding(s->owner.ctx,s->volume,d->records[i].uid,root,&b);
-        if(e || !b.key || !b.generation || b.volume!=s->volume ||
+        /* ENOENT here is a missing committed binding, never the unpublished
+         * store sentinel consumed by service open. Only EAGAIN is transient. */
+        if(e) return acct_boot_result(s,ACCT_BOOT_BINDING,e==-EAGAIN?e:-EIO);
+        if(!b.key || !b.generation || b.volume!=s->volume ||
             b.uid!=d->records[i].uid || b.action==ACCT_OWNER_RETIRE || !acct_profile_root_valid(root)) return -EIO;
     }
     return 0;
@@ -86,7 +101,7 @@ int acct_owner_requests(struct acct_store *s, const struct acct_db *d, struct ac
 {
     if(!s || !d || !q || !count || d->count<2 || d->count>ACCT_MAX) return -EINVAL;
     memset(q,0,sizeof(*q)); q->volume=s->volume; q->transaction=d->generation;
-    memcpy(q->sid,d->sid,12); int e=s->owner.generation(s->owner.ctx,&q->expected_generation);
+    memcpy(q->sid,d->sid,12); int e=acct_boot_result(s,ACCT_BOOT_GENERATION,s->owner.generation(s->owner.ctx,&q->expected_generation));
     for(unsigned i=0;!e && i<d->count;++i) {
         struct acct_owner_binding *b=&q->bindings[q->count++]; b->uid=d->records[i].uid; b->volume=s->volume;
         e=s->owner.binding(s->owner.ctx,s->volume,b->uid,b->root,b);
@@ -94,10 +109,11 @@ int acct_owner_requests(struct acct_store *s, const struct acct_db *d, struct ac
             memset(b,0,sizeof(*b)); b->uid=d->records[i].uid; b->volume=s->volume; b->action=ACCT_OWNER_CREATE;
             snprintf(b->root,64,"/Windows/Profiles/u%08x",b->uid); e=0;
         } else if(!e) { b->action=ACCT_OWNER_KEEP; b->locator=0; }
+        if(e) acct_boot_result(s,ACCT_BOOT_BINDING,e);
     }
     *count=e?0:1; return e;
 }
-static int marker(struct acct_store *s, struct workspace *w, const char *name, int create)
+static int marker(struct acct_store *s, struct acct_store_workspace *w, const char *name, int create)
 {
     uint8_t p[96]={0}, found[97]; size_t n;
     memcpy(p,"CIUKIPHS",8); w64(p+8,w->q.transaction); memcpy(p+16,w->q.digest,32);
@@ -132,8 +148,8 @@ int acct_boot_identity(struct acct_store *s, struct acct_db *d, int create)
         if(s->io.read(s->io.ctx,"machine.sid",existing,sizeof(existing),&m)!=-ENOENT) return -EIO;
         if(!create) return -ENOENT;
         memset(p,0,128); memcpy(p,"CIUKISPR",8); w32(p+8,b.origin); w64(p+16,s->volume); memcpy(p+40,b.seed_digest,32);
-        e=s->kernel.entropy(s->kernel.ctx,p+24,12); if(e) return e;
-        if(azero(p+24,12)) return -EAGAIN;
+        e=acct_boot_result(s,ACCT_BOOT_ENTROPY_SID,s->kernel.entropy(s->kernel.ctx,p+24,12)); if(e) return e;
+        if(azero(p+24,12)) return acct_boot_result(s,ACCT_BOOT_ENTROPY_SID,-EAGAIN);
         sha256(p,96,p+96); e=durable(s,"bootstrap.sid",p,128); if(e) return e;
     } else {
         if(e || n!=128 || memcmp(p,"CIUKISPR",8) || a32(p+8)!=b.origin || a32(p+12) ||
@@ -144,7 +160,7 @@ int acct_boot_identity(struct acct_store *s, struct acct_db *d, int create)
     e=sid_copy(s,d,create);
     return !create && e==-ENOENT?0:e;
 }
-static int advance_boot(struct acct_store *s, struct workspace *w, unsigned state)
+static int advance_boot(struct acct_store *s, struct acct_store_workspace *w, unsigned state)
 {
     struct acct_bootstrap b; int e=acct_boot_read(s,&b); if(e) return e;
     if(b.origin!=w->next.origin || (b.state>1 && memcmp(b.sid,w->next.sid,12))) return -EIO;
@@ -174,7 +190,7 @@ static int advance_boot(struct acct_store *s, struct workspace *w, unsigned stat
     }
     return e;
 }
-static int cleanup(struct acct_store *s, const struct workspace *w)
+static int cleanup(struct acct_store *s, const struct acct_store_workspace *w)
 {
     static const char *const names[]={BAK,NEW,"acct.prepared","acct.commit","acct.owner","acct.done","acct.abort"};
     int e=0; for(unsigned i=0;!e && i<sizeof(names)/sizeof(*names);++i) e=rm(s,names[i]);
@@ -183,7 +199,7 @@ static int cleanup(struct acct_store *s, const struct workspace *w)
     char path[128]; snprintf(path,sizeof(path),"/System/Security/Staging/g%016llx/manifest",(unsigned long long)w->q.transaction);
     if(!e) e=rm(s,path); if(!e) e=s->io.barrier(s->io.ctx); return e;
 }
-static int decode_intent(struct acct_store *s, struct workspace *w)
+static int decode_intent(struct acct_store *s, struct acct_store_workspace *w)
 {
     uint8_t *p=w->intent; unsigned op;
     if(w->intent_bytes<192 || memcmp(p,"CIACTXN3",8) || a32(p+8)!=w->intent_bytes ||
@@ -197,7 +213,7 @@ static int decode_intent(struct acct_store *s, struct workspace *w)
     sha256(w->bytes,w->db_bytes,sum);
     return acct_equal_secret(sum,w->q.target_digest,32)?0:-EIO;
 }
-static int run_intent(struct acct_store *s, struct workspace *w)
+static int run_intent(struct acct_store *s, struct acct_store_workspace *w)
 {
     int e=watermarks(s,w->next.sid,0,0,0);
     if(e || s->high_generation<w->next.generation || s->high_uid<w->next.next_uid) return -EIO;
@@ -224,7 +240,7 @@ static int run_intent(struct acct_store *s, struct workspace *w)
     if(!visible_error && w->current.generation==w->q.transaction &&
         (w->r.state==ACCT_OWNER_NONE || w->r.state==ACCT_OWNER_ABORTED ||
          (w->r.state==ACCT_OWNER_PENDING && irrevocable==-ENOENT))) return -EIO;
-    e=s->owner.validate_stage(s->owner.ctx,&w->q); if(e) return e;
+    e=acct_boot_result(s,ACCT_BOOT_VALIDATE_STAGE,s->owner.validate_stage(s->owner.ctx,&w->q)); if(e) return e;
     if(w->r.state==ACCT_OWNER_NONE) return -EIO;
     if(w->r.state==ACCT_OWNER_RESERVED) {
         e=acct_owner_call(s,ACCT_OWNER_PREPARE,&w->q,&w->r); if(e) return e;
@@ -272,9 +288,10 @@ static int run_intent(struct acct_store *s, struct workspace *w)
 int acct_store_commit(struct acct_store *s, const struct acct_db *old, const struct acct_db *next,
                       const struct acct_owner_request *given, unsigned count)
 {
+    if(s->pending_intent) return -EBUSY;
     if(count>1 || !next || (old && (next->generation<=old->generation || next->next_uid<old->next_uid ||
         memcmp(old->sid,next->sid,12) || old->origin!=next->origin || (old->flags&4 && !(next->flags&4))))) return -EINVAL;
-    struct workspace *w=alloc(s); if(!w) return -ENOMEM;
+    struct acct_store_workspace *w=alloc(s); if(!w) return -ENOMEM;
     int e=acct_encode(next,0,w->bytes,sizeof(w->bytes),&w->db_bytes); size_t n;
     uint8_t probe[1];
     if(!e) { int found=s->io.read(s->io.ctx,TXN,probe,1,&n); if(found!=-ENOENT) e=-EBUSY; }
@@ -291,7 +308,7 @@ int acct_store_commit(struct acct_store *s, const struct acct_db *old, const str
     if(!e && old) e=acct_owner_checkpoint(s,old,0);
     if(!e) {
         unsigned c; if(given && count) w->q=*given; else e=acct_owner_requests(s,next,&w->q,&c);
-        if(w->q.count>32 || !w->q.count) e=-EINVAL;
+        if(!e && (w->q.count>32 || !w->q.count)) e=-EINVAL;
         w->q.expected_accounts_generation=old?old->generation:0;
         /* Retired roots remain in the owner store and are never reassigned. */
         if(old) for(unsigned i=0;!e && i<old->count;++i) {
@@ -305,8 +322,8 @@ int acct_store_commit(struct acct_store *s, const struct acct_db *old, const str
             struct acct_owner_binding b=w->q.bindings[i]; unsigned j=i;
             while(j && w->q.bindings[j-1].uid>b.uid) { w->q.bindings[j]=w->q.bindings[j-1]; --j; } w->q.bindings[j]=b;
         }
-        if(w->q.count>32 || w->q.volume!=s->volume || w->q.transaction!=next->generation ||
-            memcmp(w->q.sid,next->sid,12)) e=-EINVAL;
+        if(!e && (w->q.count>32 || w->q.volume!=s->volume || w->q.transaction!=next->generation ||
+            memcmp(w->q.sid,next->sid,12))) e=-EINVAL;
         for(unsigned i=0;!e && i<next->count;++i) {
             unsigned found=0;
             for(unsigned j=0;j<w->q.count;++j)
@@ -323,10 +340,10 @@ int acct_store_commit(struct acct_store *s, const struct acct_db *old, const str
     }
     if(!e) {
         uint8_t *manifest=w->manifest; size_t mn=0; char path[128];
-        e=s->owner.stage(s->owner.ctx,&w->q,manifest,ACCT_MANIFEST_MAX,&mn);
+        e=acct_boot_result(s,ACCT_BOOT_STAGE,s->owner.stage(s->owner.ctx,&w->q,manifest,ACCT_MANIFEST_MAX,&mn));
         if(!e) e=acct_manifest_validate(&w->q,manifest,mn);
         for(unsigned i=0;!e && i<w->q.count;++i) {
-            uint8_t actual_tree[32]; e=s->owner.tree_digest(s->owner.ctx,w->q.transaction,w->q.bindings[i].uid,actual_tree);
+            uint8_t actual_tree[32]; e=acct_boot_result(s,ACCT_BOOT_TREE_DIGEST,s->owner.tree_digest(s->owner.ctx,w->q.transaction,w->q.bindings[i].uid,actual_tree));
             if(!e && memcmp(actual_tree,manifest+64+256*i+208,32)) e=-EIO;
             unsigned legacy=0;
             for(unsigned j=0;j<next->count;++j) if(next->records[j].uid==w->q.bindings[i].uid) legacy=next->records[j].legacy_id;
@@ -350,7 +367,10 @@ int acct_store_commit(struct acct_store *s, const struct acct_db *old, const str
         }
     }
     if(!e) e=acct_owner_call(s,ACCT_OWNER_RESERVE,&w->q,&w->r);
-    if(!e) e=durable(s,TXN,w->intent,w->intent_bytes);
+    if(!e) {
+        e=persist_intent(s,w);
+        if(e==-EAGAIN) { s->pending_intent=w; return e; }
+    }
     if(!e) { w->next=*next; e=run_intent(s,w); }
     return finish(s,w,e);
 }
@@ -358,7 +378,7 @@ int acct_store_bootstrap(struct acct_store *s, struct acct_db *d)
 {
     struct acct_bootstrap b; int e=acct_boot_read(s,&b); if(e) return e;
     if(!d || b.state!=ACCT_UNPROVISIONED || b.origin!=d->origin || b.volume!=s->volume) return -EIO;
-    struct workspace *w=alloc(s); if(!w) return -ENOMEM;
+    struct acct_store_workspace *w=alloc(s); if(!w) return -ENOMEM;
     uint8_t digest[32]; size_t n;
     e=s->io.read(s->io.ctx,"provision.seed",w->seed,ACCT_FILE_MAX,&n);
     if(!e) e=acct_decode(&w->recipe,1,w->seed,n);
@@ -373,8 +393,14 @@ int acct_store_bootstrap(struct acct_store *s, struct acct_db *d)
 }
 int acct_store_recover(struct acct_store *s, struct acct_db *d)
 {
+    if(s->pending_intent) {
+        int e=persist_intent(s,s->pending_intent);
+        if(e==-EAGAIN) return e;
+        acct_store_close(s);
+        if(e) return e;
+    }
     int local=acct_store_local_recover(s); if(local) return local;
-    struct workspace *w=alloc(s); if(!w) return -ENOMEM;
+    struct acct_store_workspace *w=alloc(s); if(!w) return -ENOMEM;
     struct acct_bootstrap b; int e=acct_boot_read(s,&b);
     if(e==-ENOENT) e=-EIO; /* missing evidence never authorizes a fresh recipe */
     if(e) return finish(s,w,e);
@@ -385,7 +411,7 @@ int acct_store_recover(struct acct_store *s, struct acct_db *d)
         if(e) return finish(s,w,e);
         e=acct_boot_read(s,&b); if(e) return finish(s,w,e);
     } else if(e!=-ENOENT) return finish(s,w,e);
-    e=s->owner.recover_orphans(s->owner.ctx,s->volume,0); if(e) return finish(s,w,e);
+    e=acct_boot_result(s,ACCT_BOOT_ORPHANS,s->owner.recover_orphans(s->owner.ctx,s->volume,0)); if(e) return finish(s,w,e);
     size_t n; e=read_db(s,DB,w->bytes,&w->next,&n);
     if(b.state==ACCT_UNPROVISIONED) {
         if(e!=-ENOENT) return finish(s,w,-EIO);
@@ -417,7 +443,7 @@ int acct_store_recover(struct acct_store *s, struct acct_db *d)
             if(identity || watermarks(s,w->recipe.sid,0,0,0) || !s->high_generation) e=-EIO;
         }
         /* end sec-user-02 */
-        if(!e) e=s->owner.generation(s->owner.ctx,&owner_g);
+        if(!e) e=acct_boot_result(s,ACCT_BOOT_GENERATION,s->owner.generation(s->owner.ctx,&owner_g));
         if(!e && owner_g) e=-EIO;
         return finish(s,w,e?(e==-ENOENT?-EIO:e):-ENOENT);
     }
@@ -440,7 +466,7 @@ int acct_store_reserve_generation(struct acct_store *s, const uint32_t sid[3], u
 { return watermarks(s,sid,1,g,uid); }
 /* Ownership-neutral changes have a complete local COMMIT_REQUIRED intent. The
  * owner checkpoint/bindings are checked, but no OWNER receipt is allocated. */
-static int local_run(struct acct_store *s, struct workspace *w)
+static int local_run(struct acct_store *s, struct acct_store_workspace *w)
 {
     if(w->intent_bytes<64 || w->intent_bytes>64+ACCT_FILE_MAX || memcmp(w->intent,"CIACTLC4",8) ||
         a32(w->intent+8)!=w->intent_bytes || a32(w->intent+12)) return -EIO;
@@ -480,7 +506,7 @@ static int local_run(struct acct_store *s, struct workspace *w)
 }
 int acct_store_local_recover(struct acct_store *s)
 {
-    struct workspace *w=alloc(s); if(!w) return -ENOMEM;
+    struct acct_store_workspace *w=alloc(s); if(!w) return -ENOMEM;
     uint64_t seq=0; int e=acct_blob_read(s,"accounts.local",w->intent,sizeof(w->intent),&w->intent_bytes,&seq);
     if(!e) e=local_run(s,w); else if(e==-ENOENT) e=0;
     return finish(s,w,e);
@@ -490,7 +516,7 @@ int acct_store_local_commit(struct acct_store *s, const struct acct_db *old, con
     if(!old || !next || next->count!=old->count || memcmp(next->sid,old->sid,12) ||
         next->origin!=old->origin || (old->flags&~next->flags) || next->next_uid<old->next_uid) return -EINVAL;
     for(unsigned i=0;i<old->count;++i) if(old->records[i].uid!=next->records[i].uid) return -EINVAL;
-    struct workspace *w=alloc(s); if(!w) return -ENOMEM;
+    struct acct_store_workspace *w=alloc(s); if(!w) return -ENOMEM;
     int e=acct_encode(next,0,w->bytes,sizeof(w->bytes),&w->db_bytes);
     size_t n=0; if(!e) e=read_db(s,DB,w->current_bytes,&w->current,&n);
     if(!e && w->current.generation!=old->generation) e=-EAGAIN;

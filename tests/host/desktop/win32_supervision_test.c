@@ -9,7 +9,8 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-/* The host socket header declares its own SOCK_RAW enum member. */
+/* Drop native socket macros before glibc enum declarations. */
+#include "host_socket_undef.h"
 #undef SOCK_RAW
 #undef MSG_TRUNC
 #undef MSG_PEEK

@@ -31,7 +31,14 @@ FILE, SYSTEM, PROCESS = 0x109, 0x10a, 0x10b
 OBJECT, WAIT = 0x100, 0x101
 
 
-def build_bridge(out):
+# fx-hlrun: the Liberation faces gdi32 loads as its system fonts.
+FONTS = ROOT / 'assets/fonts/liberation'
+
+
+def build_bridge(out, fonts=False):
+    """The fixture w32srv library. With fonts, the production font service
+    (apps/w32srv/fonts.c, libfont, FreeType) answers gdi32's glyph requests,
+    so windows render their text (Services(fonts=True) stages the faces)."""
     out = Path(out)
     out.mkdir(parents=True, exist_ok=True)
     sources = [ROOT / 'apps/w32srv' / (n + '.c') for n in
@@ -39,8 +46,20 @@ def build_bridge(out):
     sources += [ROOT / 'apps/desktop/installer_registry.c', ROOT / 'apps/desktop/protocol.c', HERE / 'service_bridge.c']
     flags = ['clang', '-std=c17', '-O1', '-g', '-Wall', '-Wextra', '-Werror',
              '-I' + str(ROOT / 'sdk/win32/include'), '-I' + str(ROOT / 'src/kernel/include')]
-    library = out / 'installer-services.so'
-    subprocess.run([*flags, '-fPIC', '-shared', '-Wl,--no-undefined', *map(str, sources), '-o', str(library)], check=True)
+    extra, link = [], []
+    if fonts:
+        import sys
+        if str(ROOT) not in sys.path:
+            sys.path.insert(0, str(ROOT))
+        from sdk.freetype import build as freetype
+        archive = freetype.build(out / 'freetype', flags=['-O2', '-fPIC'])
+        extra = ['-DH1_FONTS', '-D_GNU_SOURCE', '-idirafter', str(ROOT / 'sdk/sysroot-overlay/include'),
+                 *freetype.includes()]
+        sources += [ROOT / 'apps/w32srv/fonts.c', ROOT / 'sdk/libfont/font.c']
+        link = [str(archive), '-lm']
+    library = out / ('installer-services-fonts.so' if fonts else 'installer-services.so')
+    subprocess.run([*flags, *extra, '-fPIC', '-shared', '-Wl,--no-undefined', *map(str, sources), *link,
+                    '-o', str(library)], check=True)
     return library, flags, sources
 
 
@@ -127,6 +146,44 @@ class Handle:
     flags: int = 0
 
 
+# fx-hlis5: FAT 8.3 aliases (Microsoft FAT32 File System Specification 1.03,
+# "The Basis-Name Generation Algorithm" and "The Numeric-Tail Generation
+# Algorithm"), which the kernel's GetShortPathName returns for long names
+# (src/kernel/proc/win32/files.c W32_F_FULLPATH flags 1, px_node alias).
+SHORT_CHARS = set("ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789$%'-_@~`!(){}^#&")
+
+
+def short_aliases(names):
+    """{name: 8.3 spelling} for one directory: a valid 8.3 name is its own
+    spelling; a long name gets BASIS~N.EXT with the first numeric tail not
+    already taken, the names taken in sorted order."""
+    def valid(part, limit):
+        return 0 < len(part) <= limit and all(c.upper() in SHORT_CHARS for c in part)
+
+    def clean(part):
+        return ''.join(c if c in SHORT_CHARS else '_' for c in part.upper().replace(' ', '').replace('.', ''))
+    result, taken = {}, set()
+    ordered = sorted(names, key=str.casefold)
+    for name in ordered:
+        stem, dot, ext = name.rpartition('.') if '.' in name.lstrip('.') else (name, '', '')
+        if valid(stem, 8) and (not dot or valid(ext, 3)):
+            result[name] = name
+            taken.add(name.casefold())
+    for name in ordered:
+        if name in result:
+            continue
+        stem, dot, ext = name.rpartition('.') if '.' in name.lstrip('.') else (name, '', '')
+        basis, extension = clean(stem.lstrip('.')) or '_', clean(ext)[:3]
+        for tail in range(1, 1000000):
+            suffix = '~%d' % tail
+            alias = basis[:8 - len(suffix)] + suffix + ('.' + extension if extension else '')
+            if alias.casefold() not in taken:
+                break
+        result[name] = alias
+        taken.add(alias.casefold())
+    return result
+
+
 def winerror(error):
     return {errno.ENOENT: 2, errno.ENOTDIR: 3, errno.EACCES: 5, errno.EPERM: 5,
             errno.EBADF: 6, errno.EEXIST: 183, errno.ENOSPC: 112,
@@ -181,13 +238,23 @@ def send(sock, raw):
 
 
 class Services:
-    def __init__(self, root, library, program=None):
+    def __init__(self, root, library, program=None, fonts=False):
         self.root = Path(root).resolve()
         self.program = program
         for name in ('C/WINDOWS/TEMP', 'C/WINDOWS/SYSTEM', 'C/WINDOWS/SYSTEM32',
                      'C/WINDOWS/Desktop', 'C/WINDOWS/Start Menu/Programs',
                      'C/Program Files', 'C/System/Win32/Fixtures', 'D', 'hives'):
             (self.root / name).mkdir(parents=True, exist_ok=True)
+        if fonts:
+            # fx-hlrun: as the image stages them, the pinned system faces
+            # in C:\WINDOWS\FONTS for gdi32 (a library built with
+            # build_bridge(fonts=True) rasterises them from FONTS).
+            (self.root / 'C/WINDOWS/FONTS').mkdir(parents=True, exist_ok=True)
+            for face in FONTS.glob('*.ttf'):
+                target = self.root / 'C/WINDOWS/FONTS' / face.name
+                if not target.is_file():
+                    shutil.copyfile(face, target)
+            os.environ['CIUKI_H1_FONTS'] = str(FONTS)
         self.registry = Registry(library, self.root)
         self.sessions, self.children, self.failures, self.trace = [], [], [], []
         self.named = {}
@@ -197,6 +264,8 @@ class Services:
         self.disk_full = False
         self.wait_timeout_once = False
         self.request_timeout = REQUEST_TIMEOUT
+        self.spawning = threading.local()   # fx-hlis5: STARTUPINFO of the spawn in progress
+        self.environment = None             # fx-hlis5: session environment block, None: fixed
 
     def session(self, cwd='C:\\WINDOWS\\TEMP'):
         with self.lock:
@@ -232,6 +301,7 @@ class Services:
         with self.lock:
             session.pid = process.pid
             session.image = label  # the parent image directory of its own spawns
+            session.startup = getattr(getattr(self, 'spawning', None), 'startup', None)
         worker = threading.Thread(target=session.serve, args=(parent,), daemon=True)
         result = Child(process, worker, log, session)
         with self.lock:
@@ -403,6 +473,25 @@ class Session:
                 continue
         return image
 
+    def short_path(self, full):
+        """GetShortPathName of an existing path: each component in its 8.3
+        spelling, no trailing separator (the kernel walks the resolved
+        nodes, src/kernel/proc/win32/files.c W32_F_FULLPATH)."""
+        parts = [x for x in full[3:].split('\\') if x]
+        spelled = full[:3]
+        for i, part in enumerate(parts):
+            directory = self.path(spelled)
+            if not directory.is_dir():
+                raise FileNotFoundError(errno.ENOENT, 'short path')
+            names = [p.name for p in directory.iterdir()]
+            match = [n for n in names if n.casefold() == part.casefold()]
+            if not match:
+                match = [n for n, alias in short_aliases(names).items() if alias.casefold() == part.casefold()]
+            if not match:
+                raise FileNotFoundError(errno.ENOENT, 'short path')
+            spelled += ('\\' if i else '') + short_aliases(names)[match[0]]
+        return spelled
+
     def add(self, handle):
         self.next_handle += 4
         self.handles[self.next_handle] = handle
@@ -447,9 +536,15 @@ class Session:
             if not part:
                 continue
             if current.is_dir():
-                matches = [p.name for p in current.iterdir() if p.name.casefold() == part.casefold()]
+                names = [p.name for p in current.iterdir()]
+                matches = [n for n in names if n.casefold() == part.casefold()]
                 if matches:
                     part = matches[0]
+                elif '~' in part:
+                    # fx-hlis5: an 8.3 alias (GetShortPathName) names its long entry.
+                    matches = [n for n, alias in short_aliases(names).items() if alias.casefold() == part.casefold()]
+                    if matches:
+                        part = matches[0]
             current /= part
             if current.is_symlink():
                 raise PermissionError(errno.EACCES, 'symlink outside fixture')
@@ -583,6 +678,10 @@ class Session:
                         if len(out) > cap:
                             raise ValueError('oversized H1 reply')
                     except Exception as error:
+                        # A session the test is ending may be killed between
+                        # two requests (fx-hlrun: a polling wait loop).
+                        if self.terminating and isinstance(error, (BrokenPipeError, ConnectionResetError, EOFError)):
+                            break
                         status, out = (-errno.ETIMEDOUT if isinstance(error, TimeoutError)
                                        else -errno.EINVAL if isinstance(error, (ValueError, struct.error))
                                        else -errno.EIO), b''
@@ -620,6 +719,15 @@ class Session:
             return self.service.registry.exchange(self.pid, raw, cap)
         if kind == 3:  # startup cwd, copied before any PE executes
             return 0, self.cwd.encode() + b'\0'
+        if kind == 4:
+            # fx-hlis5: the creator's STARTUPINFO flags/show and the session
+            # environment (h1_services.c h1_installer_init); none: fixed values.
+            startup = getattr(self, 'startup', None)
+            environment = getattr(self.service, 'environment', None)
+            if not startup and environment is None:
+                return -22, b''
+            flags, show = startup or (0, 0)
+            return 0, struct.pack('<II', flags, show) + (environment or b'')
         if kind != 1 or len(raw) < 16:
             return -22, b''
         version, size, op, reserved = struct.unpack_from('<4I', raw)
@@ -639,7 +747,16 @@ class Session:
                 # Each adapter starts with fresh core DLL error-mode state.
                 if a[10] & ~(0x08000000 | 0x04000000 | 0x200) or a[9]:
                     raise OSError(errno.EINVAL, 'unsupported spawn flags/inheritance')
-                child = self.service.start(self.search(image), command, cwd or self.cwd, a[10])
+                # fx-hlis5: the caller's STARTUPINFO (flags, show) for the
+                # child's parameters; bit 31 marks a supplied record.
+                spawning = getattr(self.service, 'spawning', None)
+                if spawning is not None:
+                    spawning.startup = (a[16] & 0xffff, (a[16] >> 16) & 0x7fff) if a[16] & 0x80000000 else None
+                try:
+                    child = self.service.start(self.search(image), command, cwd or self.cwd, a[10])
+                finally:
+                    if spawning is not None:
+                        spawning.startup = None
                 a[11], a[12] = self.add(Handle(1, child)), self.add(Handle(2, child))
                 a[13], a[14], a[15] = child.process.pid, child.process.pid, 0
             elif op == OBJECT:
@@ -775,7 +892,10 @@ class Session:
             if not p.is_dir(): raise NotADirectoryError(errno.ENOTDIR, 'cwd')
             self.cwd = self.fullpath(name)
         elif action in (15, 16):
-            text = (self.cwd if action == 15 else self.fullpath(name)).encode() + b'\0'
+            full = self.cwd if action == 15 else self.fullpath(name)
+            if action == 16 and a[13] & 1:
+                full = self.short_path(full)
+            text = full.encode() + b'\0'
             a[16] = len(text)
             if len(text) > count: a[17] = 122
             else: output(text)

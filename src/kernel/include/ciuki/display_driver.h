@@ -45,7 +45,7 @@ struct display_selftest_result {
     int first, error;
     bool restored;
 };
-#define DISPLAY_ATTEMPT_FILES 2
+#define DISPLAY_ATTEMPT_FILES 3
 struct render3d_family;
 struct display_driver {
     const char *id, *name;

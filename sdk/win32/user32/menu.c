@@ -1757,6 +1757,26 @@ BOOL u32_menu_info(HMENU h, MENUINFO *i, BOOL set) {
     i->dwMenuData = m->menu_data;
   return 1;
 }
+/* fx-hlrun (MFC's CMenu imports them): the menu's help context identifier,
+ * the same field as MENUINFO dwContextHelpID (Wine 10.0 dlls/user32
+ * menu.c Get/SetMenuContextHelpId through Get/SetMenuInfo). */
+BOOL W32API SetMenuContextHelpId(HMENU h, DWORD id) {
+  U32_GUARD;
+  struct menu *m = menu(h);
+  if (!m)
+    return u32_fail(1401);
+  m->help_id = id;
+  return 1;
+}
+DWORD W32API GetMenuContextHelpId(HMENU h) {
+  U32_GUARD;
+  struct menu *m = menu(h);
+  if (!m) {
+    u32_fail(1401);
+    return 0;
+  }
+  return m->help_id;
+}
 BOOL W32API GetMenuInfo(HMENU h, MENUINFO *i) {
   U32_GUARD;
   return u32_menu_info(h, i, 0);

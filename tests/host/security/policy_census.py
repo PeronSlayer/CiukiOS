@@ -201,7 +201,8 @@ MAP = {
         'CIUKI_SYS_PROC_LIST': (ANY + ' (bounded nonsecret summaries)', PROC + '::proc_list('),
         'CIUKI_SYS_PROC_TERMINATE': ('own uid/session or administrator; PID 1/SYSTEM/desktop group protected', H13N + '::CIUKI_SYS_PROC_TERMINATE'),
         'CIUKI_SYS_DOSVM': ('own session VM: capability, owner key and immutable uid/session (k05)', 'tests/host/dosvm_test.c::CIUKI_DOSVM_'),
-        'CIUKI_SYS_POWER': ('actions: live session or SYSTEM logon; POLICY administrator (k04)', 'tests/host/security/power_policy_test.c::power_record_call'),
+        # sec-k08b K8-7: POLICY is the user's disk timer, not machine settings.
+        'CIUKI_SYS_POWER': ('actions: live session or SYSTEM logon; disk POLICY administrator or live session desktop; machine settings administrator via call99', 'tests/host/security/power_policy_test.c::power_record_call'),
         'CIUKI_SYS_DISPLAY': (GRANT + '; machine defaults administrator', DESK),
         'CIUKI_SYS_LAUNCH_MARK': ('status anyone; markers own-session compositor/child', 'tests/host/proc/launch_test.c::proc_launch_mark'),
         'CIUKI_SYS_DEVICES': (ANY + ' (copied inventory)', 'tests/host/devices_test.c::devices_query'),
@@ -272,6 +273,7 @@ MAP = {
         'CIUKI_SYSTEM_SETTING_PERFORMANCE': (ADMIN, SVC),
         'CIUKI_SYSTEM_SETTING_ACCEL_RETRY': (ADMIN, SVC),
         'CIUKI_SYSTEM_SETTING_CLOCK': (ADMIN + ' (sec-k08, S2-5)', SVC),
+        'CIUKI_SYSTEM_SETTING_IPX_FRAME': (ADMIN, SVC + '::test_settings'),
         'CIUKI_SYSTEM_SETTING_POWER': (ADMIN + ' (sec-k08, U4-6)', SVC),
     },
 }
@@ -363,6 +365,7 @@ MAP['devctl'] = {
     **{n: ('own-session port owner (COM fd, generation)', 'tests/host/com_test.c::' + n) for n in (
         'COM_GET_OWNER', 'COM_GET_STATUS', 'COM_SET_LINE', 'COM_SET_MODEM')},
     'COM_GET_LINE': ('own-session port owner (COM fd, generation)', 'tests/host/dosvm_uart_seams.inc::COM_GET_LINE'),
+    'COM_CLEAR_ERRORS': ('own-session port owner (COM fd, generation)', 'tests/host/win32/hlutils/comm_test.c::COM_CLEAR_ERRORS::ClearCommError'),
     'COM_SET_MOUSE': (ADMIN + ' (machine input binding, k04)', 'tests/host/com_test.c::COM_SET_MOUSE'),
     'DISK_GET_INFO': (ANY + ' (copied geometry)', 'tests/host/libdisk_test.c::DISK_GET_INFO'),
     'DISK_LEASE_STATE': (ANY + ' (bounded lease state)', 'tests/host/proc/disk_test.c::DISK_LEASE_STATE'),

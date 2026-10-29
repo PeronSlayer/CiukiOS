@@ -78,6 +78,7 @@ struct w32_object {
         struct {
             struct file_description *description;
             uint32_t access, share;
+            uint32_t comm_timeouts[5], comm_mask, comm_outputs;
         } file;
         struct ciuki_credential token;
         void *section;

@@ -49,6 +49,7 @@ typedef struct { UINT cbSize; int iContextType, iCtrlId; HANDLE hItemHandle; uin
 #define WS_VSCROLL 0x200000u
 #define WS_EX_CONTROLPARENT 0x10000u
 #define DS_ABSALIGN 1u
+#define DS_SYSMODAL 2u
 #define DS_SETFONT 0x40u
 #define DS_MODALFRAME 0x80u
 #define DS_CONTROL 0x400u

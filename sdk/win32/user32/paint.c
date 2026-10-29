@@ -78,7 +78,7 @@ BOOL W32API InvalidateRect(HWND h, const RECT *rect, BOOL erase) {
       u32_invalidate_children(w, r, erase);
   }
   if (erase)
-    w->erase = 1;
+    w->erase = U32_ERASE_PENDING;
   u32_mark();
   return 1;
 }
@@ -154,15 +154,13 @@ BOOL W32API GetUpdateRect(HWND h, RECT *rect, BOOL erase) {
     UnionRect(&box, &box, &w->update.r[i]);
   if (rect)
     *rect = box;
-  if (erase && w->erase && w->update.n) {
-    HDC dc = GetDC(h);
-    if (dc) {
-      if (SendMessageA(h, WM_ERASEBKGND, (WPARAM)dc, 0))
-        w->erase = 0;
-      ReleaseDC(h, dc);
-    }
-  }
-  return w->update.n != 0;
+  /* The answer is the region as found; an erase handler may validate it
+   * (Wine 10.0 win32u/dce.c NtUserGetUpdateRect returns UPDATE_PAINT from
+   * before send_erase). */
+  BOOL pending = w->update.n != 0;
+  if (erase)
+    u32_erase_window(h);
+  return pending;
 }
 int W32API GetUpdateRgn(HWND h, HRGN region, BOOL erase) {
   U32_GUARD;
@@ -192,7 +190,9 @@ static HDC acquire(HWND h, BOOL frame, const struct u32_region *paint) {
       u32_fail(slot ? 120 : 8);
       return 0;
     }
-    HDC dc = (HDC)(uintptr_t)g->memory_dc(0);
+    /* fx-hlrun: GDI's display DC, so compatible bitmaps take the
+     * display's format (a plain memory DC would make them monochrome). */
+    HDC dc = (HDC)(uintptr_t)(g->display_dc ? g->display_dc() : g->memory_dc(0));
     if (!dc)
       return 0;
     *slot = (struct u32_dc){dc, h, 0, 0, {0}};
@@ -342,6 +342,47 @@ int W32API ReleaseDC(HWND h, HDC dc) {
     }
   return 0;
 }
+/* fx-hlrun (Half-Life's OpenGL renderer imports it): the window a DC from
+ * GetDC/GetWindowDC/GetDCEx/BeginPaint belongs to until ReleaseDC; the
+ * screen DC of GetDC(NULL) belongs to the desktop window; any other DC
+ * (memory, metafile, printer, released) has none (Windows 98 USER keeps the
+ * window in its DCE entry; Wine 10.0 dlls/win32u/dce.c NtUserWindowFromDC). */
+HWND W32API WindowFromDC(HDC dc) {
+  U32_GUARD;
+  for (UINT i = 0; dc && i < 64; i++)
+    if (dcs[i].dc == dc)
+      return dcs[i].hwnd ? dcs[i].hwnd : U32_DESKTOP;
+  return 0;
+}
+/* fx-hlrun (Half-Life's launcher and Sierra's MFC utilities import it): take
+ * the window's pending update region out of the DC's clipping region, so a
+ * program drawing outside WM_PAINT leaves to WM_PAINT what it will repaint
+ * anyway; the result is the complexity of the new clipping region, ERROR (0)
+ * for a bad window. Microsoft ExcludeUpdateRgn; Wine 10.0 win32u/dce.c
+ * NtUserExcludeUpdateRgn (ExtSelectClipRgn RGN_DIFF with the update region in
+ * the DC's client coordinates; a DC of the window has its origin there). */
+extern HANDLE W32API GetModuleHandleA(const char *);
+extern void *W32API GetProcAddress(HANDLE, const char *);
+int W32API ExcludeUpdateRgn(HDC dc, HWND h) {
+  U32_GUARD;
+  struct u32_window *w = u32_window(h);
+  if (!w || !dc) {
+    u32_fail(1400);
+    return 0;
+  }
+  HANDLE gdi = GetModuleHandleA("gdi32.dll");
+  int(W32API * exclude)(HDC, int, int, int, int) = gdi ? GetProcAddress(gdi, "ExcludeClipRect") : 0;
+  int(W32API * clip_box)(HDC, RECT *) = gdi ? GetProcAddress(gdi, "GetClipBox") : 0;
+  if (!exclude || !clip_box) {
+    u32_fail(120);
+    return 0;
+  }
+  RECT box;
+  int type = clip_box(dc, &box);
+  for (UINT i = 0; type && i < w->update.n; i++)
+    type = exclude(dc, w->update.r[i].left, w->update.r[i].top, w->update.r[i].right, w->update.r[i].bottom);
+  return type;
+}
 HDC W32API BeginPaint(HWND h, PAINTSTRUCT *ps) {
   U32_GUARD;
   struct u32_window *w = u32_window(h);
@@ -362,11 +403,44 @@ HDC W32API BeginPaint(HWND h, PAINTSTRUCT *ps) {
   for (UINT i = 0; i < snapshot.n; i++)
     UnionRect(&ps->rcPaint, &ps->rcPaint, &snapshot.r[i]);
   w->update.n = 0;
+  /* fx-hlrun: what a child paints is no longer pending in the ancestors
+   * that draw over their children (no WS_CLIPCHILDREN). Windows removes the
+   * child's update region from theirs when the child begins painting (Wine
+   * 10.0 server/window.c validate_parents, from get_update_region for
+   * BeginPaint), so a dialog that refreshes a child in its WM_PAINT and then
+   * paints its whole background leaves the child's pixels alone (Half-Life's
+   * launcher dialogs). A child whose whole client area is repainted also
+   * takes its frame out of the ancestors' regions. */
+  POINT child_origin = u32_origin(w);
+  RECT client_area, whole;
+  GetClientRect(h, &client_area);
+  GetWindowRect(h, &whole);
+  BOOL full = snapshot.n && EqualRect(&ps->rcPaint, &client_area);
+  for (struct u32_window *p = u32_window(w->parent); p && snapshot.n; p = u32_window(p->parent)) {
+    if ((p->style & WS_CLIPCHILDREN) || !p->update.n)
+      continue;
+    POINT po = u32_origin(p);
+    for (UINT i = 0; i < snapshot.n; i++) {
+      RECT r = snapshot.r[i];
+      OffsetRect(&r, child_origin.x - po.x, child_origin.y - po.y);
+      u32_region_sub(&p->update, r);
+    }
+    if (full) {
+      RECT frame = whole;
+      OffsetRect(&frame, -po.x, -po.y);
+      u32_region_sub(&p->update, frame);
+    }
+  }
   w->internal_paint = 0;
-  BOOL erase = w->erase;
+  /* fx-hlrun: a background still to erase gets WM_ERASEBKGND here; one
+   * whose earlier erase (u32_erase_window) was not handled only reports
+   * fErase (Wine 10.0 server PAINT_DELAYED_ERASE, win32u send_erase). */
+  UINT erase = w->erase;
   w->erase = 0;
-  if (erase)
+  if (erase == U32_ERASE_PENDING)
     ps->fErase = !SendMessageA(h, WM_ERASEBKGND, (WPARAM)dc, 0);
+  else if (erase == U32_ERASE_DELAYED)
+    ps->fErase = 1;
   u32_mark();
   return dc;
 }
@@ -428,13 +502,100 @@ void u32_flush(void) {
   if (any)
     next_frame = now + 17;
 }
+/* fx-hlrun: erasing before painting. Windows sends WM_ERASEBKGND outside
+ * WM_PAINT when a window is shown, resized or uncovered (SetWindowPos
+ * without SWP_DEFERERASE, RDW_ERASENOW, WM_SYNCPAINT): the DC is clipped to
+ * the update region, the erase flag is cleared first and the update region
+ * stays pending, so a WM_ERASEBKGND handler that calls BeginPaint itself
+ * (MFC programs: Half-Life's launcher and CD menu draw their whole
+ * background that way) still paints the region and validates it. An erase
+ * the window did not handle (FALSE) is reported later as fErase. Wine 10.0
+ * dlls/win32u/dce.c erase_now/send_erase and window.c set_window_pos;
+ * server/window.c get_update_region (UPDATE_ERASE clears PAINT_ERASE only)
+ * and get_child_update_flags (children only below parents that clip them,
+ * unless RDW_ALLCHILDREN). */
+void u32_erase_window(HWND h) {
+  struct u32_window *w = u32_window(h);
+  if (!w || w->erase != U32_ERASE_PENDING || !w->update.n || !u32_paintable(w) || IsIconic(h))
+    return;
+  w->erase = 0;
+  struct u32_region region = w->update;
+  HDC dc = acquire(h, 0, &region);
+  if (!dc) {
+    w->erase = U32_ERASE_PENDING;
+    return;
+  }
+  BOOL handled = SendMessageA(h, WM_ERASEBKGND, (WPARAM)dc, 0) != 0;
+  ReleaseDC(h, dc);
+  if ((w = u32_window(h)) && !handled && !w->erase && w->update.n)
+    w->erase = U32_ERASE_DELAYED;
+}
+static void erase_tree(HWND h, UINT flags, UINT depth) {
+  struct u32_window *w = u32_window(h);
+  if (!w || depth > 16 || !IsWindowVisible(h) || IsIconic(h))
+    return;
+  u32_erase_window(h);
+  if (!(w = u32_window(h)) || (flags & 0x40 /* RDW_NOCHILDREN */) ||
+      (!(flags & 0x80 /* RDW_ALLCHILDREN */) && !(w->style & WS_CLIPCHILDREN)))
+    return;
+  DWORD below = UINT32_MAX;
+  for (UINT round = 0; round < U32_WINDOWS; round++) {
+    struct u32_window *next = 0;
+    for (UINT i = 0; i < U32_WINDOWS; i++) {
+      struct u32_window *c = &u32_windows[i];
+      if (c->handle && c->parent == h && (c->style & WS_VISIBLE) && c->z < below && (!next || c->z > next->z))
+        next = c;
+    }
+    if (!next)
+      break;
+    below = next->z;
+    erase_tree(next->handle, flags, depth + 1);
+    if (!u32_window(h))
+      return;
+  }
+}
+void u32_erase_now(HWND h, UINT flags) { erase_tree(h, flags, 0); }
+/* fx-hlrun: RDW_UPDATENOW. The window gets its WM_PAINT first, then its
+ * descendants that still need one, top of the z-order first: all of them
+ * for RDW_ALLCHILDREN (UpdateWindow), otherwise only below windows that clip
+ * their children (the others wait for their parent's WM_PAINT); none for
+ * RDW_NOCHILDREN. Wine 10.0 dlls/win32u/dce.c update_now and
+ * server/window.c get_child_update_flags; dlls/user32/win.c UpdateWindow is
+ * RedrawWindow(RDW_UPDATENOW | RDW_ALLCHILDREN). */
+static void update_now(HWND h, UINT flags, UINT depth) {
+  struct u32_window *w = u32_window(h);
+  if (!w || depth > 16)
+    return;
+  if (w->redraw && w->update.n && u32_paintable(w))
+    SendMessageA(h, WM_PAINT, 0, 0);
+  w = u32_window(h);
+  if (!w || (flags & 0x40 /* RDW_NOCHILDREN */) || IsIconic(h) ||
+      (!(flags & 0x80 /* RDW_ALLCHILDREN */) && !(w->style & WS_CLIPCHILDREN)))
+    return;
+  /* Each child once, highest z first; a callback may create or destroy
+   * windows, so the next one is looked up again every time. */
+  DWORD below = UINT32_MAX;
+  for (UINT round = 0; round < U32_WINDOWS; round++) {
+    struct u32_window *next = 0;
+    for (UINT i = 0; i < U32_WINDOWS; i++) {
+      struct u32_window *c = &u32_windows[i];
+      if (c->handle && c->parent == h && (c->style & WS_VISIBLE) && c->z < below && (!next || c->z > next->z))
+        next = c;
+    }
+    if (!next)
+      break;
+    below = next->z;
+    update_now(next->handle, flags, depth + 1);
+    if (!u32_window(h))
+      return;
+  }
+}
 BOOL W32API UpdateWindow(HWND h) {
   U32_GUARD;
   struct u32_window *w = u32_window(h);
   if (!w)
     return u32_fail(1400);
-  if (w->redraw && w->update.n && u32_paintable(w))
-    SendMessageA(h, WM_PAINT, 0, 0);
+  update_now(h, 0x80 /* RDW_ALLCHILDREN */, 0);
   return 1;
 }
 /* q3exec4: Windows paints only visible windows; a child that is hidden, or
@@ -528,8 +689,13 @@ BOOL W32API RedrawWindow(HWND h, const RECT *r, HRGN region, UINT flags) {
     for (UINT i = 0; i < U32_WINDOWS; i++)
       if (u32_windows[i].parent == h)
         RedrawWindow(u32_windows[i].handle, r, region, flags);
-  if (flags & (256 | 512))
-    UpdateWindow(h);
+  /* fx-hlrun: RDW_UPDATENOW paints (BeginPaint erases first); RDW_ERASENOW
+   * alone erases now and leaves WM_PAINT to the queue (Microsoft
+   * RedrawWindow; Wine 10.0 dlls/win32u/dce.c NtUserRedrawWindow). */
+  if (flags & 256)
+    update_now(h, flags, 0); /* fx-hlrun: RDW_ALLCHILDREN/RDW_NOCHILDREN apply */
+  else if (flags & 512)
+    u32_erase_now(h, flags);
   u32_mark();
   return 1;
 }
@@ -620,6 +786,53 @@ int W32API ScrollWindowEx(HWND h, int dx, int dy, const RECT *scroll,
                    r.right - r.left, r.bottom - r.top, 1);
       }
   return exposed.n > 1 ? 3 : exposed.n ? 2 : 1;
+}
+/* fx-hlrun (MFC's CDC::ScrollDC imports it): scroll the bits of a rectangle
+ * of a DC (logical units) by (dx, dy). The source is lprcScroll, or the DC's
+ * visible clip box; only what lies inside the clip rectangle (lprcClip, or
+ * the clip box) and inside the visible area is written. The part of the
+ * clipped area the scroll did not refill is reported as the update rectangle
+ * and region (Microsoft ScrollDC; Wine 10.0 dlls/win32u/dce.c
+ * NtUserScrollDC: source limited to the visible region, update = clipped
+ * area minus the scrolled destination). The copy is an SRCCOPY BitBlt within
+ * the DC; GDI snapshots overlapping source bits. */
+BOOL W32API ScrollDC(HDC dc, int dx, int dy, const RECT *scroll,
+                     const RECT *clip, HRGN region, RECT *update) {
+  U32_GUARD;
+  const struct u32_graphics *g = u32_graphics();
+  if (!dc || !g || !g->clip_box || !g->bitblt)
+    return u32_fail(6);
+  RECT visible;
+  if (!g->clip_box(U32_PTR(dc), &visible))
+    return u32_fail(6);
+  RECT source = scroll ? *scroll : visible, bound = clip ? *clip : visible,
+       area, moved, dest;
+  if (source.left > source.right) { LONG t = source.left; source.left = source.right; source.right = t; }
+  if (source.top > source.bottom) { LONG t = source.top; source.top = source.bottom; source.bottom = t; }
+  if (!IntersectRect(&bound, &bound, &visible))
+    SetRectEmpty(&bound);
+  if (!IntersectRect(&area, &source, &bound))
+    SetRectEmpty(&area);
+  if (!IntersectRect(&moved, &source, &visible))
+    SetRectEmpty(&moved);
+  OffsetRect(&moved, dx, dy);
+  if (!IntersectRect(&dest, &moved, &bound))
+    SetRectEmpty(&dest);
+  if (!IsRectEmpty(&dest) &&
+      !g->bitblt(U32_PTR(dc), dest.left, dest.top, dest.right - dest.left, dest.bottom - dest.top, U32_PTR(dc),
+                 dest.left - dx, dest.top - dy, 0x00cc0020u /* SRCCOPY */))
+    return 0;
+  struct u32_region exposed = {.r = {area}, .n = IsRectEmpty(&area) ? 0 : 1};
+  if (!IsRectEmpty(&dest))
+    u32_region_sub(&exposed, dest);
+  RECT box = {0};
+  for (UINT i = 0; i < exposed.n; i++)
+    UnionRect(&box, &box, &exposed.r[i]);
+  if (update)
+    *update = box;
+  if (region && (!u32_gdi || !u32_gdi->region_set || !u32_gdi->region_set(region, exposed.r, exposed.n)))
+    return 0;
+  return 1;
 }
 BOOL W32API ScrollWindow(HWND h, int x, int y, const RECT *r,
                          const RECT *clip) {

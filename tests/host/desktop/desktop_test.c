@@ -1339,9 +1339,15 @@ static void test_power_policy(void)
     d.sh.power_cfg.lid=PP_LID_NONE; p.lid_open=1; power_poll(p,3); p.lid_open=0; power_poll(p,3); assert(!d.sh.want_power);
     /* sec-k08 (U4-6): a LOGON session's buttons are the machine's power.cfg;
      * a reload keeps them over the user's own power_button/power_lid lines. */
-    snprintf(d.sh.cfg.extra,sizeof(d.sh.cfg.extra),"power_button=shutdown\npower_lid=none\n");
+    snprintf(d.sh.cfg.extra,sizeof(d.sh.cfg.extra),"power_button=shutdown\npower_lid=none\npower_scheme=0\npower_scheme0=Home/Office Desk,1500,1200,600,900,300,180\n");
     d.sh.power_machine=(struct pp_machine){PP_BUTTON_STANDBY,PP_LID_SHUTDOWN}; d.sh.power_machine_set=1;
     desk_shell_power_config(&d); assert(d.sh.power_cfg.power_button==PP_BUTTON_STANDBY && d.sh.power_cfg.lid==PP_LID_SHUTDOWN);
+    /* sec-k08b: applying machine actions preserves the user's AC/DC timers. */
+    for (int src=0; src<PP_SOURCES; src++) {
+        struct pp_summary source={.valid=1,.on_battery=src==PP_BATTERY};
+        assert(pp_timer(&d.sh.power_cfg,&source,PP_STANDBY)==(src==PP_AC ? 1500u : 900u));
+        assert(pp_timer(&d.sh.power_cfg,&source,PP_DISKS)==(src==PP_AC ? 600u : 180u));
+    }
     p.lid_open=1; power_poll(p,3); p.lid_open=0; power_poll(p,3); assert(d.sh.want_power==2);
     d.sh.want_power=0; d.sh.power_machine_set=0; desk_shell_power_config(&d);
     assert(d.sh.power_cfg.power_button==PP_BUTTON_SHUTDOWN && d.sh.power_cfg.lid==PP_LID_NONE); d.sh.cfg.extra[0]=0;

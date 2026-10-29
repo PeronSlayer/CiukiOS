@@ -46,6 +46,8 @@ const struct u32_graphics *u32_graphics(void) {
   B(get_text_color, "GetTextColor");
   B(get_bk_color, "GetBkColor");
   B(dib_bitmap, "CreateDIBitmap");
+  B(clip_box, "GetClipBox");
+  B(display_dc, "w32_gdi_display_dc");
 #undef B
   if (!t.brush || !t.delete_object || !t.select || !t.patblt ||
       !t.text_color || !t.bk_mode || !t.bk_color || !t.draw_text)

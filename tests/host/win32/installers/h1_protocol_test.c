@@ -107,11 +107,14 @@ static void objects(void){
 static void processes(void){
     char image[]="C:\\WINDOWS\\TEMP\\protocol-child.exe",command[]="protocol-child",cwd[]="C:\\WINDOWS\\TEMP";
     char env[]="TEMP=C:\\WINDOWS\\TEMP\0\0";
+    /* fx-hlis5: the STARTUPINFO record is read (flags and show reach the
+     * child, as the kernel copies it); the caller's pointer is preserved. */
+    struct ciuki_w32_startup startup={.flags=1,.show=7};
     struct ciuki_w32_spawn_args a={.image=PTR(image),.command=PTR(command),.directory=PTR(cwd),
-        .environment=PTR(env),.environment_bytes=sizeof(env),.startup=123};
+        .environment=PTR(env),.environment_bytes=sizeof(env),.startup=PTR(&startup)};
     a.header=HEADER(W32_PROCESS,a);call(&a,sizeof(a));
     assert(!a.error && a.image==PTR(image) && a.command==PTR(command) && a.directory==PTR(cwd) &&
-           a.environment==PTR(env) && a.startup==123);
+           a.environment==PTR(env) && a.startup==PTR(&startup));
     uint32_t process=a.process_handle,thread=a.thread_handle,handles[]={process};
     struct ciuki_w32_wait_args w={.handles=PTR(handles),.count=1,.timeout=10000};
     w.header=HEADER(W32_WAIT,w);call(&w,sizeof(w));assert(!w.error && !w.result);

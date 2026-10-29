@@ -434,6 +434,16 @@ int render3d_submit(struct render3d_service *s, uint32_t p, uint32_t id,
             if (e) return e;
         }
     }
+    if (software && c->hardware && s->backend->whole_context_fallback) {
+        /* A refused AUTO state retires hardware for this entire context.
+         * The hardware branch above proves there are no outstanding jobs;
+         * completed attachments already have canonical RAM readback. */
+        for (unsigned i=0;i<R3D_RESOURCES;i++) if (c->resources[i].live) {
+            struct render3d_resource *a=&c->resources[i];
+            a->hardware=a->resident=false; a->offset=a->reserved=0;
+        }
+        c->hardware=false;
+    }
     if (software && work>R3D_PIXEL_BUDGET) return -EAGAIN;
     for (unsigned i=0;i<R3D_REFS;i++) if (r[i]) {
         r[i]->references++;

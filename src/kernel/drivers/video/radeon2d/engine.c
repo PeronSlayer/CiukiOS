@@ -376,7 +376,7 @@ int radeon_engine_prepare(struct radeon_engine *s, const struct fb_device *d, co
     uint32_t location=io->read(io->ctx,MC_FB_LOCATION);
     if (cache==UINT32_MAX || location==UINT32_MAX) return -EOPNOTSUPP;
     memset(s, 0, sizeof(*s));
-    s->group=&groups[group];
+    s->group=&groups[group]; s->group_id=group;
     s->cache_mode=s->group->cache_bits ? cache | s->group->cache_bits : 0;
     s->fb = *d; s->io = *io; s->datatype = datatype;
     s->memory_location=location;

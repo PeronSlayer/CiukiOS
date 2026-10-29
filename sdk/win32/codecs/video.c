@@ -79,8 +79,12 @@ static int rle(const struct cc_bitmap *in, const uint8_t *s,
         y++;
         continue;
       }
+      /* fx-hlrun: the end-of-bitmap code ends the frame; biSizeImage may
+       * be larger (comctl32's animation control passes the stream format,
+       * whose size is the largest frame). Wine 10.0 msrle32.c
+       * MSRLE32_DecompressRLE4/RLE8 stop at it without a size check. */
       if (code == 1)
-        return p == n ? 0 : CC_BADSIZE;
+        return 0;
       if (code == 2) {
         if (n - p < 2)
           return CC_BADSIZE;

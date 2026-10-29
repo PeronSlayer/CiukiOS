@@ -84,6 +84,12 @@ KERNELBASE import retarget; 8. 0008 KERNELBASE path/string code compiled into
 SHLWAPI and OLE32; 9. 0009 SHELL32 Wine-private calls removed; 10. 0010 MSVCRT
 single-byte C locale.
 
+F6-26 adds the same pinned Wine's `dplayx`, `dplay` and `dpwsockx` builds,
+with patches 0011 (TCP/IP LAN provider), 0012 (lobby applications) and 0013
+(session enumeration). These are LGPL-2.1-or-later source modifications;
+the exact patches and hashes accompany the existing source offer. IPX and
+end-to-end title qualification are tracked in `docs/design/directplay.md`.
+
 Obligations that come with distributing these PEs: the LGPL-2.1 text
 (COPYING.LIB), Wine's LICENSE and AUTHORS, this README, PATCHES.md and
 SOURCE-OFFER.txt are in the image as `/system/licenses/WINE-*`; the
@@ -95,3 +101,12 @@ patches in `patches/`, the complete recipe and helpers in `scripts/win32/`,
 the pin and `config/wine-upper.json`) must accompany any published copy of the
 image, as described in SOURCE-OFFER.txt. The users may replace any of the PEs
 by rebuilding them with that source (`make upper`).
+
+### fx-hlutils
+
+The upper recipe also builds Wine 10.0 oledlg.dll and wininet.dll. Patch
+0016 selects the existing MSVCRT and refuses TLS with the WinINet security
+channel error while retaining ordinary HTTP/FTP through CiukiOS ws2_32.
+Both new DLLs remain subject to the import and H0/H1 qualification gates;
+consult config/wine-upper.json for the measured state. Their sources and
+modifications accompany the existing LGPL corresponding-source offer.

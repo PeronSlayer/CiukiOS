@@ -288,6 +288,24 @@ static void bitmaps(void) {
   ((uint8_t *)view)[0] = 99;
   assert(shared[4] == 99);
   assert(DeleteObject(section));
+  {
+    /* fx-hlrun: GetDIBits and SetDIBits on a bitmap selected into a memory
+     * DC transfer its bits (Windows and Wine 10.0 do; Half-Life's launcher
+     * reads its owner-drawn button image back this way). */
+    HDC memory = CreateCompatibleDC(dc);
+    HBITMAP picture = CreateCompatibleBitmap(dc, 4, 2);
+    HGDIOBJ previous = SelectObject(memory, picture);
+    assert(memory && picture && previous);
+    assert(SetPixel(memory, 1, 0, RGB(10, 20, 30)) == RGB(10, 20, 30));
+    BITMAPINFOHEADER top = {40, 4, -2, 1, 32, BI_RGB, 0, 0, 0, 0, 0};
+    uint32_t read[8] = {0}, written[8] = {0, 0, 0, 0, 0, 0, 0x405060, 0};
+    assert(GetDIBits(memory, picture, 0, 2, read, (BITMAPINFO *)&top, DIB_RGB_COLORS) == 2);
+    assert(read[1] == 0x0a141e && read[0] == 0);
+    assert(SetDIBits(memory, picture, 0, 2, written, (BITMAPINFO *)&top, DIB_RGB_COLORS) == 2);
+    assert(GetPixel(memory, 2, 1) == RGB(0x40, 0x50, 0x60) && GetPixel(memory, 1, 0) == 0);
+    assert(SelectObject(memory, previous) == picture);
+    assert(DeleteObject(picture) && DeleteDC(memory));
+  }
   test_reset();
   puts("PASS bitmaps");
 }
@@ -587,6 +605,34 @@ static void child_dc(void) {
   assert(GetClipBox(dc, &(RECT){0}));
   assert(IntersectClipRect(dc, 0, 0, 1, 1));
   assert(SetPixel(dc, 1, 1, RGB(4, 5, 6)) == CLR_INVALID);
+  {
+    /* fx-hlrun: bounding-rectangle accumulation (Wine 10.0 win32u/dc.c
+     * NtGdiSetBoundsRect/NtGdiGetBoundsRect): device rectangles of drawing
+     * while enabled, reported in logical units inside the visible area. */
+    extern DWORD W32API SetBoundsRect(HDC, const RECT *, DWORD);
+    extern DWORD W32API GetBoundsRect(HDC, RECT *, DWORD);
+    enum { RESET = 1, ACCUMULATE = 2, SET = 3, ENABLE = 4, DISABLE = 8 };
+    HDC b = w32_gdi_surface_dc(&s, (POINT){7, 9}, damage, 0);
+    HRGN area = CreateRectRgn(7, 9, 20, 20);
+    assert(b && area && w32_gdi_set_visible_region(b, area));
+    RECT r;
+    assert(SetBoundsRect(b, 0, ENABLE | DISABLE) == 0);
+    assert(GetBoundsRect(b, &r, 0) == RESET && !r.left && !r.top && !r.right && !r.bottom);
+    assert(SetBoundsRect(b, 0, ENABLE | RESET) == (DISABLE | RESET));
+    assert(FillRect(b, &(RECT){1, 1, 4, 3}, GetStockObject(WHITE_BRUSH)));
+    assert(GetBoundsRect(b, &r, 0) == SET && r.left == 1 && r.top == 1 && r.right == 4 && r.bottom == 3);
+    assert(SetBoundsRect(b, &(RECT){-5, -5, 30, 30}, ACCUMULATE) == (ENABLE | SET));
+    assert(GetBoundsRect(b, &r, RESET) == SET && !r.left && !r.top && r.right == 13 && r.bottom == 11);
+    assert(GetBoundsRect(b, &r, 0) == RESET);
+    assert(SetViewportOrgEx(b, 2, 3, 0));
+    assert(SetPixel(b, 0, 0, RGB(1, 1, 1)) == RGB(1, 1, 1));
+    assert(GetBoundsRect(b, &r, 0) == SET && r.left == 0 && r.top == 0 && r.right == 1 && r.bottom == 1);
+    assert(!GetBoundsRect(b, 0, RESET) && GetBoundsRect(b, &r, 0) == RESET);
+    assert(SetBoundsRect(b, 0, DISABLE) == (ENABLE | RESET));
+    assert(FillRect(b, &(RECT){0, 0, 2, 2}, GetStockObject(WHITE_BRUSH)));
+    assert(GetBoundsRect(b, &r, 0) == RESET);
+    assert(DeleteObject(area) && DeleteDC(b));
+  }
   test_reset();
   puts("PASS child DC");
 }
@@ -1064,10 +1110,70 @@ static void quake3(void) {
   assert(GetDeviceCaps(screen, 10) == 768);  /* VERTRES */
   assert(GetDeviceCaps(screen, 24) == -1);   /* NUMCOLORS, direct colour */
   assert(GetDeviceCaps(screen, 2) == 1);     /* TECHNOLOGY: DT_RASDISPLAY */
+  {
+    /* fx-hlrun: USER's screen DC (w32_gdi_display_dc) stands for the display:
+     * bitmaps compatible with it take the display format, while a memory
+     * DC's default 1x1 bitmap still makes monochrome ones; CreateDIBitmap on
+     * the screen DC keeps the DIB's colours, without a DC it is monochrome
+     * (Microsoft CreateCompatibleBitmap; Wine 10.0 win32u/bitmap.c,
+     * gdi32/dib.c CreateDIBitmap). InstallShield 5 built its dialog images
+     * on GetDC(NULL) and showed them black and white before. */
+    extern HDC W32API w32_gdi_display_dc(void);
+    HDC display = w32_gdi_display_dc(), memory = CreateCompatibleDC(display);
+    assert(display && memory && GetDeviceCaps(display, 12) == 32);
+    HBITMAP colour = CreateCompatibleBitmap(display, 4, 4), mono = CreateCompatibleBitmap(memory, 4, 4);
+    BITMAP a, b;
+    assert(GetObjectA(colour, sizeof(a), &a) && GetObjectA(mono, sizeof(b), &b));
+    assert(a.bmBitsPixel == 32 && a.bmWidth == 4 && b.bmBitsPixel == 1);
+    BITMAPINFOHEADER bih = {40, 2, 1, 1, 24, BI_RGB, 0, 0, 0, 0, 0};
+    uint8_t rgb[8] = {0x30, 0x20, 0x10, 0x60, 0x50, 0x40, 0, 0};
+    HBITMAP picture = CreateDIBitmap(display, &bih, CBM_INIT, rgb, (BITMAPINFO *)&bih, DIB_RGB_COLORS);
+    HBITMAP none = CreateDIBitmap(0, &bih, 0, 0, 0, 0);
+    assert(picture && none && GetObjectA(none, sizeof(b), &b) && b.bmBitsPixel == 1);
+    HGDIOBJ old = SelectObject(memory, picture);
+    assert(old && GetPixel(memory, 0, 0) == RGB(0x10, 0x20, 0x30) && GetPixel(memory, 1, 0) == RGB(0x40, 0x50, 0x60));
+    assert(SelectObject(memory, old) == picture);
+    assert(DeleteObject(picture) && DeleteObject(none) && DeleteObject(colour) && DeleteObject(mono));
+    assert(DeleteDC(memory) && DeleteDC(display));
+  }
   uint32_t pixels[16 * 8] = {0};
   struct w32_dib surface = test_dib(pixels, 16, 8, 32, 0, 1);
   HDC window = dc_for(&surface);
   assert(GetDeviceCaps(window, 8) == 1024 && GetDeviceCaps(window, 12) == 32);
+  {
+    /* fx-hlrun: the transparent blit of an animation control (Wine 10.0
+     * comctl32 animate.c ANIMATE_TransparentBlt, ACS_TRANSPARENT): a colour
+     * to monochrome BitBlt sets 1 where the source matches its background
+     * colour; monochrome to colour takes the destination's text colour for
+     * 0 and background colour for 1 (Microsoft BitBlt, "Remarks";
+     * SetBkColor). Half-Life's launcher plays media/logo.avi this way. */
+    const COLORREF clear = RGB(0x10, 0x10, 0x10), brush_colour = RGB(0x3f, 0x3f, 0x3f);
+    HDC source = CreateCompatibleDC(window), target = CreateCompatibleDC(window), mask_dc = CreateCompatibleDC(window);
+    HBITMAP sb = CreateCompatibleBitmap(window, 4, 1), tb = CreateCompatibleBitmap(window, 4, 1),
+            mb = CreateBitmap(4, 1, 1, 1, 0);
+    assert(SelectObject(source, sb) && SelectObject(target, tb) && SelectObject(mask_dc, mb));
+    SetPixel(source, 0, 0, clear);
+    SetPixel(source, 1, 0, RGB(200, 0, 0));
+    SetPixel(source, 2, 0, clear);
+    SetPixel(source, 3, 0, RGB(0, 200, 0));
+    RECT all = {0, 0, 4, 1};
+    HBRUSH fill_brush = CreateSolidBrush(brush_colour);
+    FillRect(target, &all, fill_brush);
+    SetBkColor(source, GetPixel(source, 0, 0));
+    assert(BitBlt(mask_dc, 0, 0, 4, 1, source, 0, 0, SRCCOPY));
+    assert(GetPixel(mask_dc, 0, 0) == RGB(255, 255, 255) && GetPixel(mask_dc, 1, 0) == 0);
+    SetBkColor(source, 0);
+    SetTextColor(source, RGB(255, 255, 255));
+    assert(BitBlt(source, 0, 0, 4, 1, mask_dc, 0, 0, SRCAND));
+    SetBkColor(target, RGB(255, 255, 255));
+    SetTextColor(target, 0);
+    assert(BitBlt(target, 0, 0, 4, 1, mask_dc, 0, 0, SRCAND));
+    assert(BitBlt(target, 0, 0, 4, 1, source, 0, 0, SRCPAINT));
+    assert(GetPixel(target, 0, 0) == brush_colour && GetPixel(target, 1, 0) == RGB(200, 0, 0) &&
+           GetPixel(target, 2, 0) == brush_colour && GetPixel(target, 3, 0) == RGB(0, 200, 0));
+    assert(DeleteDC(source) && DeleteDC(target) && DeleteDC(mask_dc));
+    assert(DeleteObject(sb) && DeleteObject(tb) && DeleteObject(mb) && DeleteObject(fill_brush));
+  }
   /* Driver formats (ten since f7-08: XRGB/RGB565 pairs with D16/S0 double
    * and single buffered, then D24/S0, D16/S8, D24/S8): never
    * PFD_GENERIC_FORMAT, depth of at least 15 bits (Quake III GLW_ChoosePFD
@@ -1112,9 +1218,72 @@ static void quake3(void) {
   DeleteDC(screen);
   puts("PASS quake3 display caps, driver pixel formats, device gamma ramps");
 }
+extern HGDIOBJ W32API CreateMetaFileA(const char *);
+extern HGDIOBJ W32API CloseMetaFile(HDC);
+extern BOOL W32API DeleteMetaFile(HGDIOBJ);
+extern BOOL W32API DeleteEnhMetaFile(HGDIOBJ);
+extern BOOL W32API PlayEnhMetaFile(HDC,HGDIOBJ,const RECT *);
+extern DWORD W32API GetEnhMetaFileBits(HGDIOBJ,DWORD,void *);
+static int W32API enum_play(HDC dc,HGDIOBJ *handles,const void *record,int count,intptr_t user) {
+  (*(unsigned *)user)++;
+  return PlayMetaFileRecord(dc,handles,record,(unsigned)count);
+}
+static void utility_paths(void) {
+  uint32_t pixels[32*24]={0};
+  struct w32_dib surface=test_dib(pixels,32,24,32,0,1);HDC dc=dc_for(&surface);
+  HBRUSH brush=CreateSolidBrush(RGB(250,10,20));HGDIOBJ old=SelectObject(dc,brush);
+  assert(!EndPath(dc));
+  assert(BeginPath(dc));assert(MoveToEx(dc,2,2,0));assert(LineTo(dc,16,2));
+  assert(LineTo(dc,2,16));assert(CloseFigure(dc));assert(EndPath(dc));
+  for(unsigned i=0;i<32*24;i++) assert(!pixels[i]);
+  POINT points[8];uint8_t types[8];assert(GetPath(dc,points,types,8)==3);
+  assert(points[0].x==2 && types[0]==6 && types[2]==3);
+  assert(FillPath(dc));assert(GetPixel(dc,4,4)==RGB(250,10,20));
+  assert(GetPixel(dc,20,20)==0);assert(GetPath(dc,0,0,0)==-1);
+  assert(BeginPath(dc));MoveToEx(dc,1,1,0);LineTo(dc,7,7);
+  int saved_path=SaveDC(dc);assert(saved_path && EndPath(dc) && AbortPath(dc));
+  assert(RestoreDC(dc,saved_path) && EndPath(dc) && GetPath(dc,0,0,0)==2);
+  saved_path=SaveDC(dc);assert(saved_path && BeginPath(dc));
+  assert(RestoreDC(dc,saved_path) && GetPath(dc,0,0,0)==2 && AbortPath(dc));
+  assert(BeginPath(dc));assert(Rectangle(dc,1,1,6,6));assert(EndPath(dc));
+  assert(SetViewportOrgEx(dc,10,0,0));
+  HRGN region=PathToRegion(dc);assert(region && PtInRegion(region,2,2) && !PtInRegion(region,12,2));
+  DeleteObject(region);SetViewportOrgEx(dc,0,0,0);
+  POINT curve[4]={{1,20},{4,10},{16,10},{20,20}};
+  assert(BeginPath(dc) && PolyBezier(dc,curve,4) && EndPath(dc));
+  assert(GetPath(dc,points,types,8)==4 && types[1]==4);
+  assert(FlattenPath(dc) && GetPath(dc,0,0,0)==33 && StrokePath(dc));
+  assert(BeginPath(dc) && Rectangle(dc,10,4,20,12) && EndPath(dc));
+  assert(SelectClipPath(dc,RGN_COPY));
+  assert(PatBlt(dc,0,0,32,24,PATCOPY));
+  assert(GetPixel(dc,12,8)==RGB(250,10,20));SelectClipRgn(dc,0);
+  assert(BeginPath(dc));MoveToEx(dc,10,5,0);LineTo(dc,10,18);assert(EndPath(dc));
+  HPEN pen=CreatePen(PS_SOLID,4,0);HGDIOBJ oldpen=SelectObject(dc,pen);
+  assert(WidenPath(dc));region=PathToRegion(dc);assert(region && PtInRegion(region,10,10) && PtInRegion(region,10,5) && PtInRegion(region,10,6));
+  assert(!PtInRegion(region,20,10));DeleteObject(region);SelectObject(dc,oldpen);DeleteObject(pen);
+  HDC meta=CreateEnhMetaFileA(dc,0,0,"CiukiOS\0Paths\0\0");assert(meta);
+  SelectObject(meta,brush);Rectangle(meta,2,2,16,16);
+  const uint8_t comment[3]={7,8,9};assert(GdiComment(meta,3,comment));
+  HGDIOBJ emf=CloseEnhMetaFile(meta);assert(emf);
+  DWORD size=GetEnhMetaFileBits(emf,0,0);uint8_t *bits=malloc(size);
+  assert(size>100 && GetEnhMetaFileBits(emf,size,bits)==size);
+  assert(w32_u32(bits+48)==size);free(bits);
+  memset(pixels,0,sizeof(pixels));RECT frame={0,0,96,96};
+  assert(PlayEnhMetaFile(dc,emf,&frame));assert(GetPixel(dc,4,4)==RGB(250,10,20));
+  assert(DeleteEnhMetaFile(emf));
+  meta=CreateMetaFileA(0);assert(meta);SelectObject(meta,brush);Rectangle(meta,3,3,12,12);
+  HGDIOBJ wmf=CloseMetaFile(meta);assert(wmf);
+  memset(pixels,0,sizeof(pixels));unsigned records=0;
+  assert(EnumMetaFile(dc,wmf,enum_play,(intptr_t)&records));assert(records>=3);
+  assert(GetPixel(dc,5,5)==RGB(250,10,20));SelectObject(dc,old);assert(DeleteMetaFile(wmf));
+  DeleteObject(brush);DeleteDC(dc);w32_gdi_process_exit();
+  puts("PASS utility path pixels, mapping, flattening, clips, widening, EMF and WMF callbacks");
+}
 int main(int argc, char **argv) {
   assert(argc >= 2);
-  if (!strcmp(argv[1], "lifetime"))
+  if (!strcmp(argv[1], "utility-paths"))
+    utility_paths();
+  else if (!strcmp(argv[1], "lifetime"))
     lifetime();
   else if (!strcmp(argv[1], "regions"))
     regions();

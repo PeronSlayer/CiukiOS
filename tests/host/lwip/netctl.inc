@@ -65,6 +65,7 @@ static void netctl_tests(void)
     struct ciuki_net_control r={.version=1,.size=sizeof(r)};
     CHECK(!ctl(CIUKI_NETCTL_GET,&r)); client.network_capability=true;
     CHECK(!ctl(CIUKI_NETCTL_GET,&r) && r.count==2 && r.config.dhcp && r.address==PP_HTONL(0xc0000264));
+    CHECK(r.ipx_frame_type==CIUKI_IPX_FRAME_AUTO);
     r.generation++;CHECK(ctl(1,&r)==-EBUSY);r.generation--;
     r.version=2;CHECK(ctl(0,&r)==-EOPNOTSUPP);r.version=1;
     r.reserved[0]=1;CHECK(ctl(0,&r)==-EINVAL);r.reserved[0]=0;

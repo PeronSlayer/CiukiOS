@@ -137,11 +137,17 @@ static BOOL publish(void) {
 }
 int W32API ShowCursor(BOOL show) {
   U32_GUARD;
+  int before = cursor_count;
   if (show && cursor_count < 32767)
     cursor_count++;
   if (!show && cursor_count > -32768)
     cursor_count--;
-  publish();
+  /* fx-hlrun: the cursor is shown while the display count is >= 0
+   * (Microsoft ShowCursor); the desktop uses only that, so a call that keeps
+   * the visibility sends nothing. Half-Life's launcher calls ShowCursor(TRUE)
+   * and ShowCursor(FALSE) on every pass of its idle loop. */
+  if ((before >= 0) != (cursor_count >= 0))
+    publish();
   return cursor_count;
 }
 HCURSOR W32API SetCursor(HCURSOR h) {
@@ -458,6 +464,62 @@ HICON W32API CreateIconIndirect(const ICONINFO *info) {
   u32_gdi->bitmap(info->hbmColor, &color, 1);
   u32_gdi->bitmap(info->hbmMask, &mask, 1);
   return (HICON)(uintptr_t)i->id;
+}
+/* fx-hlrun (MFC and OLEAUT32 import it): an icon from raw AND-mask and XOR
+ * bits, as Windows does it: a monochrome mask bitmap and a color bitmap of
+ * planes x bitsPixel are made from the bits and passed to CreateIconIndirect
+ * with a centered hot spot (Wine 10.0 dlls/user32/cursoricon.c CreateIcon).
+ * USER's icon store holds 32x32 XRGB pixels and a mask, so both bitmaps are
+ * first converted to 32 bits per pixel by BitBlt (a monochrome bit is the
+ * background color white when set, black when clear). */
+static DWORD icon_plane(const struct u32_graphics *g, int w, int h, UINT planes, UINT bpp, const void *bits) {
+  DWORD source = g->create_bitmap(w, h, planes, bpp, bits), out = g->create_bitmap(w, h, 1, 32, 0);
+  DWORD sdc = g->memory_dc(0), ddc = g->memory_dc(0);
+  BOOL ok = source && out && sdc && ddc;
+  if (ok) {
+    DWORD a = g->select(sdc, source), b = g->select(ddc, out);
+    ok = g->bitblt(ddc, 0, 0, w, h, sdc, 0, 0, 0x00cc0020u /* SRCCOPY */);
+    g->select(sdc, a);
+    g->select(ddc, b);
+  }
+  if (sdc)
+    g->delete_dc(sdc);
+  if (ddc)
+    g->delete_dc(ddc);
+  if (source)
+    g->delete_object(source);
+  if (!ok && out) {
+    g->delete_object(out);
+    out = 0;
+  }
+  return out;
+}
+HICON W32API CreateIcon(HINSTANCE instance, int w, int h, uint8_t planes, uint8_t bpp, const uint8_t *and_bits,
+                        const uint8_t *xor_bits) {
+  U32_GUARD;
+  (void)instance;
+  const struct u32_graphics *g = u32_graphics();
+  if (!and_bits || !xor_bits || w <= 0 || h <= 0 || !planes || !bpp) {
+    u32_fail(87);
+    return 0;
+  }
+  if (!g || !g->create_bitmap || !g->memory_dc || !g->select || !g->bitblt || !g->delete_dc ||
+      !g->delete_object) {
+    u32_fail(120);
+    return 0;
+  }
+  DWORD mask = icon_plane(g, w, h, 1, 1, and_bits), color = icon_plane(g, w, h, planes, bpp, xor_bits);
+  HICON icon = 0;
+  if (mask && color) {
+    ICONINFO info = {1, (DWORD)w / 2, (DWORD)h / 2, (HANDLE)(uintptr_t)mask, (HANDLE)(uintptr_t)color};
+    icon = CreateIconIndirect(&info);
+  } else
+    u32_fail(8);
+  if (mask)
+    g->delete_object(mask);
+  if (color)
+    g->delete_object(color);
+  return icon;
 }
 BOOL W32API DrawIconEx(HDC dc, int x, int y, HICON handle, int w, int h,
                        UINT frame, HBRUSH brush, UINT flags) {

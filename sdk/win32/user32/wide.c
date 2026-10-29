@@ -457,6 +457,75 @@ static int dir_list(HWND dlg, char *spec, int list, int path, UINT type,
   }
   return 1;
 }
+/* fx-hlrun (MFC's CWnd::DlgDirSelect imports them): the selected item of a
+ * DlgDirList list box or combo box. "[name]" is a directory and comes back
+ * as "name\\", "[-x-]" a drive and comes back as "x:", both returning TRUE;
+ * a file name returns FALSE, with "." appended when it has no extension.
+ * Wine 10.0 dlls/user32/dialog.c DIALOG_DlgDirSelect. */
+static BOOL dir_select(HWND dlg, char *out, int len, int id, BOOL combo) {
+  HWND c = GetDlgItem(dlg, id);
+  if (!c)
+    return 0;
+  LRESULT item = SendMessageA(c, combo ? 0x147u /* CB_GETCURSEL */ : 0x188u /* LB_GETCURSEL */, 0, 0);
+  if (item < 0)
+    return 0;
+  LRESULT size = SendMessageA(c, combo ? 0x149u /* CB_GETLBTEXTLEN */ : 0x18au /* LB_GETTEXTLEN */, (WPARAM)item, 0);
+  if (size < 0 || size > 4096)
+    return 0;
+  char *b = u32_alloc((DWORD)size + 3);
+  if (!b)
+    return 0;
+  w32_fill(b, 0, (DWORD)size + 3);
+  SendMessageA(c, combo ? 0x148u /* CB_GETLBTEXT */ : 0x189u /* LB_GETTEXT */, (WPARAM)item, (LPARAM)b);
+  BOOL directory = b[0] == '[';
+  char *p = b;
+  if (directory && b[1] == '-') {
+    b[3] = ':';
+    b[4] = 0;
+    p = b + 2;
+  } else if (directory) {
+    UINT n = w32_strlen(b);
+    if (n)
+      b[n - 1] = '\\';
+    p = b + 1;
+  } else {
+    BOOL dot = 0;
+    for (char *q = b; *q; q++)
+      dot |= *q == '.';
+    if (!dot) {
+      UINT n = w32_strlen(b);
+      b[n] = '.';
+      b[n + 1] = 0;
+    }
+  }
+  if (out && len > 0)
+    u32_strcpy(out, (UINT)len, p);
+  u32_free(b);
+  return directory;
+}
+BOOL W32API DlgDirSelectExA(HWND dlg, char *out, int len, int id) {
+  U32_GUARD;
+  return dir_select(dlg, out, len, id, 0);
+}
+BOOL W32API DlgDirSelectComboBoxExA(HWND dlg, char *out, int len, int id) {
+  U32_GUARD;
+  return dir_select(dlg, out, len, id, 1);
+}
+static BOOL dir_select_w(HWND dlg, WCHAR *out, int len, int id, BOOL combo) {
+  char a[264];
+  BOOL r = dir_select(dlg, a, sizeof(a), id, combo);
+  if (out && len > 0)
+    u32_to_wide(out, (UINT)len, a, -1);
+  return r;
+}
+BOOL W32API DlgDirSelectExW(HWND dlg, WCHAR *out, int len, int id) {
+  U32_GUARD;
+  return dir_select_w(dlg, out, len, id, 0);
+}
+BOOL W32API DlgDirSelectComboBoxExW(HWND dlg, WCHAR *out, int len, int id) {
+  U32_GUARD;
+  return dir_select_w(dlg, out, len, id, 1);
+}
 int W32API DlgDirListA(HWND dlg, char *spec, int list, int path, UINT type) {
   U32_GUARD;
   return dir_list(dlg, spec, list, path, type, 0);

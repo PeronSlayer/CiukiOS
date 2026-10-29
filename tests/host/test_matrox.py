@@ -49,10 +49,11 @@ class MatroxTests(unittest.TestCase):
             symbols = [line.split()[-1] for line in result.splitlines() if len(line.split()) == 3]
             self.assertEqual(len(symbols), len(set(symbols)), result)
             self.assertEqual(set(symbols), {'matrox_driver', 'matrox_probe', 'matrox_mode',
-                'matrox_engine_init', 'matrox_engine_prove', 'matrox_engine_quarantine', 'matrox_mono'})
+                'matrox_engine_init', 'matrox_engine_prove', 'matrox_engine_quarantine', 'matrox_mono',
+                'matrox_engine_reserve', 'matrox_engine_sync'})
             builder = (ROOT/'scripts/build_kernel.py').read_text()
             self.assertIn('SRC / "drivers/video/matrox"', builder)
-            self.assertIn('("engine.c", "driver.c")', builder)
+            self.assertIn('("engine.c", "driver.c", "matrox3d.c", "matrox3d_owner.c")', builder)
 
 if __name__ == '__main__':
     unittest.main()

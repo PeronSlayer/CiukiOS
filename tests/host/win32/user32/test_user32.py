@@ -165,8 +165,8 @@ class User32Tests(unittest.TestCase):
         import re
         # Menu APIs are implemented by f5-10C; WaitForInputIdle, GetMessageW
         # and the DDEML by f5-20B. The remaining typed refusals.
-        targets={'ChangeDisplaySettingsW':-1,'RegisterHotKey':0,
-                 'ExcludeUpdateRgn':0}
+        # (fx-hlrun implements ExcludeUpdateRgn.)
+        targets={'ChangeDisplaySettingsW':-1,'RegisterHotKey':0}
         definition=(out/'user32.def').read_text()
         declarations=[];calls=[]
         for i,(name,value) in enumerate(targets.items()):

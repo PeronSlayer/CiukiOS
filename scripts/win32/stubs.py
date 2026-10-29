@@ -24,8 +24,14 @@ DLL=re.compile(r'[A-Za-z0-9_-]+\.(?:dll|drv|acm|ocx)\Z',re.I)
 ORDINALS={
  'wsock32.dll':dict(zip(('accept','bind','closesocket','connect','getpeername','getsockname','getsockopt','htonl','htons','inet_addr','inet_ntoa','ioctlsocket','listen','ntohl','ntohs','recv','recvfrom','select','send','sendto','setsockopt','shutdown','socket'),range(1,24))) | {
      'gethostbyaddr':51,'gethostbyname':52,'getprotobyname':53,'getprotobynumber':54,
-     'getservbyname':55,'getservbyport':56,'gethostname':57,'WSAGetLastError':111,
-     'WSASetLastError':112,'WSAStartup':115,'WSACleanup':116,'__WSAFDIsSet':151},
+     'getservbyname':55,'getservbyport':56,'gethostname':57,
+     # fx-hlrun: the Winsock 1.1 asynchronous range (Half-Life's hl.exe imports
+     # WSAAsyncSelect as ordinal 101); same numbers in Wine's ws2_32.spec.
+     'WSAAsyncSelect':101,'WSAAsyncGetHostByAddr':102,'WSAAsyncGetHostByName':103,
+     'WSAAsyncGetProtoByNumber':104,'WSAAsyncGetProtoByName':105,'WSAAsyncGetServByPort':106,
+     'WSAAsyncGetServByName':107,'WSACancelAsyncRequest':108,'WSASetBlockingHook':109,
+     'WSAUnhookBlockingHook':110,'WSAGetLastError':111,'WSASetLastError':112,
+     'WSACancelBlockingCall':113,'WSAIsBlocking':114,'WSAStartup':115,'WSACleanup':116,'__WSAFDIsSet':151},
  'comctl32.dll':{'InitCommonControls':17},
  'dplayx.dll':{'DirectPlayCreate':1,'DirectPlayEnumerateA':2,'DirectPlayLobbyCreateA':4},
 }

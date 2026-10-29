@@ -61,6 +61,11 @@ struct cpa_transport {
                 void *reply, size_t capacity, size_t *used, int *status);
     /* The caller's kernel credential: uid and supplementary groups. */
     int (*self)(void *, uint32_t *uid, uint32_t groups[8], unsigned *count);
+    /* fx-uaccounts, optional: sleeps ms before a LIST is asked again after
+     * the service answered busy (EAGAIN before admission: one management or
+     * authentication job at a time, a failed-password delay). NULL: LIST is
+     * not repeated. Changes are never repeated. */
+    void (*pause)(void *, unsigned ms);
 };
 /* 0, or -errno: -EPERM role/last-administrator/built-in rule, -EBUSY account
  * in use, -EACCES old password, -EINVAL name/password/confirmation,

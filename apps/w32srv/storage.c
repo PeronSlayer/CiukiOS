@@ -189,9 +189,9 @@ static struct wr_key *profile_key(struct wr_server *s,const char *path)
 static uint32_t profile_folders(struct wr_server *s,const char *root)
 {
     /* sec-user-05: "Local AppData" (CSIDL_LOCAL_APPDATA) for profile hives
-     * only; the profile-less Windows 98 layout keeps its ten values. */
-    static const char *const names[]={"Personal","Desktop","Programs","Start Menu","Favorites", "AppData","Recent","SendTo","Templates","Startup","Local AppData"};
-    static const char *const suffix[]={"Documents","Documents/Desktop","Start Menu/Programs","Start Menu","Favorites", "Application Data","Recent","SendTo","Templates","Start Menu/Programs/StartUp","Local Settings/Application Data"};
+     * only; integ9: WinINet repositories follow the Windows 98 profile root. */
+    static const char *const names[]={"Personal","Desktop","Programs","Start Menu","Favorites", "AppData","Recent","SendTo","Templates","Startup","Local AppData","Cache","Cookies","History"};
+    static const char *const suffix[]={"Documents","Documents/Desktop","Start Menu/Programs","Start Menu","Favorites", "Application Data","Recent","SendTo","Templates","Start Menu/Programs/StartUp","Local Settings/Application Data","Temporary Internet Files","Cookies","History"};
     for (unsigned u=0;u<2;u++) {
         struct wr_key *k=profile_key(s,u ? ".DEFAULT\\Software\\Microsoft\\Windows\\CurrentVersion\\Explorer\\User Shell Folders" :
             ".DEFAULT\\Software\\Microsoft\\Windows\\CurrentVersion\\Explorer\\Shell Folders");

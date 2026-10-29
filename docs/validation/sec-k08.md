@@ -137,6 +137,47 @@ accounts; the H12 Guest case now expects `EPERM` instead of the built-in name's 
 
 ### U4-6: machine power settings
 
+- K8-2 / sec-k08b: standby, monitor and hard-disk timers belong to each user's
+  power scheme and are editable by administrators, Standard users and Guest.
+  Microsoft documents `IdleTimeoutAc/Dc`, `VideoTimeoutAc/Dc` and
+  `SpindownTimeoutAc/Dc` in
+  [USER_POWER_POLICY](https://learn.microsoft.com/en-us/windows/win32/api/powrprof/ns-powrprof-user_power_policy).
+  Control Panel saves these timers through the existing per-user settings path;
+  `desk_shell_power_config` loads them before `pp_machine_apply` overrides only
+  the button and lid actions. Standby availability still depends on firmware
+  and driver support. Button and lid edits remain administrator-only through
+  SETTING POWER; `power.cfg` contains only those two actions.
+  K8-7 authorizes the call-73 disk POLICY gate for either an administrator or
+  `security_device_desktop(proc_current())`: the live session's desktop applies
+  that user's disk timer, including Standard and Guest. Research checked the
+  existing administrator-only `power_record_call` against Microsoft's
+  [USER_POWER_POLICY](https://learn.microsoft.com/en-us/windows/win32/api/powrprof/ns-powrprof-user_power_policy)
+  (`SpindownTimeoutAc/Dc`, seconds before fixed disks power down) and
+  [MACHINE_POWER_POLICY](https://learn.microsoft.com/en-us/windows/win32/api/powrprof/ns-powrprof-machine_power_policy)
+  (computer settings, separate from the user's disk timeout). K8-7 retains
+  administrator privileges for machine settings. The decision preserves
+  missing/revoked-identity and non-live-session refusal and excludes non-desktop
+  Standard processes. Do not use
+  `power_authorized`: its additional SYSTEM logon roles are local-action routes,
+  not authority to program a user's disk timer. Machine button/lid settings
+  remain administrator-only through SETTING POWER (SYSTEM service execution).
+  Host evidence: updated Control Panel and desktop power-model assertions pass.
+  Full desktop base/modified runs both have 248 tests, 62 failures, 18 errors,
+  5 skips; security runs both have 106 tests, 95 failures, 3 errors, 1 skip.
+  The exact failure/error identity multisets match for both suites. LeakSanitizer
+  reports a fatal ptrace/sandbox error in these runs; no leak checks were disabled.
+  RSET prints passing production assertions, then hits the same error before its
+  frame-golden check. These are regression comparisons, not green-suite evidence.
+  K8-7 host evidence: H05 reaches PASS for distinct Standard/Guest desktop disk
+  timers through the production policy application and scripted ATA backend;
+  ordinary clients, revoked/missing identities and closing/dead/no-session users
+  are refused without changing the timer or user record. H16 reaches PASS with
+  additional Standard/Guest desktop-role attempts to change machine button/lid
+  settings refused; administrator/SYSTEM settings still succeed. The round-2 full
+  security run has the same 106 tests and exact failure/error identities as base
+  (95 failures, 3 errors, 1 skip), including the existing LeakSanitizer limitation.
+  The census passes for 298 selectors, three focused desktop checks pass, and
+  `power.c` compiles with the canonical i686 kernel flags. No ABI/SDK changes.
 - Windows XP keeps the power-button and lid actions in `GLOBAL_USER_POWER_POLICY` ("Each user has
   a separate global power scheme", [WriteGlobalPwrPolicy](https://learn.microsoft.com/en-us/windows/win32/api/powrprof/nf-powrprof-writeglobalpwrpolicy),
   [GLOBAL_USER_POWER_POLICY](https://learn.microsoft.com/en-us/windows/win32/api/powrprof/ns-powrprof-global_user_power_policy));

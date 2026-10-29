@@ -3,6 +3,7 @@
 #include <ciuki/kernel.h>
 #include <ciuki/files.h>
 #include <ciuki/net_control.h>
+#include <ciuki/ipx_config.h>
 static struct vfs *settings_vfs;
 static struct vfs_table table;
 static struct kmutex lock;
@@ -19,6 +20,7 @@ static int identity(unsigned index, struct net_config_identity *id)
 }
 void net_settings_load(struct vfs *v)
 {
+    net_ipx_frame_publish(CIUKI_IPX_FRAME_AUTO);
     kmutex_init(&lock); settings_vfs = v;
     memset(saved_ids, 0, sizeof(saved_ids));
     for (unsigned i = 0; i < 2; i++) net_config_default(&saved[i]);
@@ -31,6 +33,14 @@ void net_settings_load(struct vfs *v)
             int e = vfs_read(&table, fd, buffer, sizeof(buffer), &n);
             vfs_close(&table, fd);
             reason = e ? "read_failed" : net_config_parse(buffer, n, saved, saved_ids) ? "invalid" : "saved";
+        }
+        fd = vfs_open(&table, IPX_CONFIG_PATH, VFS_READ, VFS_DENY_NONE, 0);
+        if (fd>=0) {
+            char text[IPX_CONFIG_BYTES+1]; size_t size=0; unsigned framing;
+            int e=vfs_read(&table,fd,text,sizeof(text),&size);
+            vfs_close(&table,fd);
+            if (!e && ipx_config_parse(text,size,&framing)) net_ipx_frame_publish(framing);
+            else klog("[net] ipx config invalid; frame_type=Auto");
         }
         vfs_table_destroy(&table);
     }

@@ -42,6 +42,7 @@ python3 -B -m unittest discover -s "$root/tests/host" -p test_sysrecovery.py
 python3 -B -m unittest discover -s "$root/tests/host/reliability" -p 'test_*.py'
 python3 -B "$root/tests/host/test_display_driver_model.py"
 python3 -B "$root/tests/host/test_radeon2d.py"
+python3 -B "$root/tests/host/test_radeon3d.py"
 python3 -B "$root/tests/host/test_nv2d.py"
 python3 -B "$root/tests/host/test_riva128.py"
 python3 -B "$root/tests/host/test_intel2d.py"
@@ -62,6 +63,10 @@ python3 -B "$root/tests/host/test_display_commands.py"
 python3 -B "$root/tests/host/test_display_driver_names.py"
 python3 -B "$root/tests/host/test_savage_family.py"
 python3 -B "$root/tests/host/test_render3d.py"
+python3 -B "$root/tests/host/test_matrox3d.py"
+python3 -B "$root/tests/host/test_mach64_3d.py"
+python3 -B "$root/tests/host/test_vmwaresvga3d.py"
+python3 -B "$root/tests/host/test_vmwaresvga3d_h1.py"
 python3 -B -m unittest discover -s "$root/tests/host/ndis" -p test_package.py
 python3 -B "$root/tests/host/test_presenter_display.py"
 python3 -B "$root/tests/host/test_display_modes.py" DisplayTests.test_kernel_switch
@@ -426,7 +431,7 @@ for unit in vm_source opl3 mixer; do
 done
 pool="$(python3 "$root/tests/host/vm/pool_build.py" "$root" "$out/vm")"
 plain_pool="$(python3 "$root/tests/host/vm/pool_build.py" "$root" "$out/vm" --plain)"
-network_sources=("$root/src/kernel/net/bridge.c" "$root/src/kernel/vm/dosvm_ipx.c" "$root/src/kernel/vm/dosvm_ne2000.c")
+network_sources=("$root/src/kernel/net/ipx_config.c" "$root/src/kernel/net/bridge.c" "$root/src/kernel/vm/dosvm_ipx.c" "$root/src/kernel/vm/dosvm_ne2000.c")
 guest_cpu=()
 if [[ -f /usr/include/x86emu.h ]]; then
     guest_cpu=(-DCIUKI_DOSVM_GUEST_CPU "$root/tests/host/dosvm_guest_cpu.c" -lx86emu)
@@ -808,6 +813,7 @@ bash "$root/tests/host/usb/ehci_run.sh"
 # F6: production ownership/queues and three register-level NIC models.
 bash "$root/tests/host/net/run.sh"
 python3 "$root/tests/host/lwip/fd_run.py" --frame
+python3 -B "$root/tests/host/net/test_ipx.py"
 python3 "$root/tests/host/lwip/run.py"
 python3 "$root/tests/host/lwip/fd_run.py"
 python3 "$root/tests/host/lwip/run.py" --kernel

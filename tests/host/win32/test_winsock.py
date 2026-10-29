@@ -31,6 +31,12 @@ class WinsockBuild(unittest.TestCase):
         self.assertEqual(oldnames['inet_addr']['ordinal'],10)
         self.assertEqual(newnames['inet_addr']['ordinal'],11)
         self.assertEqual(newnames['ioctlsocket']['ordinal'],10)
+        # fx-hlrun: the Winsock 1.1 asynchronous range of Wine's wsock32.spec
+        # and ws2_32.spec (Half-Life's hl.exe imports wsock32 #101).
+        for names in (oldnames, newnames):
+            self.assertEqual(names['WSAAsyncSelect']['ordinal'],101)
+            self.assertEqual(names['WSAAsyncGetHostByName']['ordinal'],103)
+            self.assertEqual(names['WSACancelAsyncRequest']['ordinal'],108)
         self.assertLessEqual(first['size'],65536)  # its prior store slot has this alignment
         saved=[(out/name).read_bytes() for name in ('wsock32.dll','ws2_32.dll')]
         kernel32.build_offline(out,first['base'],flags);kernel32.build_winsock2(out,second['base'],flags)

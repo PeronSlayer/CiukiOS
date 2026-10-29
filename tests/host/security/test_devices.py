@@ -47,6 +47,7 @@ class DeviceTests(unittest.TestCase):
         self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
 
     def test_power_policy(self):
+        # sec-k08b: power_policy_test includes subject_fixture.c for session-state cases.
         OUT.mkdir(parents=True, exist_ok=True)
         source = (ROOT / 'src/kernel/core/power.c').read_text()
         a = source.index('int32_t power_record_call(')
@@ -58,7 +59,6 @@ class DeviceTests(unittest.TestCase):
                         '-fsanitize=address,undefined', '-fno-sanitize-recover=all',
                         '-I', str(OUT), '-I', str(ROOT / 'src/kernel/include'),
                         str(ROOT / 'tests/host/security/power_policy_test.c'),
-                        str(ROOT / 'tests/host/security/subject_fixture.c'),
                         '-o', str(program)], check=True)
         r = subprocess.run([str(program)], capture_output=True, text=True, timeout=90)
         print(r.stdout, end='')

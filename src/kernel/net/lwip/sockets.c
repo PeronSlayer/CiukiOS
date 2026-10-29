@@ -13,6 +13,7 @@
 #include <ciuki/signal.h>
 #include <ciuki/kernel.h>
 #include <ciuki/security_device.h>
+#include <ciuki/ipx.h>
 
 #define REQUESTS 8u
 struct socket_object {
@@ -22,6 +23,7 @@ struct socket_object {
     struct netbuf *udp_rx;
     unsigned references, active, holds, watchers, generation, flags, type, rx_offset;
     unsigned receive_ms, send_ms, shut, control_shut;
+    unsigned family, protocol, ipx;
     int receive_events, send_events, error, connect_result;
     uint32_t route_address;
     struct ciuki_sockaddr_in local, peer;
@@ -119,7 +121,7 @@ void net_socket_snapshot(struct ciuki_net_socket_list *list)
     bool system=security_device_system(caller), admin=security_device_admin(caller);
     sys_prot_t f=sys_arch_protect();
     for(unsigned i=0;i<CIUKI_SOCKET_MAX;i++) {
-        struct socket_object *s=&sockets[i];if(!s->used || s->pending || s->closing)continue;
+        struct socket_object *s=&sockets[i];if(!s->used || s->pending || s->closing || s->family==AF_IPX)continue;
         if (!system && (s->security_uid==CIUKI_UID_SYSTEM ||
             (!admin && (s->security_uid!=credential->uid || s->security_session!=credential->session_id)))) continue;
         if (!system && !admin) {
@@ -428,6 +430,84 @@ static void route_address_core(void *arg)
     if (n) s->route_address = ip4_addr_get_u32(netif_ip4_addr(n));
     sys_arch_unprotect(f);
 }
+/* IPX keeps the existing request/fd ownership boundary. The protocol hub is
+ * serialized with DOS ingress by its port gate, independently of lwIP PCBs. */
+static void ipx_sync(struct socket_object *s)
+{
+    if(!s->ipx)return;
+    struct ciuki_sockaddr_ipx local,peer; unsigned error=0;
+    if(!net_ipx_names(s->ipx,&local,&peer)) { memcpy(&s->local,&local,16); memcpy(&s->peer,&peer,16); }
+    int state=net_ipx_call(s->ipx,IPX_CALL_STATUS,NULL,0,0,NULL,&error);
+    if(state<0)return;
+    if(s->type!=SOCK_DGRAM) {
+        s->connecting=state==SPX_CONNECTING; s->connected=state==SPX_ESTABLISHED || state==SPX_END;
+        if(s->connected)s->connect_result=0;
+        if(error) { s->error=(int)error; s->failed=true; s->connect_result=-(int)error; }
+    }
+}
+static int attempt_ipx_once(struct request *r)
+{
+    struct socket_object *s=r->socket; struct ciuki_sockaddr_ipx a;
+    memcpy(&a,&r->address,sizeof(a));
+    int e=0;
+    if(r->operation!=OP_RECV && r->operation!=OP_NAME && r->operation!=OP_OPTION) {
+        e=commit(r); if(e)return e;
+    }
+    switch(r->operation) {
+    case OP_NEW:
+        e=net_ipx_open(s->type,s->protocol); if(e>0) { s->ipx=(unsigned)e; e=0; } break;
+    case OP_BIND:e=net_ipx_call(s->ipx,IPX_CALL_BIND,NULL,0,0,&a,NULL);break;
+    case OP_CONNECT:
+        e=net_ipx_call(s->ipx,IPX_CALL_CONNECT,NULL,0,0,&a,NULL);
+        if(e==-EINPROGRESS) { s->connecting=true;s->connected=false;s->connect_result=e; }
+        else if(!e) { s->connecting=false;s->connected=a.family!=AF_UNSPEC;s->connect_result=0; }
+        break;
+    case OP_LISTEN:
+        e=net_ipx_call(s->ipx,IPX_CALL_LISTEN,NULL,r->which,0,NULL,NULL);
+        if(!e)s->listening=true;
+        break;
+    case OP_ACCEPT: {
+        struct ciuki_sockaddr_ipx local,peer;
+        e=net_ipx_call(s->ipx,IPX_CALL_ACCEPT,&local,sizeof(local),0,&peer,NULL);
+        if(e>0) {
+            struct socket_object *c=r->created; c->family=AF_IPX; c->protocol=NSPROTO_SPX;
+            c->ipx=(unsigned)e; c->connected=true;
+            memcpy(&c->local,&local,16);memcpy(&c->peer,&peer,16);r->address=c->peer;e=0;
+        }
+        break;
+    }
+    case OP_SEND:e=net_ipx_call(s->ipx,IPX_CALL_SEND,r->buffer,r->bytes,r->flags,r->has_address?&a:NULL,NULL);break;
+    case OP_RECV:
+        if((e=commit(r)))break;
+        e=net_ipx_call(s->ipx,IPX_CALL_RECV,r->buffer,r->bytes,r->flags,&a,&r->output_flags);
+        if(e>=0)memcpy(&r->address,&a,16);
+        break;
+    case OP_OPTION:
+        if(r->level==SOL_SOCKET && (r->option==SO_RCVTIMEO || r->option==SO_SNDTIMEO))e=option(r);
+        else e=net_ipx_option(s->ipx,r->which,(int)r->level,r->option,r->buffer,&r->length);
+        break;
+    case OP_NAME: {
+        struct ciuki_sockaddr_ipx local,peer;unsigned error=0;
+        int state=net_ipx_call(s->ipx,IPX_CALL_STATUS,NULL,0,0,NULL,&error);
+        if(state<0) { e=state;break; }
+        e=net_ipx_names(s->ipx,&local,&peer);if(e)break;
+        if(r->which && (s->type==SOCK_DGRAM ? !s->connected : state!=SPX_ESTABLISHED && state!=SPX_END)) { e=-ENOTCONN;break; }
+        memcpy(&r->address,r->which?&peer:&local,16);break;
+    }
+    }
+    ipx_sync(s); return e;
+}
+static int attempt_ipx(struct request *r)
+{
+    for(;;) {
+        int e=attempt_ipx_once(r);if(e!=IPX_PORT_BUSY)return e;
+        /* Contention precedes every protocol side effect. Re-open cancellation
+         * before yielding; data/window EAGAIN retains its ordinary meaning. */
+        sys_prot_t f=sys_arch_protect();r->committed=false;
+        e=cancellation(r);sys_arch_unprotect(f);if(e)return e;
+        cu_yield();
+    }
+}
 static int attempt(struct request *r)
 {
     struct socket_object *s = r->socket; struct netconn *c = s->conn;
@@ -437,6 +517,7 @@ static int attempt(struct request *r)
     if (r->process && !still_open(r->process, r->fd, r->fd_generation, s)) return -EBADF;
     if (s->network_down && (r->operation == OP_SEND || r->operation == OP_RECV ||
                             r->operation == OP_CONNECT || r->operation == OP_ACCEPT)) return -ENETDOWN;
+    if(s->family==AF_IPX)return attempt_ipx(r);
     switch (r->operation) {
     case OP_NEW:
         if ((cancelled = commit(r))) return cancelled;
@@ -630,16 +711,25 @@ static void control_worker(void *unused)
             TEST_HOOK(4); /* host fixture pauses after the exclusive handoff */
             if (close) {
                 free_rx(s);
-                err_t e = s->conn ? netconn_delete(s->conn) : ERR_OK;
+                err_t e = ERR_OK;
+                int ipx_error=s->ipx ? net_ipx_close(s->ipx) : 0;
+                if(ipx_error)e=ERR_WOULDBLOCK;
+                else if(s->conn)e=netconn_delete(s->conn);
                 f = sys_arch_protect();
+                if(ipx_error==IPX_PORT_BUSY) { s->control=false;sys_arch_unprotect(f);cu_yield();continue; }
                 if (!e) {
-                    if (s->type == SOCK_STREAM) tcp_count--; else udp_count--;
-                    if (s->listening) listeners--;
+                    if (s->type == SOCK_STREAM || s->type == SOCK_SEQPACKET) tcp_count--; else udp_count--;
+                    if (s->listening && s->family!=AF_IPX) listeners--;
                     s->used = false; s->conn = NULL;
                 } else { s->failed = true; s->error = -error_number(e); }
             } else {
-                err_t e = netconn_shutdown(s->conn, (directions & 1) != 0, (directions & 2) != 0);
-                f = sys_arch_protect(); s->control_shut = directions;
+                int ipx_error=s->ipx ? net_ipx_call(s->ipx,IPX_CALL_SHUTDOWN,NULL,
+                    directions==3?SHUT_RDWR:directions&2?SHUT_WR:SHUT_RD,0,NULL,NULL) : 0;
+                err_t e=s->ipx ? ipx_error ? ERR_WOULDBLOCK : ERR_OK :
+                    netconn_shutdown(s->conn,(directions&1)!=0,(directions&2)!=0);
+                f = sys_arch_protect();
+                if(s->ipx && ipx_error==IPX_PORT_BUSY) { s->control=false;sys_arch_unprotect(f);cu_yield();continue; }
+                s->control_shut = directions;
                 if (e) { s->failed = true; s->error = -error_number(e); }
             }
             s->control = false; sys_arch_unprotect(f); cu_changed();
@@ -705,7 +795,7 @@ static struct socket_object *reserve_socket(struct process *p, unsigned type, in
     if (process_sockets(p) >= CIUKI_SOCKET_PROCESS_MAX) *error = -EMFILE;
     else if (net_socket_count() + file_description_count() + desktop_objects.descriptions >= CIUKI_OPEN_DESCRIPTION_MAX) *error = -ENFILE;
     if (*error) { sys_arch_unprotect(f); return NULL; }
-    if ((type == SOCK_STREAM ? tcp_count >= 32 : udp_count >= 16)) *error = -ENOBUFS;
+    if (((type == SOCK_STREAM || type == SOCK_SEQPACKET) ? tcp_count >= 32 : udp_count >= 16)) *error = -ENOBUFS;
     struct socket_object *s = NULL;
     for (unsigned i = 0; !*error && i < CIUKI_SOCKET_MAX; i++) if (!sockets[i].used) {
         s = &sockets[i]; memset(s, 0, sizeof(*s)); s->used = true; s->references = 1;
@@ -713,7 +803,7 @@ static struct socket_object *reserve_socket(struct process *p, unsigned type, in
         s->local.family = AF_INET; s->peer.family = AF_INET;
         s->generation = ++object_generation; s->origin = p; s->origin_pid = p->pid; s->pending = true;
         s->security_uid=credential->uid; s->security_session=credential->session_id;
-        if (type == SOCK_STREAM) tcp_count++; else udp_count++;
+        if (type == SOCK_STREAM || type == SOCK_SEQPACKET) tcp_count++; else udp_count++;
         break;
     }
     if (!s && !*error) *error = -ENOBUFS;
@@ -721,15 +811,17 @@ static struct socket_object *reserve_socket(struct process *p, unsigned type, in
 }
 int net_socket_create(struct process *p, int family, int type, int protocol)
 {
-    if (family != AF_INET) return -EAFNOSUPPORT;
+    if (family != AF_INET && family != AF_IPX) return -EAFNOSUPPORT;
     if (type & ~(SOCK_NONBLOCK | SOCK_CLOEXEC | 0xf)) return -EINVAL;
     unsigned base = type & 0xf;
-    if (base != SOCK_STREAM && base != SOCK_DGRAM && base != SOCK_RAW) return -ESOCKTNOSUPPORT;
-    if (protocol && protocol != (base == SOCK_STREAM ? IPPROTO_TCP : base == SOCK_RAW ? IPPROTO_ICMP : IPPROTO_UDP)) return -EPROTONOSUPPORT;
-    if (base == SOCK_RAW && protocol != IPPROTO_ICMP) return -EPROTONOSUPPORT;
+    if (base != SOCK_STREAM && base != SOCK_DGRAM && base != SOCK_RAW && !(family==AF_IPX && base==SOCK_SEQPACKET)) return -ESOCKTNOSUPPORT;
+    if (family==AF_INET && protocol && protocol != (base == SOCK_STREAM ? IPPROTO_TCP : base == SOCK_RAW ? IPPROTO_ICMP : IPPROTO_UDP)) return -EPROTONOSUPPORT;
+    if (base == SOCK_RAW && (family==AF_IPX || protocol != IPPROTO_ICMP)) return -EPROTONOSUPPORT;
+    if(family==AF_IPX && protocol && (base==SOCK_DGRAM ? protocol<NSPROTO_IPX || protocol>NSPROTO_IPX+255 : protocol!=NSPROTO_SPX))return -EPROTONOSUPPORT;
     if (!workers_ready) return -ENOBUFS;
     int fd = file_fd_reserve(p); if (fd < 0) return fd;
     int e; struct socket_object *s = reserve_socket(p, base, &e); if (!s) { file_fd_cancel(p, fd); return e; }
+    s->family=(unsigned)family; s->protocol=(unsigned)protocol;
     s->flags |= type & SOCK_NONBLOCK ? O_NONBLOCK : 0;
     struct request *r = request_new(s);
     if (!r) { s->pending = false; release(&s->object); file_fd_cancel(p, fd); return -ENOBUFS; }
@@ -756,7 +848,7 @@ static struct request *for_fd(struct process *p, int fd, int *error, const struc
 int net_socket_bind(struct process *p, int fd, const struct ciuki_sockaddr_in *a, const struct net_socket_ref *ref)
 {
     int e; struct request *r = for_fd(p, fd, &e, ref); if (!r) return e;
-    e = address_check(a, false);
+    e = r->socket->family==AF_IPX ? 0 : address_check(a, false);
     if (!e) { r->operation = OP_BIND; r->address = *a; e = submit(r); }
     request_free(r); return e;
 }
@@ -764,7 +856,7 @@ int net_socket_connect(struct process *p, int fd, const struct ciuki_sockaddr_in
 {
     int e; struct request *r = for_fd(p, fd, &e, ref); if (!r) return e;
     struct socket_object *s = r->socket; unsigned generation = r->fd_generation;
-    e = address_check(a, s->type == SOCK_DGRAM);
+    e = s->family==AF_IPX ? 0 : address_check(a, s->type == SOCK_DGRAM);
     if (!e) {
         r->operation = OP_CONNECT; r->address = *a;
         uint64_t end = s->send_ms ? cu_now() + s->send_ms : UINT64_MAX;
@@ -774,6 +866,7 @@ int net_socket_connect(struct process *p, int fd, const struct ciuki_sockaddr_in
             unsigned seq = cu_change_snapshot();
             if (!still_open(p, fd, generation, s)) { e = -EBADF; break; }
             if (interrupted(p)) { e = -EINTR; break; }
+            if(s->family==AF_IPX)ipx_sync(s);
             if (!s->connecting) { e = s->connect_result ? s->connect_result : s->connected ? 0 : -ENOTCONN; break; }
             if (cu_now() >= end) { e = -ETIMEDOUT; break; }
             cu_wait_change(seq, cu_now() + 1);
@@ -805,9 +898,9 @@ static int retry(struct process *p, int fd, struct request *r, unsigned timeout)
 int net_socket_accept(struct process *p, int fd, struct ciuki_sockaddr_in *a, const struct net_socket_ref *ref)
 {
     int e; struct request *r = for_fd(p, fd, &e, ref); if (!r) return e;
-    if (r->socket->type != SOCK_STREAM) { request_free(r); return -EOPNOTSUPP; }
+    if (r->socket->type != SOCK_STREAM && r->socket->type != SOCK_SEQPACKET) { request_free(r); return -EOPNOTSUPP; }
     int slot = file_fd_reserve(p); if (slot < 0) { request_free(r); return slot; }
-    struct socket_object *child = reserve_socket(p, SOCK_STREAM, &e);
+    struct socket_object *child = reserve_socket(p, r->socket->type, &e);
     if (!child) { file_fd_cancel(p, slot); request_free(r); return e; }
     child->holds++;
     r->created = child; r->reserved_process = p; r->reserved_fd = slot;
@@ -834,7 +927,7 @@ static int socket_io(struct process *p, int fd, void *buffer, unsigned bytes, un
     if (send && s->type == SOCK_RAW && a && a->port) { request_free(r); return -EINVAL; }
     r->operation = send ? OP_SEND : OP_RECV; r->bytes = bytes; r->flags = flags;
     r->has_address = send && a;
-    if (send && a) { e = address_check(a, false); if (e) { request_free(r); return e; } r->address = *a; }
+    if (send && a) { e = s->family==AF_IPX ? 0 : address_check(a, false); if (e) { request_free(r); return e; } r->address = *a; }
     if (send && bytes) memcpy(r->buffer, buffer, bytes);
     e = retry(p, fd, r, send ? s->send_ms : s->receive_ms);
     if (!send && e >= 0) {
@@ -859,7 +952,7 @@ int net_socket_shutdown(struct process *p, int fd, unsigned how, const struct ne
     sys_prot_t f = sys_arch_protect(); int e;
     struct socket_object *s = lookup_captured(p, fd, &e, ref);
     if (!s) { sys_arch_unprotect(f); return e; }
-    if (s->type != SOCK_STREAM) e = -EOPNOTSUPP;
+    if (s->type != SOCK_STREAM && s->type != SOCK_SEQPACKET) e = -EOPNOTSUPP;
     else if (!s->connected) e = -ENOTCONN;
     else s->shut |= how == SHUT_RD ? 1 : how == SHUT_WR ? 2 : 3;
     sys_arch_unprotect(f); if (e) return e;
@@ -870,6 +963,12 @@ int net_socket_name(struct process *p, int fd, unsigned which, struct ciuki_sock
     if (which > 1) return -EINVAL;
     sys_prot_t f = sys_arch_protect(); int e;
     struct socket_object *s = lookup_captured(p, fd, &e, ref);
+    if(s && s->family==AF_IPX) {
+        sys_arch_unprotect(f);
+        struct request *r=for_fd(p,fd,&e,ref);if(!r)return e;
+        r->operation=OP_NAME;r->which=which;e=submit(r);
+        if(!e)*out=r->address;request_free(r);return e;
+    }
     if (s && which && !s->connected) e = -ENOTCONN;
     if (s && !e) *out = which ? s->peer : s->local;
     sys_arch_unprotect(f); return e;
@@ -879,7 +978,13 @@ int net_socket_option(struct process *p, int fd, unsigned set, int level, int na
     if (set > 1 || *length > 65535) return -EINVAL;
     int e; struct request *r = for_fd(p, fd, &e, ref); if (!r) return e == -ENOBUFS ? -ENOMEM : e;
     r->operation = OP_OPTION; r->which = set; r->level = (unsigned)level; r->option = (unsigned)name; r->length = *length;
-    if (set) { if (*length > 16) { request_free(r); return -EINVAL; } memcpy(r->buffer, value, *length); }
+    unsigned input=set?*length:0;
+    if(!set && r->socket->family==AF_IPX) {
+        if(name==IPX_ADDRESS)input=sizeof(struct ciuki_ipx_address_data);
+        if(name==IPX_GETNETINFO || name==IPX_GETNETINFO_NORIP)input=sizeof(struct ciuki_ipx_netnum_data);
+    }
+    if(input>32 || input>*length) { request_free(r);return -EINVAL; }
+    if(input)memcpy(r->buffer,value,input);
     e = submit(r);
     if (!e && !set) { unsigned n = *length < r->length ? *length : r->length; memcpy(value, r->buffer, n); *length = r->length; }
     request_free(r); return e;
@@ -899,6 +1004,7 @@ static int readiness(struct process *p, int fd, struct proc_object *o)
     if (net_socket_object(o)) {
         struct socket_object *s = (void *)o;
         if (!socket_subject(p,s)) return POLLNVAL;
+        if(s->family==AF_IPX) { ipx_sync(s); return net_ipx_events(s->ipx); }
         int events = 0;
         if (s->tcp_rx || s->udp_rx || s->eof || s->receive_events > 0 || (s->shut & 1) ||
             (!s->control && s->conn && netconn_is_flag_set(s->conn, NETCONN_FIN_RX_PENDING)) ||

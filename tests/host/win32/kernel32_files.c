@@ -6,12 +6,28 @@
 #include "../proc/files_test.c"
 #include <ciuki/w32_core.h>
 #include <ciuki/w32_objects.h>
+#include <ciuki/com.h>
 #include <pthread.h>
 #include <sched.h>
 #include <stdatomic.h>
 void w32_refusal_queue(struct process *p,uint32_t why,const char *name,uint32_t error){(void)p;(void)name;CHECK(why==W32_REFUSE_DRIVER&&error==5);}
 static struct w32_object *handles[64];
 static unsigned core_allocations;
+/* Hardware boundary only: retain the production Win32 handles, copied user
+ * records, credentials and file descriptions for the COM transport check. */
+int com_control(unsigned,uint32_t,uint32_t,void *,unsigned,bool) __attribute__((weak));
+static unsigned comm_calls;
+int com_control(unsigned port,uint32_t generation,uint32_t op,void *record,unsigned bytes,bool writable) {
+  CHECK(port==2 && generation==7);comm_calls++;
+  uint32_t *header=record;
+  if(header[0]!=1 || header[1]!=bytes) return -EINVAL;
+  if(op==COM_GET_LINE) {
+    CHECK(bytes==sizeof(struct ciuki_com_line));
+    *(struct ciuki_com_line *)record=(struct ciuki_com_line){1,40,38400,8,1,0,0,0,0,0};
+  } else if(op==COM_SET_LINE) return writable ? 0 : -EACCES;
+  else return -ENOTTY;
+  return 0;
+}
 void *w32_alloc(uint32_t n) {
   void *p = calloc(1, n);
   if (p)
@@ -199,6 +215,32 @@ static uint32_t lock_request(uint32_t h,unsigned op,uint64_t offset,uint64_t byt
   struct ciuki_w32_file_args a={.action=op,.handle=h,.low=(uint32_t)offset,
       .high=(uint32_t)(offset>>32),.bytes=(uint32_t)bytes,.share=(uint32_t)(bytes>>32),.flags=flags};
   CHECK(!w32_file_call(client_thread,&a));return a.error;
+}
+static void comm_transport(void) {
+  char path[CIUKI_PATH_MAX],full[FS_PATH_BYTES];
+  CHECK(!w32_native_path(client,"COM1:",path,full) && !strcmp(path,"/dev/com1"));
+  CHECK(!w32_native_path(client,"\\\\.\\COM8",path,full) && !strcmp(path,"/dev/com8"));
+  struct ciuki_w32_file_args opened=open_request("C:\\comm-wire.tmp",0xc0000000u,7,2);
+  CHECK(!opened.error);uint32_t h=opened.result;
+  struct ciuki_w32_file_args a={.action=W32_F_COMM,.handle=h,.flags=5};
+  CHECK(!w32_file_call(client_thread,&a) && a.error==6); /* ordinary files are not COM handles */
+  struct file_description *d=handles[h/4]->u.file.description;
+  unsigned kind=d->node->kind;d->node->kind=PX_COM;d->com_generation=7;
+  struct ciuki_com_line line={.version=1,.size=sizeof(line)};
+  CHECK(!ua_write(client->memory,USER,&line,sizeof(line)));
+  a=(struct ciuki_w32_file_args){.action=W32_F_COMM,.handle=h,.flags=COM_GET_LINE,.buffer=USER,.bytes=sizeof(line)};
+  CHECK(!w32_file_call(client_thread,&a) && !a.error);
+  CHECK(!ua_read(client->memory,&line,USER,sizeof(line)) && line.baud==38400 && comm_calls==1);
+  a.bytes--;a.error=0;CHECK(!w32_file_call(client_thread,&a) && a.error==87 && comm_calls==1);
+  uint32_t mask=0x19;CHECK(!ua_write(client->memory,USER,&mask,4));
+  a=(struct ciuki_w32_file_args){.action=W32_F_COMM,.handle=h,.flags=4,.buffer=USER,.bytes=4};
+  CHECK(!w32_file_call(client_thread,&a) && !a.error);
+  mask=0;CHECK(!ua_write(client->memory,USER,&mask,4));a.flags=3;
+  CHECK(!w32_file_call(client_thread,&a) && !a.error);
+  CHECK(!ua_read(client->memory,&mask,USER,4) && mask==0x19);
+  d->node->kind=kind;d->com_generation=0;close_handle(h);
+  CHECK(!path_request("C:\\comm-wire.tmp",W32_F_DELETE));
+  puts("PASS fx-hlutils COM namespace, retained handles, copied native records, size validation and masks");
 }
 static struct ciuki_w32_file_info handle_info(uint32_t h) {
   struct ciuki_w32_file_args a = {.action = W32_F_STAT, .handle = h,
@@ -560,6 +602,7 @@ int main(int argc, char **argv) {
   char short_name[260];
   CHECK(!ua_read(client->memory, short_name, USER2, a.result) &&
         !strcmp(short_name, "C:\\WINDOWS\\LONGFI~1.TXT"));
+  comm_transport();
   for (unsigned d = 0; d < 26; d++)
     if (w32_state.drive_cwd[d])
       px_release(w32_state.drive_cwd[d]);

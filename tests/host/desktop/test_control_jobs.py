@@ -24,6 +24,8 @@ class ControlJobsTests(unittest.TestCase):
         library = ft.host()
         sources = ["tests/host/desktop/control_jobs_test.c", "apps/control/app.c", "apps/desktop/power_policy.c", "apps/systools/devctl.c", "apps/systools/profiles.c", "apps/control/driver_pack_ui.c", "apps/control/display.c", "apps/control/fonts.c",
                    "sdk/libfont/font.c", "apps/libdeskui/text_ttf.c", "apps/desktop/protocol.c",
+                   # fx-uaccounts: main.c's User Accounts glue is compiled on the host too.
+                   "apps/control/accounts_client.c", "apps/logon/logon_proto.c", "src/kernel/lib/sha256.c",
                    *(f"apps/desktop/{n}.c" for n in ("settings", "settings_io", "sounds", "wallpaper", "image", "compositor", "theme")),
                    *(f"apps/libdeskui/{n}.c" for n in ("draw", "widgets", "list", "menu", "dialog", "controls", "commdlg", "textarea", "icons", "icon_map", "iconx", "fileicon"))]
         with tempfile.TemporaryDirectory(prefix="control-jobs-", dir=parent) as tmp:

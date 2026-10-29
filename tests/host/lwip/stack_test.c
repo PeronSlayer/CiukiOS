@@ -13,6 +13,8 @@
 #include "lwip/mem.h"
 #include <ciuki/net_stack.h>
 #include <ciuki/net_control.h>
+#include <ciuki/ipx_config.h>
+#include <ciuki/ipx_wire.h>
 #include <ciuki/files.h>
 #include "../security/subject_fixture.h"
 #include <ciuki/desktop.h>
@@ -628,6 +630,7 @@ static void cycles(void)
 #include "raw.inc"
 #include "amendment.inc"
 #include "dos_bridge.inc"
+#include "ipx_sockets.inc"
 #include "netctl.inc"
 #include "f624.inc"
 int main(int argc,char **argv)
@@ -641,12 +644,15 @@ int main(int argc,char **argv)
         CHECK(!net_stack_attach(0,client_mac,true));check_address(PP_HTONL(0xc0000264));
         f624_tcp_tests();CHECK(!live_pins);cu_host_shutdown();return 0;
     }
+    if(argc==2 && !strcmp(argv[1],"--f6-25")) {
+        ipx_socket_tests();CHECK(!live_pins);cu_host_shutdown();return 0;
+    }
     if(argc>1) {
         CHECK(!net_stack_attach(0,client_mac,true));retry_acquisition();netctl_tests();cu_host_shutdown();return 0;
     }
     raw_tests();refusal_tests();limits_tests();mixed_tests();udp_tests();tcp_tests();lifecycle_tests();
     preparation_races();queue_races();connect_error_race();shutdown_close_tests();
-    cycles();dns_dhcp_tests();f624_tcp_tests();dos_bridge_pool_test();CHECK(!live_pins);
+    cycles();dns_dhcp_tests();f624_tcp_tests();dos_bridge_pool_test();ipx_socket_tests();CHECK(!live_pins);
     extern unsigned cu_arch_bytes(void),cu_socket_bytes(void),cu_socket_object_bytes(void),cu_request_bytes(void);
     printf("MEASURE host pbuf=%zu tcp_pcb=%zu udp_pcb=%zu netconn=%zu socket=%u mbox=%u arch=%u socket_metadata=%u request=%u\n",
         sizeof(struct pbuf),sizeof(struct tcp_pcb),sizeof(struct udp_pcb),sizeof(struct netconn),cu_socket_object_bytes(),cu_mbox_bytes(),cu_arch_bytes(),cu_socket_bytes(),cu_request_bytes());

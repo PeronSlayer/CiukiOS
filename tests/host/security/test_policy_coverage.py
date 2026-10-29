@@ -95,7 +95,7 @@ class PolicyAdversarialTests(unittest.TestCase):
                    'src/kernel/fs/path.c', 'src/kernel/fs/fat.c', 'src/kernel/fs/vfs.c',
                    'src/kernel/fs/fs_ro.c', 'src/kernel/fs/iso9660.c', 'tests/host/fs/fake.c',
                    'src/kernel/probes/f2_probes_files.c', 'src/kernel/lib/sha256.c',
-                   'src/kernel/ndis/package.c', 'src/kernel/lib/tzrule.c', *owner]
+                   'src/kernel/net/ipx_config.c', 'src/kernel/ndis/package.c', 'src/kernel/lib/tzrule.c', *owner]
         program = OUT / 'native'
         subprocess.run(['clang', *WARN, '-ffunction-sections', '-fdata-sections', '-Wl,--gc-sections', *SAN,
                         '-DFS_HOST', '-D_POSIX_C_SOURCE=200809L', '-DCIUKI_POLICY_COVERAGE', '-pthread',

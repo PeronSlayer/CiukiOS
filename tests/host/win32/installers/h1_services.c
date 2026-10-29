@@ -35,10 +35,37 @@ static int text(uint32_t *field){
     while(n<32768 && p[n])n++;
     return n<32768 && append(field,n+1,1);
 }
+static int32_t record(void *r,uint32_t size);
+/* fx-hlrun: a ReadFile/WriteFile larger than one relay packet goes in
+ * bounded chunks, as the kernel's W32_F_READ/W32_F_WRITE relay does
+ * (src/kernel/proc/win32/files.c, CIUKI_IO_MAX chunks under one VFS
+ * transaction): sequential chunks advance the file pointer, positional
+ * ones (flags 0x10000) the offset; the call stops at the first error or
+ * short transfer and reports the bytes moved. Half-Life's launcher reads a
+ * 2.9 MB bitmap from its PAK in one ReadFile. */
+#define CHUNK (512u*1024u)
+static int32_t chunked(struct ciuki_w32_file_args *a){
+    uint64_t at=((uint64_t)a->high<<32)|a->low;uint32_t total=0;int32_t e=0;
+    a->error=0;
+    do{
+        struct ciuki_w32_file_args one=*a;uint32_t n=a->bytes-total;if(n>CHUNK)n=CHUNK;
+        one.buffer=a->buffer+total;one.bytes=n;
+        if(a->flags&0x10000u){one.low=(uint32_t)(at+total);one.high=(uint32_t)((at+total)>>32);}
+        if((e=record(&one,sizeof(one))))break;
+        total+=one.result;a->error=one.error;
+        if(one.error || one.result<n)break;
+    }while(total<a->bytes);
+    a->result=total;return e;
+}
 static int32_t record(void *r,uint32_t size){
     uint32_t buffer=0,bytes=0,offset=0,used=0;
     struct ciuki_w32_header *header=r;
     if(size>128)return -22;
+    if(header->operation==W32_FILE && size==sizeof(struct ciuki_w32_file_args)){
+        struct ciuki_w32_file_args *a=r;
+        if((a->action==W32_F_READ || a->action==W32_F_WRITE) && a->bytes>CHUNK && !a->path && !a->path2)
+            return chunked(a);
+    }
     w32_copy(packet,r,size);length=size;
     if(header->operation==W32_FILE){
         struct ciuki_w32_file_args *a=(void *)packet;
@@ -49,8 +76,16 @@ static int32_t record(void *r,uint32_t size){
         struct ciuki_w32_spawn_args *a=(void *)packet;
         if(!text(&a->image) || !text(&a->command) || !text(&a->directory) ||
            (a->environment && !append(&a->environment,a->environment_bytes,1)))return -22;
-        /* Startup data is not dereferenced by the native service. */
-        a->startup=0;
+        /* Startup data is not dereferenced by the native service. fx-hlis5:
+         * its STARTF flags and show command travel as one word (bit 31 set),
+         * which the service gives the child (RPC 4), as the kernel puts the
+         * caller's STARTUPINFO into the child's parameters. */
+        uint32_t startup=0;
+        if(a->startup){
+            const struct ciuki_w32_startup *s=(const void *)(uintptr_t)a->startup;
+            startup=0x80000000u|(s->flags&0xffffu)|((s->show&0x7fffu)<<16);
+        }
+        a->startup=startup;
     }else if(header->operation==W32_WAIT){
         struct ciuki_w32_wait_args *a=(void *)packet;
         if(a->count>64 || (a->count && !append(&a->handles,a->count*4,1)))return -22;
@@ -170,6 +205,17 @@ static int memory(void *record,uint32_t op){
         if(!host.services.protect(&host,(void *)(uintptr_t)a->address,a->bytes,prot))return -22;
         a->old_protect=regions[i].protect;regions[i].protect=a->protect;return 0;
     }
+    /* fx-hlrun: VirtualProtect of mapped image pages (the kernel changes any
+     * committed extent, src/kernel/proc/win32/memory.c): the Quake-family
+     * software renderer makes its own code writable (Sys_MakeCodeWriteable).
+     * Image protections are not tracked here; the old value reported is the
+     * image code default PAGE_EXECUTE_READ. An unmapped range still fails. */
+    if(op==W32_VM_PROTECT && a->bytes){
+        uint32_t base=a->address&~4095u,end=(a->address+a->bytes+4095u)&~4095u;
+        uint32_t prot=a->protect==1?0:a->protect==2?1:a->protect==4?3:a->protect==0x10?4:a->protect==0x20?5:7;
+        if(end<=base || !host.services.protect(&host,(void *)(uintptr_t)base,end-base,prot))return -22;
+        a->old_protect=0x20;a->address=base;a->bytes=end-base;return 0;
+    }
     return -22;
 }
 int h1_installer_kernel(void *r,uint32_t size,int32_t *status){
@@ -272,7 +318,7 @@ static void fixture_close(void *o,struct w32_file *file){
         host.services.free(&host,snapshots[i].data,snapshots[i].size);snapshots[i].data=0;return;}
     original_close(o,file);
 }
-static WCHAR environment[256],cwd[778];
+static WCHAR environment[2048],cwd[778];
 void h1_installer_parameters(const char *command){
     static WCHAR line[4096];unsigned n=0;while(command[n] && n<4095){line[n]=(uint8_t)command[n];n++;}line[n]=0;
     RtlInitUnicodeString(&host.parameters.CommandLine,line);
@@ -280,12 +326,24 @@ void h1_installer_parameters(const char *command){
 int h1_installer_init(const char *fd){
     if(!fd || !*fd)return 0;service_fd=0;
     for(;*fd;fd++){if(*fd<'0' || *fd>'9' || service_fd>6553)return 0;service_fd=service_fd*10+*fd-'0';}
-    char directory[778];uint32_t used=0;
+    static const char fixed[]="TEMP=C:\\WINDOWS\\TEMP\0TMP=C:\\WINDOWS\\TEMP\0WINDIR=C:\\WINDOWS\0PATH=C:\\WINDOWS;C:\\WINDOWS\\SYSTEM\0\0";
+    /* fx-hlis5: the service may supply the creator's STARTUPINFO flags and
+     * show command and a session environment (a profile session's TEMP below
+     * Local Settings); otherwise the fixed Windows 98 values above. Asked
+     * before the startup cwd, which stays the last startup request. */
+    static char supplied[sizeof(environment)/sizeof(environment[0])+8];
+    const char *env=fixed;uint32_t env_bytes=sizeof(fixed),used=0;
+    if(!rpc(4,0,0,supplied,sizeof(supplied),&used) && used>=8 && used<=sizeof(supplied)){
+        const uint8_t *u=(const uint8_t *)supplied;
+        host.parameters.WindowFlags=u[0]|(uint32_t)u[1]<<8|(uint32_t)u[2]<<16|(uint32_t)u[3]<<24;
+        host.parameters.ShowWindowFlags=u[4]|(uint32_t)u[5]<<8|(uint32_t)u[6]<<16|(uint32_t)u[7]<<24;
+        if(used>=10 && !supplied[used-1] && !supplied[used-2]){env=supplied+8;env_bytes=used-8;}
+    }
+    for(unsigned i=0;i<env_bytes;i++)environment[i]=(uint8_t)env[i];host.parameters.Environment=environment;
+    char directory[778];used=0;
     if(rpc(3,0,0,directory,sizeof(directory),&used) || !used || used>sizeof(directory) || directory[used-1])return 0;
     for(unsigned i=0;i<used;i++)cwd[i]=(uint8_t)directory[i];
     RtlInitUnicodeString(&host.parameters.CurrentDirectory.DosPath,cwd);
-    const char env[]="TEMP=C:\\WINDOWS\\TEMP\0TMP=C:\\WINDOWS\\TEMP\0WINDIR=C:\\WINDOWS\0PATH=C:\\WINDOWS;C:\\WINDOWS\\SYSTEM\0\0";
-    for(unsigned i=0;i<sizeof(env);i++)environment[i]=(uint8_t)env[i];host.parameters.Environment=environment;
     original_open=host.services.open;original_close=host.services.close;
     host.services.open=fixture_open;host.services.close=fixture_close;return 1;
 }

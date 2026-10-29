@@ -71,7 +71,7 @@ ROOT = Path(__file__).resolve().parents[2]
 KIND = 'acceptance'
 CASE_KEYS = {'id', 'kind', 'probe', 'profile', 'timeout', 'expected', 'item', 'items', 'title', 'gate', 'devices',
              'media', 'resets', 'forbid', 'steps', 'assertions', 'figures', 'disk', 'pending', 'note',
-             'blocking', '_run_id', '_prune_keep', 'dos_game', 'guests', '_lan'}
+             'blocking', '_run_id', '_prune_keep', 'dos_game', 'guests', '_lan', 'lan_fixture'}
 STEP_KEYS = {'name', 'check', 'wait', 'fail', 'since', 'timeout', 'wait_event', 'settle', 'actions',
              'screen_settle', 'screen', 'required', 'on_fail', 'known_failure', 'requires', 'unless', 'fallback',
              'arm', 'note', 'wizard'}
@@ -461,7 +461,11 @@ def validate_case(case, root=ROOT):
     if '_lan' in case:
         import lan_runner
         lan_runner.validate_network(case['_lan'])
-        refuse(devices.get('network') is not None and case.get('dos_game', {}).get('role') in ('host', 'join'), 'LAN network requires paired DOS title')
+        refuse(devices.get('network') is not None and
+               (case.get('dos_game', {}).get('role') in ('host', 'join') or 'lan_fixture' in case), 'LAN network requires paired fixture')
+    if 'lan_fixture' in case:
+        import lan_live
+        lan_live.validate_guest(case)
     media = case.get('media', {})
     refuse(isinstance(media, dict) and len(media) <= 6, 'media: at most 6 generated images')
     for name, spec in media.items():
@@ -477,8 +481,9 @@ def validate_case(case, root=ROOT):
     patterns(case.get('forbid'), 'forbid')
     pending = case.get('pending')
     if pending is not None:
-        refuse(isinstance(pending, dict) and set(pending) <= {'directive', 'requires', 'reason'} and pending.get('reason')
+        refuse(isinstance(pending, dict) and set(pending) <= {'directive', 'requires', 'reason', 'blocking'} and pending.get('reason')
                and isinstance(pending.get('requires', []), list), 'pending: directive, requires (paths), reason')
+        refuse(type(pending.get('blocking', False)) is bool, 'pending.blocking: boolean')
     steps = expand_steps(case.get('steps', []))
     refuse(isinstance(case.get('steps', []), list) and (steps or pending), 'steps (or a pending declaration)')
     names, captured, checks = set(), {media_var(n) for n in media}, set()
@@ -614,7 +619,7 @@ def qemu_args(case):
             import lan_runner
             lan_runner.validate_network(case['_lan'])
             network = case['_lan']
-            netdev = 'socket,id=ciuknet0,mcast=%s:%d,localaddr=127.0.0.1' % (network['group'], network['port'])
+            netdev = lan_runner.netdev(network)
             mac = network['mac']
         else:
             netdev, mac = 'user,id=ciuknet0,restrict=on', '52:54:00:12:34:56'
@@ -734,7 +739,8 @@ class Session:
         if pending:
             missing = [p for p in pending.get('requires', []) if not (self.root / p).exists()]
             if missing or not pending.get('requires') or not self.steps:
-                raise EvidenceNotRun('pending %s: %s%s' % (pending.get('directive', '-'), pending['reason'],
+                prefix = 'required pending' if pending.get('blocking') else 'pending'
+                raise EvidenceNotRun('%s %s: %s%s' % (prefix, pending.get('directive', '-'), pending['reason'],
                                                             ' (missing %s)' % ', '.join(missing) if missing else ''))
 
     def prepare(self):

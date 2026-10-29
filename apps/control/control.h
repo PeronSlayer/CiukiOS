@@ -75,6 +75,7 @@ struct cp_preview_done {
     unsigned decode_ms, render_ms;
     uint32_t *preview;              /* caller-supplied 192*144 buffer, filled when rendered */
 };
+#define CP_NET_IPX 5u /* SYSTEM framing setting. */
 #define CP_NET_TEST 4u /* UI worker command; never passed to syscall 90. */
 struct cp_network_result {
     struct ciuki_net_control adapters[2];
@@ -226,9 +227,9 @@ struct cp_app {
     struct cpa_request account_request;
     struct du_item account_items[CPA_MAX];
     char account_labels[CPA_MAX][64], account_note[192];
-    int account_busy, account_loaded, account_task, account_password_page, machine_locked;
+    int account_busy, account_notice_pending, account_loaded, account_task, account_password_page, machine_locked;
     unsigned account_action, account_count;
-    uint32_t account_uid, account_shown[CPA_MAX];
+    uint32_t account_uid, account_submitted_uid, account_shown[CPA_MAX];
     int secure_resume;                       /* LOGON session: secure_resume preference (Power page) */
     /* --- end sec-user-04 --- */
     struct regional regional_edit;
@@ -258,9 +259,9 @@ struct cp_app {
     struct cp_network_result network;
     struct ciuki_net_config network_edit;
     struct du_menu_item saver_items[4];
-    struct du_item network_items[2], network_tabs[3];
+    struct du_item network_items[2], network_tabs[4], network_frames[5];
     char network_names[2][64], network_message[96], network_test_name[128];
-    unsigned network_selected, network_tab;
+    unsigned network_selected, network_tab, network_frame_type;
     int network_busy, network_loaded, building;
     struct dp_plan *pack;
     char pack_root[DP_PATH], pack_names[32][192], pack_reason[160];
@@ -411,6 +412,10 @@ int cp_wallpaper_set(struct cp_app *, const char *path);
 void cp_detach(struct cp_app *);
 int cp_page_index(const char *name);
 void cp_tick(struct cp_app *);
+/* fx-uaccounts: adopt finished worker results (accounts/users, network,
+ * game properties); cheap when nothing finished. The native loop calls it
+ * after every turn, on every page. */
+void cp_jobs_poll(struct cp_app *);
 void cp_open(struct cp_app *, int page);
 void cp_uninstall_icons(struct cp_app *);   /* fx-exeicons: refresh Add/Remove icons after the icon worker published */
 int cp_snapshot_valid(const struct ciuki_devices_info *);

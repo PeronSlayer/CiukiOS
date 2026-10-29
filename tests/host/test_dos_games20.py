@@ -37,19 +37,23 @@ SCRATCH.mkdir(parents=True, exist_ok=True)
 def catalog_root(folder):
     """Copy small manifests, never game bytes or existing installed trees."""
     folder = Path(folder)
-    for path in (games.CATALOG, games.PINS):
+    for path in (games.CATALOG, games.PINS, games.INSTALL_PLANS):
         dest = folder / path; dest.parent.mkdir(parents=True, exist_ok=True)
         dest.write_bytes((ROOT / path).read_bytes())
     pins = json.loads((ROOT / games.PINS).read_text())['titles']
     for pin in pins:
-        source = pin['licence']['source']
+        source = pin.get('provenance', pin['licence']['source'])
         if not source.startswith('third_party/'):
             candidate = 'third_party/games/' + pin['id'] + '-shareware/UPSTREAM.json'
             if (ROOT / candidate).is_file(): source = candidate
         if source.startswith('third_party/'):
             dest = folder / source; dest.parent.mkdir(parents=True, exist_ok=True)
             dest.write_bytes((ROOT / source).read_bytes())
-    # The fixtures exercise a pending candidate: heretic as before its lead pin.
+    # The fixtures exercise a pending candidate: heretic before pin/term review.
+    catalog = json.loads((folder / games.CATALOG).read_text())
+    for title in catalog['titles']:
+        if title['id'] == 'heretic': title['terms_reviewed'] = False
+    (folder / games.CATALOG).write_text(json.dumps(catalog))
     data = json.loads((folder / games.PINS).read_text())
     for pin in data['titles']:
         if pin['id'] == 'heretic':pin.update(status='lead-pins', sha256='lead-pins', size=None)
@@ -73,7 +77,7 @@ def ready_title(root, ident='heretic', image_sha='a' * 64):
     data = json.loads((root / games.PINS).read_text())
     data['titles'] = [pin if p['id'] == ident else p for p in data['titles']]
     (root / games.PINS).write_text(json.dumps(data))
-    path = root / pin['licence']['source']; upstream = json.loads(path.read_text())
+    path = root / pin.get('provenance', pin['licence']['source']); upstream = json.loads(path.read_text())
     upstream.update(status='pinned', sha256=pin['sha256'], size=pin['size']); path.write_text(json.dumps(upstream))
     directory = root / title['installed']['directory']; directory.mkdir()
     executable = b'MZ synthetic fixture'; (directory / title['executable']).write_bytes(executable)
@@ -106,7 +110,7 @@ class CatalogTests(unittest.TestCase):
         self.assertTrue({'mode13h', 'modex', 'vesa'} <= {v for t in titles for v in t['coverage_targets']['video']})
         self.assertTrue({'general-midi', 'opl', 'digital'} <= {t['music'] for t in titles})
         suite = json.loads((ROOT / 'tests/suites/acc-t23.json').read_text())
-        actual = [c for c in suite['cases'] if 'dos_game' in c or 'guests' in c]
+        actual = [c for c in suite['cases'] if 'dos_game' in c or 'guests' in c or c['id'].startswith('acc-install-')]
         self.assertEqual(actual, games.acceptance_cases(titles))
         for case in actual:
             self.assertEqual(runner.case_kind(case), 'acceptance')
@@ -134,9 +138,22 @@ class CatalogTests(unittest.TestCase):
             save_title(root, title)
             with self.assertRaises(ValueError): games.load(root)
             root = catalog_root(tmp)
-            path = root / pin['licence']['source']; upstream = json.loads(path.read_text()); upstream['sha256'] = 'f' * 64
+            path = root / pin.get('provenance', pin['licence']['source']); upstream = json.loads(path.read_text()); upstream['sha256'] = 'f' * 64
             path.write_text(json.dumps(upstream))
             with self.assertRaises(ValueError): games.load(root)
+
+    def test_member_citations_preserve_demo_provenance_checks(self):
+        for ident in ('heretic', 'hexen', 'descent2'):
+            with self.subTest(ident=ident), tempfile.TemporaryDirectory(dir=SCRATCH) as tmp:
+                root = catalog_root(tmp)
+                _, pin = games.title_for(ident, root)
+                self.assertTrue(pin['licence']['source'].startswith(pin['archive'] + '!'))
+                path = root / pin['provenance']
+                upstream = json.loads(path.read_text())
+                upstream['licence']['sha256'] = '0' * 64
+                path.write_text(json.dumps(upstream))
+                with self.assertRaisesRegex(ValueError, 'upstream licence mismatch'):
+                    games.load(root)
 
     def test_existing_archive_name_is_checked_against_installed_provenance(self):
         with tempfile.TemporaryDirectory(dir=SCRATCH) as tmp:

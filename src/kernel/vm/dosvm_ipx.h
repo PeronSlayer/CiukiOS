@@ -49,7 +49,7 @@ struct dosvm_ipx {
     struct dosvm_ipx_ops ops;
     struct dosvm_ipx_socket socket[DOSVM_IPX_SOCKETS];
     struct dosvm_ipx_ecb ecb[DOSVM_IPX_ECBS];
-    uint8_t mac[6], frame[1514];
+    uint8_t mac[6], network[4], frame[1514];
     uint32_t generation, rejected, memory_errors, rx_dropped, callbacks_dropped;
     uint64_t ticks, sequence;
     uint16_t next_dynamic, psp; /* adapter supplies the current opening PSP */

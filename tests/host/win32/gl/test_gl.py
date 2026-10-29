@@ -13,12 +13,41 @@ from unittest.mock import patch
 from scripts.win32 import gdi32
 ROOT=Path(__file__).resolve().parents[4]
 HERE=Path(__file__).resolve().parent
+# Each family owns its backend sources and fixture; shared units stay here.
+# The selector compiles through kernel_engine.c so family conditionals cannot
+# accidentally run Savage's T23-only lease checks for another adapter.
+KERNEL_FAMILIES = {
+ 'savage': dict(name='savage', define=None, engine='kernel_engine.c',
+                sources=('s3savage/savage3d.c',), replaces=()),
+ 'radeon': dict(name='radeon', define='GL_KERNEL_FAMILY_RADEON', engine='kernel_engine.c',
+                sources=('radeon2d/radeon3d.c','radeon2d/engine.c','radeon2d/cursor.c','swdib.c'),
+                replaces=('s3savage/savage3d.c','render3d_native.c')),
+ 'matrox': dict(name='matrox', define='GL_KERNEL_FAMILY_MATROX', engine='kernel_engine.c',
+                sources=('matrox/matrox3d.c','matrox/engine.c'),
+                replaces=('s3savage/savage3d.c',)),
+ 'mach64': dict(name='mach64', define='GL_KERNEL_FAMILY_MACH64', engine='kernel_engine.c',
+                sources=('mach64/mach64_3d.c','mach64/engine.c'),
+                support_sources=('tests/host/mach64_3d_model.c',),
+                replaces=('s3savage/savage3d.c',)),
+ 'vmwaresvga': dict(name='vmwaresvga', define='GL_KERNEL_FAMILY_VMWARE', engine='kernel_engine.c',
+                sources=('vmwaresvga/vmwaresvga3d.c','vmwaresvga/engine.c'),
+                support_sources=('tests/host/vmwaresvga3d_model.c',),
+                extra_defines=('SVGA_H1_HOST=SVGA_HOST_VMWARE',),
+                replaces=('s3savage/savage3d.c',)),
+ 'vmwaresvga-vbox': dict(name='vmwaresvga-vbox', define='GL_KERNEL_FAMILY_VMWARE', engine='kernel_engine.c',
+                sources=('vmwaresvga/vmwaresvga3d.c','vmwaresvga/engine.c'),
+                support_sources=('tests/host/vmwaresvga3d_model.c',),
+                extra_defines=('SVGA_H1_HOST=SVGA_HOST_VBOX_GL',),
+                replaces=('s3savage/savage3d.c',)),
+}
+
 class GLTests(unittest.TestCase):
  @classmethod
  def setUpClass(cls):
   cls.build(sanitize=True)
  @classmethod
- def build(cls,sanitize,profile=True,gamma_hooks=True):
+ def build(cls,sanitize,profile=True,gamma_hooks=True,kernel_family="savage",ubsan=False):
+  family=KERNEL_FAMILIES[kernel_family]
   out=ROOT/'build/host/win32/gl';out.mkdir(parents=True,exist_ok=True);cls.out=out
   spec=importlib.util.spec_from_file_location('glbuild',ROOT/'sdk/libgl/build.py');gl=importlib.util.module_from_spec(spec);spec.loader.exec_module(gl)
   lib=gl.host_tinygl(sanitize=sanitize)
@@ -29,13 +58,20 @@ class GLTests(unittest.TestCase):
   (out/'savage3d_backend_fixture.inc').write_text(fixture_source.replace('int main(int argc,char **argv)','int frozen_3d_main(int argc,char **argv)'))
   fixture_source=(ROOT/'tests/host/savage2d_test.c').read_text()
   (out/'savage2d_fixture.inc').write_text(fixture_source.replace('\nint main(void)\n','\nint frozen_2d_main(void)\n'))
-  units += [HERE/'hardware.c',HERE/'kernel_engine.c',HERE/'kernel_replay.c']
-  units += [ROOT/'src/kernel/drivers/video'/n for n in ('render3d.c','render3d_scalar.c','render3d_native.c','render3d_transport.c','s3savage/savage3d.c')]
+  units += [HERE/'hardware.c',HERE/family['engine'],HERE/'kernel_replay.c']
+  video_units=('render3d.c','render3d_scalar.c','render3d_native.c','render3d_transport.c',
+               *KERNEL_FAMILIES['savage']['sources'])
+  video_units=[n for n in video_units if n not in family['replaces']]
+  video_units += [n for n in family['sources'] if n not in video_units]
+  units += [ROOT/'src/kernel/drivers/video'/n for n in video_units]
+  units += [ROOT/n for n in family.get('support_sources',())]
   units += [ROOT/'src/kernel/lib/fmt.c']
-  cls.binary=out/(('engine' if sanitize else 'benchmark')+('' if gamma_hooks else '-no-gamma'))
+  cls.binary=out/(('engine' if sanitize else 'benchmark')+('' if gamma_hooks else '-no-gamma')+('' if kernel_family=='savage' else '-'+family['name']))
   flags=['-std=c17','-D_GNU_SOURCE','-DW32_HOST_MODEL','-O2','-g','-ffp-contract=off','-Wall','-Wextra','-Werror','-Wno-unused-function','-fno-vectorize','-fno-slp-vectorize','-I'+str(ROOT/'sdk/win32/include'),'-I'+str(ROOT/'sdk/libgl/vendor/include')]
   flags+=['-I'+str(ROOT/'src/kernel/include'),'-I'+str(ROOT/'tests/host'),'-I'+str(out)]
-  if sanitize:flags+=['-fsanitize=address,undefined','-fno-sanitize-recover=all']
+  if family['define']:flags+=['-D'+family['define']]
+  flags+=['-D'+define for define in family.get('extra_defines',())]
+  if sanitize or ubsan:flags+=['-fsanitize='+('address,undefined' if sanitize else 'undefined'),'-fno-sanitize-recover=all']
   if profile:flags+=['-DSW_PROFILE']
   if not gamma_hooks:flags+=['-DGL_TEST_NO_GAMMA']
   fixture=out/('fixture-sanitize.o' if sanitize else 'fixture.o')

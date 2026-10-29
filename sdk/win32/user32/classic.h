@@ -54,6 +54,8 @@ struct u32_graphics {
   BOOL(W32API *fill_rect)(DWORD, const RECT *, DWORD);
   DWORD(W32API *dib_bitmap)(DWORD, const void *, DWORD, const void *,
                             const void *, UINT);
+  int(W32API *clip_box)(DWORD, RECT *); /* fx-hlrun: ScrollDC */
+  DWORD(W32API *display_dc)(void); /* fx-hlrun: the screen DC */
 };
 const struct u32_graphics *u32_graphics(void);
 int u32_stricmp(const char *, const char *);

@@ -459,9 +459,16 @@ void u32_event(const struct desk_packet *p) {
         old.bottom - old.top != w->rect.bottom - w->rect.top)
       SendMessageA(h, WM_SIZE, IsIconic(h) ? SIZE_MINIMIZED : IsZoomed(h) ? SIZE_MAXIMIZED : SIZE_RESTORED,
                    IsIconic(h) ? 0 : ((uint16_t)p->width | (p->height << 16)));
+    BOOL resized = old.right - old.left != w->rect.right - w->rect.left ||
+                   old.bottom - old.top != w->rect.bottom - w->rect.top;
     if (shown != IsWindowVisible(h))
       SendMessageA(h, WM_SHOWWINDOW, IsWindowVisible(h), 0);
-    if (!IsIconic(h))
+    /* fx-hlrun: the window repaints when it was resized, restored or became
+     * visible; a placement that only confirms, moves or keeps it hidden
+     * keeps its pixels (the surface is the client's), as SetWindowPos
+     * without a size or state change does not repaint on Windows.
+     * Half-Life's menu re-places its window several times a second. */
+    if (!IsIconic(h) && (resized || minimized || (!shown && IsWindowVisible(h))))
       InvalidateRect(h, 0, 1);
     break;
   }

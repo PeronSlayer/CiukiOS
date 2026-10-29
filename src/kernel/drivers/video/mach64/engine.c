@@ -223,6 +223,12 @@ static int cursor_move(void *ctx,int32_t x,int32_t y)
 static int stop(void *ctx)
 {
     struct m64_engine *s=ctx;
+    /* f7-27: the 3D owner closes admission and releases its heap first;
+     * a failed close keeps this 2D owner (and its rejecting guard) alive. */
+    if (s->render3d_stop) {
+        int e=s->render3d_stop(s);
+        if (e) return e;
+    }
     s->active=false;
     int e=m64_idle_proof(s);
     if (e) return fault(s,e);
@@ -295,4 +301,102 @@ int m64_configure(struct m64_engine *s)
     if (e) return e;
     s->active=true; s->reason="active";
     return 0;
+}
+
+/* f7-27 3D transport. Register writes go through the same GUI FIFO as the
+ * 2D path (X.Org atimach64render.c:724-741 and :775-790 program the setup
+ * engine with outf after ATIMach64WaitForFIFO). The DRM's MMIO pseudo-DMA
+ * path waits for FIFO room before each group of at most 16 writes
+ * (FreeBSD 8.4 mach64_dma.c:1324-1341). No sliced pause: the presenter is
+ * retained across a 3D window, and one deadline/read budget covers it. */
+#include "registers3d.h"
+static const uint16_t writable3d[]={
+    M64_DST_OFF_PITCH,M64_DST_Y_X,M64_DST_HEIGHT_WIDTH,M64_DST_CNTL,
+    M64_Z_OFF_PITCH,M64_Z_CNTL,M64_ALPHA_TST_CNTL,
+    M64_SRC_OFF_PITCH,M64_SRC_Y_X,M64_SRC_HEIGHT1_WIDTH1,M64_SCALE_3D_CNTL,
+    M64_SC_LEFT_RIGHT,M64_SC_TOP_BOTTOM,M64_DP_FRGD_CLR,M64_DP_WRITE_MASK,
+    M64_DP_PIX_WIDTH,M64_DP_MIX,M64_DP_SRC,M64_CLR_CMP_CNTL,
+    M64_TEX_SIZE_PITCH,M64_TEX_CNTL,M64_SECONDARY_TEX_OFF,
+    M64_ONE_OVER_AREA,M64_SETUP_CNTL
+};
+static const uint16_t readable3d[]={
+    M64_FIFO_STAT,M64_GUI_STAT,M64_BUS_CNTL,M64_CONFIG_CHIP_ID,M64_CONFIG_CHIP_ID_LOW,
+    M64_DST_OFF_PITCH,M64_DST_CNTL,M64_SRC_OFF_PITCH,M64_SCALE_3D_CNTL,
+    M64_SC_LEFT,M64_SC_RIGHT,M64_SC_TOP,M64_SC_BOTTOM,M64_DP_FRGD_CLR,
+    M64_DP_WRITE_MASK,M64_DP_PIX_WIDTH,M64_DP_MIX,M64_DP_SRC,M64_CLR_CMP_CNTL,
+    M64_TEX_SIZE_PITCH,M64_TEX_CNTL
+};
+bool m64_render3d_writable(unsigned reg)
+{
+    if (reg&3u) return false;
+    /* Vertex 1..3 S,T,W,SPEC_ARGB,Z,ARGB,X_Y: the DRM's verified setup
+     * range (FreeBSD 8.4 mach64_state.c:521-526), plus the secondaries. */
+    for (unsigned v=0;v<3;v++) {
+        unsigned first=M64_VERTEX_1_S+v*M64_VERTEX_STRIDE;
+        if (reg>=first && reg<=first+0x18u) return true;
+    }
+    if ((reg>=M64_VERTEX_3_SECONDARY && reg<=M64_VERTEX_3_SECONDARY+8u) ||
+        (reg>=M64_VERTEX_1_SECONDARY && reg<=M64_VERTEX_2_SECONDARY+8u)) return true;
+    if (reg>=M64_TEX_0_OFF && reg<=M64_TEX_0_OFF+40u) return true;
+    for (unsigned i=0;i<ARRAY_SIZE(writable3d);i++) if (writable3d[i]==reg) return true;
+    return false;
+}
+bool m64_render3d_readable(unsigned reg)
+{
+    if (reg&3u) return false;
+    if (reg>=M64_TEX_0_OFF && reg<=M64_TEX_0_OFF+40u) return true;
+    for (unsigned i=0;i<ARRAY_SIZE(readable3d);i++) if (readable3d[i]==reg) return true;
+    return false;
+}
+static int wait3d(struct m64_engine *s,unsigned slots,bool idle,struct m64_budget *b)
+{
+    uint32_t limit=0x8000u>>slots;
+    for (;;) {
+        if (b->reads>=M64_3D_READ_LIMIT) { s->reason="render3d_poll_limit"; return -ETIMEDOUT; }
+        if (s->io.now(s->io.ctx)-b->start>=M64_3D_WINDOW_US) { s->reason="render3d_deadline"; return -ETIMEDOUT; }
+        b->reads++;
+        uint32_t fifo=rd(s,FIFO_STAT);
+        if (fifo==UINT32_MAX || (fifo&M64_FIFO_ERROR)) { s->reason="render3d_fifo"; return -EIO; }
+        if (!idle && (fifo&0xffffu)<=limit) return 0;
+        if (idle && !(fifo&0xffffu)) {
+            if (b->reads>=M64_3D_READ_LIMIT) { s->reason="render3d_poll_limit"; return -ETIMEDOUT; }
+            b->reads++;
+            uint32_t gui=rd(s,GUI_STAT);
+            if (gui==UINT32_MAX) { s->reason="render3d_dead_mmio"; return -EIO; }
+            if (!(gui&ENGINE_BUSY)) return 0;
+        }
+    }
+}
+int m64_render3d_write(struct m64_engine *s,const struct m64_write *w,unsigned n,struct m64_budget *b)
+{
+    if (!s || !w || !b || !n || n>M64_3D_WRITE_LIMIT) return -EINVAL;
+    for (unsigned i=0;i<n;i++) if (!m64_render3d_writable(w[i].reg)) return -EINVAL;
+    if (!s->active || s->quarantined || !s->render3d_qualified) return -EIO;
+    while (n) {
+        unsigned group=n<16 ? n : 16;
+        int e=wait3d(s,group,false,b);
+        if (e) return e;
+        s->cpu_safe=false; s->touched=true;
+        for (unsigned i=0;i<group;i++) wr(s,w[i].reg,w[i].value);
+        s->render3d_writes+=group; w+=group; n-=group;
+    }
+    return 0;
+}
+int m64_render3d_idle(struct m64_engine *s,struct m64_budget *b)
+{
+    if (!s || !b) return -EINVAL;
+    drain(s);
+    int e=wait3d(s,16,true,b);
+    if (!e) { drain(s); s->cpu_safe=true; }
+    return e;
+}
+int m64_render3d_read(struct m64_engine *s,unsigned reg,uint32_t *out)
+{
+    if (!s || !out || !m64_render3d_readable(reg)) return -EINVAL;
+    *out=rd(s,reg);
+    /* All-ones status or identity proves a dead/unclaimed window. State
+     * registers can hold all-ones legitimately (2D DP_WRITE_MASK). */
+    bool status=reg==M64_FIFO_STAT || reg==M64_GUI_STAT || reg==M64_BUS_CNTL ||
+        reg==M64_CONFIG_CHIP_ID || reg==M64_CONFIG_CHIP_ID_LOW;
+    return status && *out==UINT32_MAX ? -EIO : 0;
 }

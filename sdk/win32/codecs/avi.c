@@ -532,7 +532,12 @@ void *W32API AVIStreamGetFrameOpen(void *h, struct cc_bitmap *desired) {
   struct view *v = view_find(h);
   struct stream *s;
   struct getter *g;
-  struct cc_bitmap out;
+  /* the decoder's format: a header and, for indexed output, a colour table */
+  union {
+    struct cc_bitmap header;
+    uint8_t bytes[40 + 1024];
+  } format;
+  struct cc_bitmap *out = &format.header;
   uint32_t i;
   if (!v)
     return 0;
@@ -555,36 +560,46 @@ void *W32API AVIStreamGetFrameOpen(void *h, struct cc_bitmap *desired) {
     return 0;
   }
   if (desired)
-    cc_copy(&out, desired, 40);
-  else if (ICSendMessage(g->ic, 0x400a, (uintptr_t)s->format,
-                         (uintptr_t)&out)) {
-    ICClose(g->ic);
-    release(g);
-    return 0;
+    cc_copy(out, desired, 40);
+  else {
+    /* GET_FORMAT reads the colour table after the header: give it the
+     * stream format with a bounded, zero-filled table. */
+    uint8_t source[40 + 1024];
+    uint32_t header = le32(s->format), table = s->format_len > header ? s->format_len - header : 0;
+    cc_zero(source, sizeof(source));
+    cc_copy(source, s->format, 40);
+    ((struct cc_bitmap *)source)->size = 40;
+    if (header >= 40 && table)
+      cc_copy(source + 40, s->format + header, table > 1024 ? 1024 : table);
+    if (ICSendMessage(g->ic, 0x400a, (uintptr_t)source, (uintptr_t)out)) {
+      ICClose(g->ic);
+      release(g);
+      return 0;
+    }
   }
-  if (ICSendMessage(g->ic, 0x400c, (uintptr_t)s->format, (uintptr_t)&out)) {
+  if (ICSendMessage(g->ic, 0x400c, (uintptr_t)s->format, (uintptr_t)out)) {
     ICClose(g->ic);
     release(g);
     return 0;
   }
   /* biSizeImage may legally be zero for BI_RGB. Size the allocation from
    * the validated geometry rather than trusting that optional field. */
-  out.bytes = (((uint32_t)out.width * out.bits + 31) / 32) * 4 *
-              (uint32_t)(out.height < 0 ? -out.height : out.height);
-  g->frame_bytes = out.bytes;
-  if (out.bytes > 16 * 1024 * 1024u) {
+  out->bytes = (((uint32_t)out->width * out->bits + 31) / 32) * 4 *
+              (uint32_t)(out->height < 0 ? -out->height : out->height);
+  g->frame_bytes = out->bytes;
+  if (out->bytes > 16 * 1024 * 1024u) {
     ICClose(g->ic);
     release(g);
     return 0;
   }
-  g->image = alloc(40 + 1024 + out.bytes);
+  g->image = alloc(40 + 1024 + out->bytes);
   if (!g->image) {
     ICClose(g->ic);
     release(g);
     return 0;
   }
-  cc_copy(g->image, &out, 40);
-  if (out.bits <= 8 && s->format_len > 40)
+  cc_copy(g->image, out, 40);
+  if (out->bits <= 8 && s->format_len > 40)
     cc_copy((uint8_t *)g->image + 40, s->format + 40,
             s->format_len - 40 > 1024 ? 1024 : s->format_len - 40);
   AVIStreamAddRef(v);

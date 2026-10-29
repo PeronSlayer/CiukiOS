@@ -209,12 +209,17 @@ static int transition(struct owner_store *s,const struct owner_request *q,struct
     if(op==OWNER_COMMIT && r->state!=OWNER_PREPARED) return -EIO;
     int e=s->io.reserve(s->io.ctx,q,s->pending,true);
     if(!e) e=owner_manifest_validate(s,q);
-    if(e) { s->ready=false; return e; }
+    /* A namespace mutation during hashing is a refusal to validate this
+     * attempt, with the same durable receipt and namespace fence intact.
+     * Keep the store usable so ACCOUNT can retry STATUS/PREPARE/COMMIT in
+     * this session. Persistent/corrupt evidence still closes the store. */
+    if(e) { if(e!=-EAGAIN) s->ready=false; return e; }
     if(op==OWNER_PREPARE) { r->state=OWNER_PREPARED; return owner_persist(s); }
     int intent=owner_intent(s,q); if(intent!=1) return intent<0?intent:-EIO;
-    /* account COMMIT_REQUIRED forbids compensation even if publication or a
-     * following flush fails. Pending identities stay denied until reopen. */
+    /* account COMMIT_REQUIRED forbids compensation. A read-only publication
+     * refusal retains the exact pending batch; uncertain writes close it. */
     e=s->io.publish(s->io.ctx,q,s->pending);
+    if(e) { if(e!=-EAGAIN) s->ready=false; return e; }
     if(!e) e=s->io.barrier(s->io.ctx);
     if(!e) e=owner_save_records(s,q,r);
     if(!e) e=s->io.release(s->io.ctx,q,true);
@@ -265,7 +270,7 @@ int owner_recover(struct owner_store *s)
         if(r->state==OWNER_RESERVED) e=transition(s,q,r,OWNER_PREPARE);
         if(!e) e=transition(s,q,r,OWNER_COMMIT);
     } else if(!e) e=transition(s,q,r,OWNER_ABORT);
-    ofree(q,sizeof(*q)); if(e) s->ready=false; return e;
+    ofree(q,sizeof(*q)); if(e && e!=-EAGAIN) s->ready=false; return e;
 }
 int owner_open(struct owner_store *s,const struct owner_backend *io,const uint32_t sid[3],uint64_t volume,bool fresh)
 {
@@ -273,10 +278,17 @@ int owner_open(struct owner_store *s,const struct owner_backend *io,const uint32
        !io->manifest || !io->tree || !io->reserve || !io->publish || !io->release || !io->account_intent ||
        !io->account_current || !io->checkpoint_marker || !io->import_map || !io->occupied || !io->verify) return -EINVAL;
     memset(s,0,sizeof(*s)); s->io=*io; memcpy(s->sid,sid,12); s->volume=volume; s->uid_high=1000;
-    int e=owner_load(s,fresh); if(!e) { s->ready=true; e=owner_recover(s); }
+    int e=owner_load(s,fresh); if(e) { s->ready=false; return e; }
+    s->ready=true;
+    return owner_open_resume(s);
+}
+int owner_open_resume(struct owner_store *s)
+{
+    if(!s || !s->ready) return -EIO;
+    int e=owner_recover(s);
     for(unsigned i=0;!e && i<s->profile_count+s->root_count;i++) {
         const struct owner_record *r=i<s->profile_count?&s->profiles[i]:&s->roots[i-s->profile_count];
         if(!r->pending) e=s->io.verify(s->io.ctx,r);
     }
-    if(e) s->ready=false; return e;
+    if(e && e!=-EAGAIN) s->ready=false; return e;
 }

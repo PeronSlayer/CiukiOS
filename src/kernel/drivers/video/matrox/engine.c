@@ -173,6 +173,12 @@ static int begin(struct matrox_engine *s,unsigned slots)
     int e=poll(s,slots,0);
     return e ? fault(s,e) : 0;
 }
+/* Private 3D transport: the same bounded FIFO reservation and idle proof as
+ * every 2D packet, for the owner's qualified render3d client only. */
+int matrox_engine_reserve(struct matrox_engine *s,unsigned slots)
+{ return !s || slots>16 ? -EINVAL : begin(s,slots); }
+int matrox_engine_sync(struct matrox_engine *s)
+{ return s ? sync_engine(s) : -EINVAL; }
 static void layout(struct matrox_engine *s)
 { wr(s,M_MACCESS,s->maccess); wr(s,M_PITCH,s->pitch); }
 static bool rect_ok(const struct matrox_engine *s,const struct fb_rect *r)

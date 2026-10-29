@@ -14,6 +14,8 @@ int h1_game_kernel(void *,uint32_t,int32_t *);
 int h1_game_gate(uint32_t,uint32_t,uint32_t,uint32_t,int32_t *);
 void h1_game_report(void);
 void h1_game_module(const char *,void *); /* after a DLL's successful DLL_PROCESS_ATTACH: GL call profile hooks */
+void h1_game_exe(void *); /* fx-hlrun: the EXE before its entry point: "apicount=1" import call counts */
+int h1_game_syscall(uint32_t, uint32_t, uint32_t, uint32_t, uint32_t, int32_t *); /* fx-hlrun: PE int 0x80 (SIGSYS) */
 #endif
 void h1_game_script(const char *command_line);   /* +set ciuki_keys "text": console typing on the lease frames */
 void h1_game_options(const char *options);      /* game-exec harness option defaults=IDLE_MS,MAX (fx-is5boot) */

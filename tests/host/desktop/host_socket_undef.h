@@ -3,9 +3,11 @@
  * Host fixtures that include <sys/socket.h> or <netdb.h> after the ABI header drop the macros first. */
 #undef AF_UNSPEC
 #undef AF_INET
+#undef AF_IPX
 #undef SOCK_STREAM
 #undef SOCK_DGRAM
 #undef SOCK_RAW
+#undef SOCK_SEQPACKET
 #undef SOCK_NONBLOCK
 #undef SOCK_CLOEXEC
 #undef IPPROTO_IP
@@ -28,4 +30,5 @@
 #undef SO_RCVTIMEO
 #undef SO_SNDTIMEO
 #undef SO_RX_BYTES
+#undef SO_LINGER
 #undef TCP_NODELAY

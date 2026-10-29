@@ -251,7 +251,7 @@ class KernelLoaderTests(unittest.TestCase):
             core=json.loads((folder/'builtin-store.json').read_text())['dlls']
             replaced={d['name'] for d in core if d['name'] in staged}
             # Includes ciukishell, OpenGL, G26 Winsock 2 and G15B HTML Help.
-            self.assertEqual(len(core),46)
+            self.assertEqual(len(core),49)  # fx-hlutils: three WinINet optional providers
             self.assertEqual(len(meta['builtins']),len(core)-len(replaced)+len(staged))
             self.assertIn('/System/Win32/ws2_32.dll',sources)
             self.assertIn('/System/Win32/hhctrl.ocx',sources)

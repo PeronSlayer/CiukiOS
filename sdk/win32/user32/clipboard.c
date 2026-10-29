@@ -89,6 +89,25 @@ HWND W32API SetClipboardViewer(HWND h) {
   SendMessageA(h,WM_DRAWCLIPBOARD,0,0);
   return (HWND)(uintptr_t)r.key;
 }
+/* fx-hlrun (MFC imports them). The viewer chain and the opening window are
+ * system-wide w32srv state: a CHAIN request that names no window changes
+ * nothing and returns the first viewer (type) and the window that has the
+ * clipboard open (count; 0 when it was opened without a window, as
+ * Windows reports). Microsoft GetClipboardViewer/GetOpenClipboardWindow;
+ * Wine 10.0 dlls/win32u/clipboard.c. */
+static BOOL clip_state(struct w32r_reply *r) {
+  return u32_directory(W32R_CLIP_CHAIN, 0, u32_tid(), 0, 0, "", 0, 0, r, 0, 0);
+}
+HWND W32API GetClipboardViewer(void) {
+  U32_GUARD;
+  struct w32r_reply r;
+  return clip_state(&r) ? (HWND)(uintptr_t)r.type : 0;
+}
+HWND W32API GetOpenClipboardWindow(void) {
+  U32_GUARD;
+  struct w32r_reply r;
+  return clip_state(&r) ? (HWND)(uintptr_t)r.count : 0;
+}
 BOOL W32API ChangeClipboardChain(HWND h, HWND next) {
   U32_GUARD;
   struct w32r_reply r;

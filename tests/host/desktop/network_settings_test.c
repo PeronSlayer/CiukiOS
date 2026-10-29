@@ -15,6 +15,7 @@ static int begin(void *ctx,unsigned op,const struct ciuki_net_control *r,const c
 {
     (void)ctx;assert(!pending && name && *name);pending=1;calls++;operation=op;submitted=*r;
     if(op==CIUKI_NETCTL_SET)fixture.adapters[r->index].config=r->config;
+    if(op==CP_NET_IPX)for(unsigned i=0;i<fixture.count;i++)fixture.adapters[i].ipx_frame_type=r->ipx_frame_type;
     return 0;
 }
 static int poll_result(void *ctx,struct cp_network_result *r)
@@ -52,7 +53,7 @@ int main(int argc,char **argv)
     hold=0;cp_tick(&app);assert(!app.network_busy && !app.network.count);frame(argv[1],"network-absent");
     struct ciuki_net_control *n=&fixture.adapters[0];fixture.count=2;
     *n=(struct ciuki_net_control){.version=1,.size=sizeof(*n),.count=2,.link=2,.state=1,.media_caps=7,
-        .pci_vendor=0x8086,.pci_device=0x1229,.irq=11,.io_base=0x1800,.speed=100,.duplex=2,.rx_packets=427,.tx_packets=219,
+        .ipx_frame_type=CIUKI_IPX_FRAME_AUTO,.pci_vendor=0x8086,.pci_device=0x1229,.irq=11,.io_base=0x1800,.speed=100,.duplex=2,.rx_packets=427,.tx_packets=219,
         .rx_errors=1,.lease_seconds=3600,.lease_remaining=3512};
     strcpy(n->name,"en0");strcpy(n->driver,"e100");memcpy(n->mac,"\x00\xd0\x59\xb6\x43\x8f",6);
     n->config.enabled=n->config.dhcp=1;strcpy(n->config.hostname,"ciukios");strcpy(n->config.domain,"example.test");
@@ -71,6 +72,7 @@ int main(int argc,char **argv)
     frame(argv[1],"network-static");int before=calls;
     edit(1404,"999.1.2.3");click(1414);assert(calls==before && strstr(app.network_message,"IPv4"));frame(argv[1],"network-invalid");
     edit(1404,"192.0.2.110");click(1414);assert(operation==1 && !submitted.config.dhcp && submitted.config.dns[2]);cp_tick(&app);
+    tab(3);frame(argv[1],"network-ipx");du_post(&ui,DU_EV_SELECT,1420,1);assert(app.network_frame_type==1);click(1414);assert(operation==CP_NET_IPX && submitted.ipx_frame_type==1);cp_tick(&app);
     tab(2);frame(argv[1],"network-status");click(1419);assert(operation==CP_NET_TEST && app.network_busy);
     strcpy(fixture.message,"DNS 192.0.2.8; gateway TCP/80 refused.");cp_tick(&app);assert(strstr(app.network_message,"refused"));frame(argv[1],"network-test");
     tab(1);click(1402);click(1414);assert(submitted.config.dhcp && !submitted.config.address && !submitted.config.gateway);cp_tick(&app);

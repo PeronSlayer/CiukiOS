@@ -1058,6 +1058,9 @@ int W32API StartPage(HDC dc) {
     return -1;
   }
   struct printer_dc *p = d->printer;
+  if(d->abort_proc && !d->abort_proc(dc,0)) {
+    AbortDoc(dc);fail(63);return -1;
+  }
   if (!p->document || p->page || !StartPagePrinter(p->handle)) {
     fail(1906);
     return -1;

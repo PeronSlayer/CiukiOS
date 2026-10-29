@@ -79,6 +79,13 @@ int desktop_close(struct process *p,int32_t fd) { (void)p;(void)fd;CHECK(false);
 #include "../../src/kernel/drivers/i8042.c"
 #include "../../src/kernel/net/lwip/sockets.c"
 
+/* The pacing fixture never opens an AF_IPX socket (f6-25 bridge owner). */
+int net_ipx_call(unsigned t,unsigned op,void *b,unsigned n,unsigned f,struct ciuki_sockaddr_ipx *a,unsigned *e)
+{ (void)t;(void)op;(void)b;(void)n;(void)f;(void)a;(void)e;CHECK(false);return -EINVAL; }
+int net_ipx_names(unsigned t,struct ciuki_sockaddr_ipx *l,struct ciuki_sockaddr_ipx *p)
+{ (void)t;(void)l;(void)p;CHECK(false);return -EINVAL; }
+int net_ipx_events(unsigned t) { (void)t;CHECK(false);return 0; }
+
 static struct process client, supervisor;
 static struct proc_fd test_fds[CIUKI_OPEN_MAX];
 static struct proc_thread ui_thread, worker_thread;

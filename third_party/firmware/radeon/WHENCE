@@ -1,0 +1,37 @@
+Driver: radeon - ATI Radeon
+
+File: radeon/R100_cp.bin
+File: radeon/R200_cp.bin
+File: radeon/R300_cp.bin
+File: radeon/R420_cp.bin
+File: radeon/RS600_cp.bin
+File: radeon/RS690_cp.bin
+File: radeon/R520_cp.bin
+File: radeon/R600_pfp.bin
+File: radeon/R600_me.bin
+File: radeon/RV610_pfp.bin
+File: radeon/RV610_me.bin
+File: radeon/RV630_pfp.bin
+File: radeon/RV630_me.bin
+File: radeon/RV620_pfp.bin
+File: radeon/RV620_me.bin
+File: radeon/RV635_pfp.bin
+File: radeon/RV635_me.bin
+File: radeon/RV670_pfp.bin
+File: radeon/RV670_me.bin
+File: radeon/RS780_pfp.bin
+File: radeon/RS780_me.bin
+File: radeon/RV770_pfp.bin
+File: radeon/RV770_me.bin
+File: radeon/RV730_pfp.bin
+File: radeon/RV730_me.bin
+File: radeon/RV710_pfp.bin
+File: radeon/RV710_me.bin
+
+Licence: MIT
+SPDX-License-Identifier: MIT
+
+Copyright 2007-2009 Advanced Micro Devices, Inc.
+
+Found in hex form in kernel source.
+

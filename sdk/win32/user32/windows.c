@@ -264,11 +264,33 @@ HWND W32API CreateWindowExA(DWORD ex, const char *klass, const char *title,
   }
   if (!u32_sync_window(w))
     goto fail;
-  if (!(style & WS_CHILD) && !u32_create_wire(w))
-    goto fail;
   HWND hwnd = w->handle;
   CREATESTRUCTA cs = {param, instance, menu,        parent, height, width,
                       y,     x,        (LONG)style, title,  klass,  ex};
+  /* fx-hlrun: WH_CBT HCBT_CREATEWND, once the window exists and before any
+   * message reaches it (WM_GETMINMAXINFO, WM_NCCREATE): MFC subclasses the
+   * window here. A nonzero result frees the window without messages and
+   * CreateWindowEx fails. The hook may move or resize the window through the
+   * CREATESTRUCT, which the window then takes. */
+  struct {
+    CREATESTRUCTA *cs;
+    HWND after;
+  } cbt = {&cs, 0 /* HWND_TOP */};
+  BOOL hooked = u32_hook_set(5);
+  if (u32_hooks(5, 3 /* HCBT_CREATEWND */, (WPARAM)hwnd, (LPARAM)&cbt) || u32_window(hwnd) != w) {
+    if (u32_window(hwnd) == w)
+      goto fail;
+    return 0;
+  }
+  if (cs.x != x || cs.y != y || cs.cx != width || cs.cy != height) {
+    if (cs.cx < 0 || cs.cy < 0 || cs.cx > 2048 || cs.cy > 2048)
+      goto fail_hooked;
+    w->rect = (RECT){cs.x, cs.y, cs.x + cs.cx, cs.y + cs.cy};
+    if (!u32_sync_window(w))
+      goto fail_hooked;
+  }
+  if (!(style & WS_CHILD) && !u32_create_wire(w))
+    goto fail_hooked;
   if (!u32_invoke(hwnd, WM_NCCREATE, 0, (LPARAM)&cs) || !IsWindow(hwnd))
     goto fail_live;
   if (u32_invoke(hwnd, WM_CREATE, 0, (LPARAM)&cs) == -1 || !IsWindow(hwnd))
@@ -283,6 +305,17 @@ fail_live:
   if (IsWindow(hwnd))
     DestroyWindow(hwnd);
   return 0;
+fail_hooked:
+  /* fx-hlrun: a WH_CBT hook has seen the window (MFC subclassed it and
+   * attached its CWnd): a failure from here on ends it with WM_NCDESTROY,
+   * as Wine 10.0 win32u/window.c create_window does (failed:
+   * destroy_window sends WM_NCDESTROY), before the handle is freed. Without
+   * a hook no code knows the handle and the window goes without messages. */
+  if (hooked) {
+    u32_invoke(hwnd, WM_NCDESTROY, 0, 0);
+    if (u32_window(hwnd) != w)
+      return 0;
+  }
 fail:
   u32_directory(W32R_WINDOW_FREE, w->handle, 0, 0, 0, "", 0, 0, &r, 0, 0);
   u32_free(w->extra);
@@ -368,6 +401,11 @@ BOOL W32API DestroyWindow(HWND h) {
     return u32_fail(1400);
   if (w->tid != u32_tid())
     return u32_fail(5);
+  /* fx-hlrun: WH_CBT HCBT_DESTROYWND; a nonzero result keeps the window. */
+  if (!w->destroying && u32_hooks(5, 4 /* HCBT_DESTROYWND */, (WPARAM)h, 0))
+    return 0;
+  if (!u32_window(h))
+    return 1;
   return u32_destroy(w, U32_NORMAL);
 }
 /* Owned windows (PHASE 0, before WM_DESTROY), child windows (PHASE 1,
@@ -566,6 +604,48 @@ BOOL W32API GetWindowPlacement(HWND h, struct u32_placement *p) {
     OffsetRect(&p->normal, -area.left, -area.top);
   return 1;
 }
+/* fx-hlrun (Sierra's MFC utilities import it): the inverse of
+ * GetWindowPlacement. rcNormalPosition (work-area coordinates for a
+ * top-level window, parent client coordinates for a child) becomes the
+ * window's rectangle, then showCmd is applied as by ShowWindow. USER keeps
+ * no separate minimized/maximized positions (the desktop places icons and
+ * zoomed windows), so ptMinPosition/ptMaxPosition are accepted and unused;
+ * Windows 98 does not check the length field (Wine 10.0 dlls/win32u
+ * window.c NtUserSetWindowPlacement validates only the pointer). */
+BOOL W32API SetWindowPlacement(HWND h, const struct u32_placement *p) {
+  U32_GUARD;
+  struct u32_window *w = u32_window(h);
+  if (!w)
+    return u32_fail(1400);
+  if (!p)
+    return u32_fail(998);
+  RECT r = p->normal;
+  RECT area;
+  if (!w->parent && SystemParametersInfoA(48, 0, &area, 0))
+    OffsetRect(&r, area.left, area.top);
+  if (r.right < r.left || r.bottom < r.top)
+    return u32_fail(87);
+  BOOL zoomed = !!(w->style & (WS_MINIMIZE | WS_MAXIMIZE));
+  if (zoomed)
+    ShowWindow(h, 9 /* SW_RESTORE */);
+  if (!u32_window(h) || !MoveWindow(h, r.left, r.top, r.right - r.left, r.bottom - r.top, 1))
+    return 0;
+  ShowWindow(h, (int)p->show);
+  return 1;
+}
+/* fx-hlrun: OpenIcon restores a minimized window ("Restores a minimized
+ * (iconic) window to its previous size and position; it then activates the
+ * window"); FALSE when the window is not minimized, as in Wine 10.0
+ * dlls/user32/win.c OpenIcon. */
+BOOL W32API OpenIcon(HWND h) {
+  U32_GUARD;
+  if (!u32_window(h))
+    return u32_fail(1400);
+  if (!IsIconic(h))
+    return 0;
+  ShowWindow(h, 1 /* SW_SHOWNORMAL */);
+  return 1;
+}
 BOOL W32API ClientToScreen(HWND h, POINT *p) {
   U32_GUARD;
   if (h == U32_DESKTOP && p)
@@ -698,6 +778,20 @@ BOOL W32API SetWindowPos(HWND h, HWND after, int x, int y, int cx, int cy,
       InvalidateRect(h, 0, 1);
     }
   }
+  /* fx-hlrun: without SWP_DEFERERASE the parent is erased now when a
+   * window is hidden, moved or resized, and a window that becomes visible
+   * is erased now (Wine 10.0 dlls/win32u/window.c set_window_pos; Windows
+   * 9x USER erases synchronously in SetWindowPos). */
+  if (!(flags & 0x2000 /* SWP_DEFERERASE */) && u32_window(h)) {
+    HWND parent = w->parent ? w->parent : h;
+    BOOL geometry = !EqualRect(&before, &w->rect);
+    if ((flags & SWP_HIDEWINDOW) || (!(flags & SWP_SHOWWINDOW) && geometry))
+      u32_erase_now(parent, 0);
+    if ((flags & SWP_SHOWWINDOW) && !(old_style & WS_VISIBLE) && u32_window(h))
+      u32_erase_now(h, 0);
+  }
+  if (!(w = u32_window(h)))
+    return 1;
   if (!(flags & SWP_NOACTIVATE) && (w->style & WS_VISIBLE))
     SetActiveWindow(h);
   return 1;
@@ -714,14 +808,49 @@ BOOL W32API ShowWindow(HWND h, int cmd) {
   struct u32_window *w = u32_window(h);
   if (!w)
     return u32_fail(1400);
-  if (!w->parent) cmd=u32_startup_show(cmd);
+  if (!w->parent) cmd=u32_startup_show(w,cmd);
   BOOL old = !!(w->style & WS_VISIBLE);
   DWORD prev = w->style;
+  /* fx-hlrun: WH_CBT HCBT_MINMAX (lParam: the show command) before a
+   * minimize or maximize, or a restore of a minimized or maximized window;
+   * a nonzero result keeps the current state (visibility still changes). */
+  BOOL state = cmd == 2 || cmd == 3 || cmd == 6 || cmd == 7 ||
+               ((cmd == 1 || cmd == 4 || cmd == 9 || cmd == 10) && (w->style & (WS_MINIMIZE | WS_MAXIMIZE)));
+  BOOL refused = state && u32_hooks(5, 1 /* HCBT_MINMAX */, (WPARAM)h, (LPARAM)cmd);
+  if (refused && !u32_window(h))
+    return old;
+  /* fx-hlrun: a command that changes nothing does nothing (no placement,
+   * activation or repaint) and returns the previous visibility: hiding a
+   * hidden window, SW_SHOW of a visible one, SW_SHOWNORMAL, SW_SHOWNOACTIVATE,
+   * SW_RESTORE or SW_SHOWDEFAULT of a visible window that is neither
+   * minimized nor maximized, minimizing a minimized or maximizing a
+   * maximized visible window (after WH_CBT HCBT_MINMAX), and an unknown
+   * command. Wine 10.0 dlls/win32u/window.c show_window ("goto done");
+   * Microsoft ShowWindow: the return value is the previous visibility.
+   * Half-Life's launcher calls ShowWindow(dialog, SW_SHOWNORMAL) on its
+   * visible menu several times a second. */
+  if (!old ? !cmd || cmd < 0 || cmd > 11
+           : cmd == 5 /* SW_SHOW */ || cmd < 0 || cmd > 11 ||
+                 ((cmd == 1 || cmd == 4 || cmd == 9 || cmd == 10) &&
+                  !(w->style & (WS_MINIMIZE | WS_MAXIMIZE))) ||
+                 ((cmd == 2 || cmd == 6 || cmd == 7 || cmd == 11) && (w->style & WS_MINIMIZE)) ||
+                 (cmd == 3 && (w->style & WS_MAXIMIZE))) {
+    /* CreateWindowEx here shows a WS_VISIBLE top-level window without the
+     * ShowWindow(SW_SHOW) that activates it on Windows, so an activating
+     * command still activates such a window when it is not active. */
+    struct u32_thread *t = u32_thread();
+    if (old && !w->parent && (cmd == 1 || cmd == 3 || cmd == 5 || cmd == 9 || cmd == 10) && t &&
+        t->active != h)
+      SetActiveWindow(h);
+    return old;
+  }
   if (!cmd)
     w->style &= ~WS_VISIBLE;
   else
     w->style |= WS_VISIBLE;
-  if (cmd == 2 || cmd == 6 || cmd == 7)
+  if (refused) {
+    /* WH_CBT kept the minimized/maximized state */
+  } else if (cmd == 2 || cmd == 6 || cmd == 7)
     w->style |= WS_MINIMIZE;
   else if (cmd) {
     w->style &= ~WS_MINIMIZE;
@@ -752,8 +881,19 @@ BOOL W32API ShowWindow(HWND h, int cmd) {
   }
   if (cmd && cmd != 4 && cmd != 7 && cmd != 8)
     SetActiveWindow(h);
-  if (cmd)
+  /* fx-hlrun: SW_SHOWNA of a visible window only raises it (Wine
+   * show_window: SWP_NOACTIVATE | SWP_SHOWWINDOW | SWP_NOSIZE | SWP_NOMOVE);
+   * a window that appears or changes state is repainted. */
+  if (cmd && (!old || ((prev ^ w->style) & (WS_MINIMIZE | WS_MAXIMIZE))))
     InvalidateRect(h, 0, 1);
+  /* fx-hlrun: a window that becomes visible is erased now, and hiding a
+   * child erases what it uncovered in its parent now (ShowWindow is
+   * SetWindowPos with SWP_SHOWWINDOW or SWP_HIDEWINDOW: Wine 10.0
+   * dlls/win32u/window.c show_window and set_window_pos). */
+  if (!old && cmd && u32_window(h))
+    u32_erase_now(h, 0);
+  else if (old && !cmd && (w = u32_window(h)) && w->parent)
+    u32_erase_now(w->parent, 0);
   return old;
 }
 /* f7 (Quake III imports it): CloseWindow minimizes, never destroys.
@@ -1347,6 +1487,9 @@ HANDLE W32API RemovePropA(HWND h, const char *name) {
 LRESULT W32API DefWindowProcA(HWND h, UINT msg, WPARAM wp, LPARAM lp) {
   U32_GUARD;
   struct u32_window *w = u32_window(h);
+  /* fx-hlrun: WH_CBT HCBT_SYSCOMMAND; a nonzero result skips the command. */
+  if (msg == WM_SYSCOMMAND && u32_hooks(5, 8 /* HCBT_SYSCOMMAND */, wp, lp))
+    return 0;
   BOOL classic = 0;
   LRESULT result = u32_classic_default(h, msg, wp, lp, &classic);
   if (classic)
@@ -1367,6 +1510,9 @@ LRESULT W32API DefWindowProcA(HWND h, UINT msg, WPARAM wp, LPARAM lp) {
       EndPaint(h, &ps);
     return 0;
   }
+  case 0x0088: /* WM_SYNCPAINT: erase what is pending now (Wine 10.0 defwnd.c) */
+    RedrawWindow(h, 0, 0, 0x200 /* RDW_ERASENOW */ | 4 /* RDW_ERASE */ | 0x80 /* RDW_ALLCHILDREN */);
+    return 0;
   case WM_ERASEBKGND:
     if (w && w->cls->c.hbrBackground && u32_gdi && u32_gdi->fill) {
       RECT r;

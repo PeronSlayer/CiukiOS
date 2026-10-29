@@ -81,6 +81,16 @@ int acct_boot_decode(struct acct_bootstrap *, const void *, size_t);
 int acct_boot_read(struct acct_store *, struct acct_bootstrap *);
 int acct_boot_write(struct acct_store *, struct acct_bootstrap *);
 
+/* Private first-boot diagnostics; neither a disk record nor an SDK ABI. */
+enum acct_boot_step {
+    ACCT_BOOT_RECOVER, ACCT_BOOT_PROMOTE, ACCT_BOOT_IDENTITY,
+    ACCT_BOOT_ENTROPY_SID, ACCT_BOOT_ENTROPY_SALT, ACCT_BOOT_GENERATION,
+    ACCT_BOOT_BINDING, ACCT_BOOT_STAGE, ACCT_BOOT_TREE_DIGEST,
+    ACCT_BOOT_VALIDATE_STAGE, ACCT_BOOT_ORPHANS, ACCT_BOOT_RESERVE,
+    ACCT_BOOT_STATUS, ACCT_BOOT_PREPARE, ACCT_BOOT_COMMIT, ACCT_BOOT_ABORT,
+    ACCT_BOOT_CHECKPOINT, ACCT_BOOT_COMPACT, ACCT_BOOT_INTENT, ACCT_BOOT_STEP_COUNT
+};
+struct acct_store_workspace;
 struct acct_store {
     struct acct_io io;
     struct acct_owner owner;
@@ -88,10 +98,15 @@ struct acct_store {
     uint64_t volume;
     uint64_t high_generation;
     uint32_t high_uid;
+    enum acct_boot_step firstboot_step;
+    struct acct_store_workspace *pending_intent; /* exact sealed batch awaiting persistence */
     const struct acct_subject *subject; /* borrowed retained worker subject, or NULL for recovery */
 };
+static inline int acct_boot_result(struct acct_store *s, enum acct_boot_step step, int e)
+{ if (e) s->firstboot_step=step; return e; }
 /* Store operations require the live service lease and its serialized worker. */
 int acct_store_recover(struct acct_store *, struct acct_db *);
+void acct_store_close(struct acct_store *);
 int acct_store_commit(struct acct_store *, const struct acct_db *,
                       const struct acct_db *, const struct acct_owner_request *, unsigned);
 int acct_store_load_watermarks(struct acct_store *, const uint32_t sid[3]);
@@ -217,6 +232,9 @@ struct acct_service {
  * Caller must not close while a worker is running. No pthread/UI dependencies.
  */
 int acct_service_open(struct acct_service *, const struct acct_store *, int host_test);
+/* Retry unpublished startup under the same lease, before admitting clients.
+ * Durable intents/orphans use exactly the open/reboot recovery rules. */
+int acct_service_resume(struct acct_service *);
 void acct_service_close(struct acct_service *);
 /* Called only by sealed provisioning/enrollment worker before admitting clients. */
 int acct_service_bootstrap(struct acct_service *, const void *seed, size_t, uint32_t expected_origin);

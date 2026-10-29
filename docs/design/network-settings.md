@@ -63,7 +63,7 @@ Syscall 90 uses B=operation, C=record pointer, D=400; other registers are zero.
 The 400-byte `ciuki_net_control` contains version/size/index/count (16 bytes),
 `ciuki_net_config` (232 bytes), name/driver/MAC (32 bytes), ten u32 adapter
 fields (40 bytes), address/mask/gateway/three DNS/lease/remaining (32 bytes),
-four u64 counters (32 bytes), generation and three zero reserved u32s (16 bytes).
+four u64 counters (32 bytes), generation, the IPX selection and two zero reserved u32s (16 bytes).
 Operations are GET=0, SET=1, RENEW=2, RELEASE=3. SET changes enabled/DHCP,
 static IPv4, DNS, host/domain and media as one configuration; renew/release
 are transient. Mutations require the generation returned by GET (EBUSY if
@@ -87,3 +87,17 @@ The UI performs requests on one copied worker job and refreshes explicitly;
 acquiring a DHCP lease never blocks that UI turn. Test uses the system resolver
 and a two-second, nonblocking TCP/80 connection to the selected source/gateway.
 Refusal, timeout and success are distinct results; none implies Internet access.
+
+## f6-27 IPX/SPX Advanced properties
+
+The fourth tab offers Auto, Ethernet 802.2, Ethernet 802.3, Ethernet II and
+Ethernet SNAP. Its Apply is a separate SYSTEM SETTING operation, not an IPv4
+SET; network jobs and output-pin/credential checks remain unchanged. A global
+machine selection is reported at offset 388 of the 400-byte control record,
+replacing its first reserved word; the remaining two reserved words are zero.
+Existing fields retain their offsets. SYSTEM saves the exact 13-byte
+`frame_type=N` line plus LF in `/System/Settings/ipx.cfg` (N=0..4).
+The sealed file is read by the boot settings loader before network attachment.
+Concurrent saves serialize durable write and runtime publication; a busy save
+returns EBUSY. Denied, invalid or failed saves cannot publish runtime intent.
+See [win32-ipx.md](win32-ipx.md) for source references and wire policy.

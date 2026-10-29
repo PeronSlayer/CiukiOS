@@ -88,8 +88,11 @@ int main(void)
     CHECK(net_bridge_receive(&bridge,a,out,sizeof(out))==0 && net_bridge_vm(&bridge,a)->rx_overflows==1);
     net_bridge_ingress(&bridge,4,99,p,64,4); CHECK(net_bridge_receive(&bridge,a,out,sizeof(out))==64);
     for(unsigned n=0;n<44;n++) { net_bridge_ingress(&bridge,4,99,p,n,1000); CHECK(!pool.used); }
-    p[12]=0; p[13]=50; net_bridge_ingress(&bridge,4,99,p,64,1000); CHECK(!pool.used);
-    p[12]=0x81; p[13]=0x37; p[20]=1; net_bridge_ingress(&bridge,4,99,p,64,1000); CHECK(!pool.used);
+    /* f6-25 admits length-checked raw IPX and learned network numbers. */
+    p[12]=0; p[13]=50; net_bridge_ingress(&bridge,4,99,p,64,1000);
+    CHECK(net_bridge_receive(&bridge,a,out,sizeof(out))==64 && !memcmp(p,out,64) && !pool.used);
+    p[12]=0x81; p[13]=0x37; p[20]=1; net_bridge_ingress(&bridge,4,99,p,64,1000);
+    CHECK(net_bridge_receive(&bridge,a,out,sizeof(out))==64 && !memcmp(p,out,64) && !pool.used);
     ipx_frame(p,ma,peer,64);
     for(unsigned i=0;i<128;i++) CHECK(bridge_pool_copy(&pool,p,64,4,99)==(int)i);
     CHECK(net_bridge_send(&bridge,a,p,64,1000)==-ENOSPC);

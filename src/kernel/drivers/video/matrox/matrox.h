@@ -37,5 +37,10 @@ int matrox_engine_prove(struct matrox_engine *);
  * Refusal is side-effect-free, error after a row is partial execution. */
 int matrox_mono(struct matrox_engine *, const struct fb_rect *, const uint8_t *,
                  uint32_t stride, uint32_t size, uint32_t fg, uint32_t bg);
+/* 3D transport under the same owner: reserve at most 16 FIFO entries (the
+ * G400-class depth) before a register burst; sync proves idle. Refusal
+ * quarantines like any 2D packet. */
+int matrox_engine_reserve(struct matrox_engine *, unsigned slots);
+int matrox_engine_sync(struct matrox_engine *);
 extern const struct display_driver matrox_driver;
 #endif

@@ -28,7 +28,10 @@ enum w32_file_action {
   W32_F_NEXT,
   W32_F_DISK,
   W32_F_LOCK,
-  W32_F_UNLOCK
+  W32_F_UNLOCK,
+  /* fx-hlutils: COM controls; flags is a native COM_* control or 1..5
+   * (get/set timeouts, get/set mask, setup queues). */
+  W32_F_COMM
 };
 struct ciuki_w32_file_args {
   struct ciuki_w32_header header;
@@ -74,7 +77,12 @@ enum w32_system_action {
    * low/high=earliest expiry in monotonic milliseconds. */
   W32_S_LAUNCH_FEEDBACK,
   /* Calling process only: first GetMessage ends its startup feedback. */
-  W32_S_LAUNCH_IDLE
+  W32_S_LAUNCH_IDLE,
+  /* Read-only joystick enumeration/query. low=existing joystick record,
+   * extra=record size. value=0 joystick enumeration/query, 1 HID caps,
+   * 2 joystick state (keyboard state is never exposed).
+   * No calibration, routing or configuration. */
+  W32_S_JOYSTICK
 };
 struct ciuki_w32_system_args {
   struct ciuki_w32_header header;

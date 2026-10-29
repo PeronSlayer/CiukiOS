@@ -3,6 +3,7 @@
 #define CIUKI_NET_BRIDGE_H
 #include <ciuki/kernel.h>
 #include <ciuki/net_packet.h>
+#include <ciuki/ipx_wire.h>
 
 #define BRIDGE_VMS 2u
 #define BRIDGE_QUEUE 8u
@@ -47,6 +48,14 @@ struct net_bridge {
     uint64_t now_ms;
     unsigned physical_count, cursor, count;
     bool identity_ready, link, promiscuous;
+    uint8_t host_node[6];
+    void *host_arg;
+    void (*host_input)(void *, const uint8_t *, unsigned, uint64_t);
+    void (*host_tick)(void *, bool, uint64_t);
+    unsigned wire_framing;
+    unsigned frame_type;
+    struct ipx_frame_cache frames;
+    uint32_t ipx_network; /* atomic carrier of four network-order bytes */
 };
 int bridge_pool_copy(struct bridge_pool *, const uint8_t *, unsigned, uint32_t, uint32_t);
 bool bridge_pool_hold(struct bridge_pool *, unsigned);
@@ -59,10 +68,14 @@ void net_bridge_disable(struct net_bridge *, struct bridge_key);
 void net_bridge_link(struct net_bridge *, bool up);
 void net_bridge_shutdown(struct net_bridge *);
 int net_bridge_send(struct net_bridge *, struct bridge_key, const uint8_t *, unsigned, uint64_t);
+/* Emulated DOS API uses the host's detected format; direct NE2000 frames keep
+ * their selected encapsulation through net_bridge_send. Gate held. */
+int net_bridge_send_ipx(struct net_bridge *, struct bridge_key, const uint8_t *, unsigned, uint64_t);
 void net_bridge_ingress(struct net_bridge *, uint32_t interface, uint32_t generation,
                         const uint8_t *, unsigned, uint64_t);
 /* At most one TX per VM per pass, cursor rotated even on an empty pass. */
 void net_bridge_step(struct net_bridge *);
+int net_bridge_host_send(struct net_bridge *, const uint8_t *, unsigned);
 int net_bridge_receive(struct net_bridge *, struct bridge_key, uint8_t *, unsigned);
 const struct bridge_vm *net_bridge_vm(const struct net_bridge *, struct bridge_key);
 

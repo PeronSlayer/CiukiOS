@@ -707,7 +707,12 @@ class SuiteTests(unittest.TestCase):
                             self.assertEqual(guest['steps'][0]['template'], 'boot')
                         continue
                     steps = acceptance.expand_steps(c['steps'])
-                    self.assertEqual(bool(steps), not c.get('pending'))
+                    if c['id'].startswith('acc-install-'):
+                        self.assertTrue(steps)
+                        self.assertEqual(c['pending']['directive'], 'fx-games20c')
+                        self.assertEqual(c['pending']['requires'], [])
+                    else:
+                        self.assertEqual(bool(steps), not c.get('pending'))
                     if steps:
                         self.assertIn(c['steps'][0].get('template'), ('boot', 'boot-safe'))
                     for step in steps:
@@ -724,7 +729,7 @@ class SuiteTests(unittest.TestCase):
                     self.assertTrue(runner.browser_case(c))
                     self.assertEqual(c['device_exceptions'], {'network': 'i82559er'})
         # fx-games20 adds twenty independent games and their bounded LAN pairs.
-        extra = [c for c in self.suite['cases'] if 'dos_game' in c or 'guests' in c]
+        extra = [c for c in self.suite['cases'] if 'dos_game' in c or 'guests' in c or c['id'].startswith('acc-install-')]
         self.assertTrue(all(c['timeout'] <= 2400 for c in extra))
         self.assertLessEqual(total, 7200 * 4 + 2400 * len(extra))
 
@@ -1364,6 +1369,16 @@ class RunnerIntegrationTests(unittest.TestCase):
         self.assertEqual(result['outcome'], 'not_run')
         self.assertIn('pending fx-is5boot', result['reason'])
         self.assertFalse((directory / 'fake-arguments.json').exists())
+
+    def test_required_pending_install_case_is_incomplete_without_launch(self):
+        c = case(id='install-calibration', pending={'directive': 'fx-games20c', 'requires': [],
+                 'blocking': True, 'reason': 'needs-lead-calibration: installer destination and sound menu'})
+        result, directory = self.run_case(c)
+        self.assertEqual(result['outcome'], 'not_run')
+        self.assertTrue(result['reason'].startswith('required pending fx-games20c'))
+        self.assertFalse((directory / 'fake-arguments.json').exists())
+        state = acceptance.verdict([{'case': c['id'], 'outcome': result['outcome'], 'evidence': result}])
+        self.assertEqual(state, ('INCOMPLETE', [], [c['id']]))
 
     @unittest.skipUnless(HAVE_XORRISO, 'xorriso required')
     def test_generated_media_insert_and_eject(self):

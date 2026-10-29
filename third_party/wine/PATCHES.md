@@ -101,3 +101,55 @@ Each patch identifies its pinned base and modification date. Patch and PE
 SHA-256 values are recorded in `config/wine-upper.json` (and per run in the
 build directory's `build.json`). These are build/subset patches, not proof
 that the remaining core ABI matches.
+
+## F6-26 (2026-10-28)
+
+11. `patches/0011-directplay-lan.patch`: build DPLAYX/DPWSOCKX against the
+    same MSVCRT as the other upper DLLs; TCP/IP host enumeration listener on
+    47624, replies, legacy Send, complete TCP writes, compound-address
+    selection and an address dialog. Use the existing Win32 event primitives
+    for Winsock's event convenience operations. Rearm UDP reception after a
+    malformed packet and preserve SP-owned player data on allocation failure.
+12. `patches/0012-directplay-lobby.patch`: implement A/W lobby application
+    registration, unregistration and enumeration; close enumeration keys;
+    bound and quote launch commands; convert Unicode launch connections and
+    release process handles. Do not treat a registry write failure as success.
+13. `patches/0013-directplay-enumeration.patch`: require a matching, open,
+    hosted session and a complete enumeration request; honour availability
+    filtering; handle allocation failure and an absent session name.
+
+These extend the pinned sources; they do not establish Windows 98 IPX wire
+compatibility or add a DirectPlay 8 runtime. See
+[`docs/design/directplay.md`](../../docs/design/directplay.md) for the source
+research, test boundaries and outstanding gates. The source offer covers
+these patches and the three added PE builds under LGPL-2.1-or-later.
+
+## F6-27 (2026-10-28)
+
+14. `patches/0014-directplay-ipx.patch`: AF_IPX datagrams and SPX streams in
+    the actual Wine provider, correctly sized socket addresses and node keys,
+    broadcast enumeration and truthful datagram caps. Unsupported migration
+    and DirectPlay reliable-protocol session engines fail explicitly. The IPX
+    enumeration socket/provider header/SPX selection are documented CiukiOS
+    assumptions; Windows 98 wire compatibility is not claimed.
+15. `patches/0015-directplay-lobby-lifetime.patch`: transactional A/W launch,
+    reservation/settings/notification/resume failure rollback, remote handle
+    cleanup, allocation failure preservation, and a notification worker whose
+    owned handles and reservation end with the child or launch cancellation.
+    The worker retains no lobby-object pointer.
+
+## fx-hlutils: OLE dialogs and WinINet
+
+`0016-wininet-no-tls.patch` applies to Wine 10.0 at the pinned commit. It
+links oledlg and wininet to the same reused MSVCRT as the existing upper
+DLLs, avoiding an unintended UCRT dependency. Until a Schannel provider is
+available, NETCON_secure_connect returns
+ERROR_INTERNET_SECURITY_CHANNEL_ERROR before entering security delay imports.
+Plain HTTP and FTP retain Wine's ws2_32 calls, resolved to CiukiOS Winsock.
+This is an LGPL-2.1-or-later source modification, supplied with the recipe.
+The new PEs require the same import closure and H0/H1 evidence as the others.
+
+The same patch makes WinINet's optional legacy MPR password-cache helpers
+return ERROR_NOT_SUPPORTED and refuses non-Basic HTTP authentication with
+ERROR_INTERNET_LOGIN_FAILURE before SSPI delay imports. Credentials entered
+for a request can still use Wine's in-process Basic authentication path.

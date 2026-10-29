@@ -703,7 +703,10 @@ int32_t power_record_call(uint32_t action, uint32_t address, uint32_t bytes)
         return copy_to_user(address, &out, sizeof(out));
     }
     if (action != CIUKI_POWER_POLICY) return -EINVAL;
-    if (!security_device_admin(proc_current())) return -EPERM;
+    /* sec-k08b K8-7: the live desktop applies its user's disk timer.
+     * Machine settings keep their separate administrator gate. */
+    struct process *caller = proc_current();
+    if (!security_device_admin(caller) && !security_device_desktop(caller)) return -EPERM;
     struct ciuki_power_policy p;
     if (bytes != sizeof(p)) return -EINVAL;
     int e = copy_from_user(&p, address, sizeof(p));

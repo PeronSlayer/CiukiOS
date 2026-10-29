@@ -3,6 +3,7 @@
 #include <ciuki/kernel.h>
 #include <ciuki/sync.h>
 #include <ciuki/net_control.h>
+#include <ciuki/ipx_config.h>
 #include "lwip/sys.h"
 extern int net_control_driver(unsigned, struct ciuki_net_control *, bool) __attribute__((weak));
 extern int net_settings_save(unsigned, const struct ciuki_net_config *) __attribute__((weak));
@@ -25,6 +26,7 @@ int net_control_init(void)
 }
 int net_control(unsigned operation, struct ciuki_net_control *record)
 {
+    record->ipx_frame_type=net_ipx_frame_type();
     if (operation > CIUKI_NETCTL_RELEASE || record->index >= 2) return -EINVAL;
     if (operation == CIUKI_NETCTL_SET && !net_config_valid(&record->config)) return -EINVAL;
     if (!control_ready) {

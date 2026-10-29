@@ -1,0 +1,567 @@
+CiukiOS Wine 10.0: lobby A/W registration, enumeration and bounded launch
+Pinned base: b073859675060c9211fcbccfd90e4e87520dc2c2
+Modified by CiukiOS, 2026-10-28. LGPL-2.1-or-later. See docs/design/directplay.md.
+
+--- a/dlls/dplayx/dplobby.c
++++ b/dlls/dplayx/dplobby.c
+@@ -18,6 +18,7 @@
+  */
+ #include <stdarg.h>
+ #include <string.h>
++#include <stdio.h>
+ 
+ #define COBJMACROS
+ #include "windef.h"
+@@ -535,103 +536,65 @@
+  * invoking the callback function with lpContext.
+  *
+  */
++static HRESULT DPL_EnumApplications( IDirectPlayLobbyImpl *This,
++        LPDPLENUMLOCALAPPLICATIONSCALLBACK callback, void *context, DWORD flags, BOOL ansi )
++{
++    HKEY parent, key;
++    DWORD index = 0, length, bytes, type;
++    WCHAR name[256], value[40];
++    char ansiName[1024];
++    DPLAPPINFO info;
++    LONG error;
++    BOOL more;
++    HRESULT hr = DP_OK;
++    if (flags || !callback) return DPERR_INVALIDPARAMS;
++    error = RegOpenKeyExW(HKEY_LOCAL_MACHINE, L"Software\\Microsoft\\DirectPlay\\Applications",
++                          0, KEY_READ, &parent);
++    if (error == ERROR_FILE_NOT_FOUND) return DP_OK;
++    if (error) return DPERR_ACCESSDENIED;
++    for (;; ++index)
++    {
++        length = ARRAY_SIZE(name);
++        error = RegEnumKeyExW(parent, index, name, &length, NULL, NULL, NULL, NULL);
++        if (error == ERROR_NO_MORE_ITEMS) break;
++        if (error) { hr = DPERR_ACCESSDENIED; break; }
++        if (RegOpenKeyExW(parent, name, 0, KEY_READ, &key)) continue;
++        bytes = sizeof(value);
++        error = RegQueryValueExW(key, L"Guid", NULL, &type, (BYTE *)value, &bytes);
++        if (error || type != REG_SZ || bytes < sizeof(WCHAR) || bytes > sizeof(value) ||
++            bytes % sizeof(WCHAR) || value[bytes / sizeof(WCHAR) - 1] ||
++            FAILED(CLSIDFromString(value, &info.guidApplication)))
++        { RegCloseKey(key); continue; }
++        info.dwSize = sizeof(info);
++        if (ansi)
++        {
++            if (!WideCharToMultiByte(CP_ACP, 0, name, -1, ansiName, sizeof(ansiName), NULL, NULL))
++            { RegCloseKey(key); continue; }
++            info.lpszAppNameA = ansiName;
++        }
++        else info.lpszAppName = name;
++        EnterCriticalSection(&This->lock);
++        This->cbkeyhack = key;
++        more = callback(&info, context, 0);
++        This->cbkeyhack = NULL;
++        LeaveCriticalSection(&This->lock);
++        RegCloseKey(key);
++        if (!more) break;
++    }
++    RegCloseKey(parent);
++    return hr;
++}
++
+ static HRESULT WINAPI IDirectPlayLobby3Impl_EnumLocalApplications( IDirectPlayLobby3 *iface,
+-        LPDPLENUMLOCALAPPLICATIONSCALLBACK lpEnumLocalAppCallback, void *lpContext, DWORD dwFlags )
+-{
+-  IDirectPlayLobbyImpl *This = impl_from_IDirectPlayLobby3( iface );
+-
+-  FIXME("(%p)->(%p,%p,0x%08lx):stub\n", This, lpEnumLocalAppCallback, lpContext, dwFlags );
+-
+-  return DPERR_OUTOFMEMORY;
++        LPDPLENUMLOCALAPPLICATIONSCALLBACK callback, void *context, DWORD flags )
++{
++    return DPL_EnumApplications(impl_from_IDirectPlayLobby3(iface), callback, context, flags, FALSE);
+ }
+ 
+ static HRESULT WINAPI IDirectPlayLobby3AImpl_EnumLocalApplications( IDirectPlayLobby3A *iface,
+-        LPDPLENUMLOCALAPPLICATIONSCALLBACK lpEnumLocalAppCallback, void *lpContext, DWORD dwFlags )
+-{
+-  IDirectPlayLobbyImpl *This = impl_from_IDirectPlayLobby3A( iface );
+-
+-  HKEY hkResult;
+-  LPCSTR searchSubKey    = "SOFTWARE\\Microsoft\\DirectPlay\\Applications";
+-  LPCSTR guidDataSubKey  = "Guid";
+-  DWORD dwIndex, sizeOfSubKeyName=50;
+-  char subKeyName[51];
+-  FILETIME filetime;
+-
+-  TRACE("(%p)->(%p,%p,0x%08lx)\n", This, lpEnumLocalAppCallback, lpContext, dwFlags );
+-
+-  if( dwFlags != 0 )
+-  {
+-    return DPERR_INVALIDPARAMS;
+-  }
+-
+-  if( !lpEnumLocalAppCallback )
+-  {
+-     return DPERR_INVALIDPARAMS;
+-  }
+-
+-  /* Need to loop over the service providers in the registry */
+-  if( RegOpenKeyExA( HKEY_LOCAL_MACHINE, searchSubKey,
+-                     0, KEY_READ, &hkResult ) != ERROR_SUCCESS )
+-  {
+-    /* Hmmm. Does this mean that there are no service providers? */
+-    ERR(": no service providers?\n");
+-    return DP_OK;
+-  }
+-
+-  /* Traverse all registered applications */
+-  for( dwIndex=0;
+-       RegEnumKeyExA( hkResult, dwIndex, subKeyName, &sizeOfSubKeyName, NULL, NULL, NULL, &filetime ) != ERROR_NO_MORE_ITEMS;
+-       ++dwIndex, sizeOfSubKeyName=50 )
+-  {
+-
+-    HKEY       hkServiceProvider;
+-    GUID       serviceProviderGUID;
+-    DWORD      returnTypeGUID, sizeOfReturnBuffer = 50;
+-    char       returnBuffer[51];
+-    WCHAR      buff[51];
+-    DPLAPPINFO dplAppInfo;
+-
+-    TRACE(" this time through: %s\n", subKeyName );
+-
+-    /* Get a handle for this particular service provider */
+-    if( RegOpenKeyExA( hkResult, subKeyName, 0, KEY_READ,
+-                       &hkServiceProvider ) != ERROR_SUCCESS )
+-    {
+-       ERR(": what the heck is going on?\n" );
+-       continue;
+-    }
+-
+-    if( RegQueryValueExA( hkServiceProvider, guidDataSubKey,
+-                          NULL, &returnTypeGUID, (LPBYTE)returnBuffer,
+-                          &sizeOfReturnBuffer ) != ERROR_SUCCESS )
+-    {
+-      ERR(": missing GUID registry data members\n" );
+-      continue;
+-    }
+-
+-    /* FIXME: Check return types to ensure we're interpreting data right */
+-    MultiByteToWideChar( CP_ACP, 0, returnBuffer, -1, buff, ARRAY_SIZE( buff ));
+-    CLSIDFromString( buff, &serviceProviderGUID );
+-    /* FIXME: Have I got a memory leak on the serviceProviderGUID? */
+-
+-    dplAppInfo.dwSize          = sizeof( dplAppInfo );
+-    dplAppInfo.guidApplication = serviceProviderGUID;
+-    dplAppInfo.lpszAppNameA    = subKeyName;
+-
+-    EnterCriticalSection( &This->lock );
+-
+-    memcpy( &This->cbkeyhack, &hkServiceProvider, sizeof( hkServiceProvider ) );
+-
+-    if( !lpEnumLocalAppCallback( &dplAppInfo, lpContext, dwFlags ) )
+-    {
+-       LeaveCriticalSection( &This->lock );
+-       break;
+-    }
+-
+-    LeaveCriticalSection( &This->lock );
+-  }
+-
+-  return DP_OK;
++        LPDPLENUMLOCALAPPLICATIONSCALLBACK callback, void *context, DWORD flags )
++{
++    return DPL_EnumApplications(impl_from_IDirectPlayLobby3A(iface), callback, context, flags, TRUE);
+ }
+ 
+ /********************************************************************
+@@ -723,82 +686,29 @@
+   LPSTR lpszCurrentDirectory;
+ } RunApplicationEnumStruct, *lpRunApplicationEnumStruct;
+ 
+-/* To be called by RunApplication to find how to invoke the function */
+-static BOOL CALLBACK RunApplicationA_EnumLocalApplications
+-( LPCDPLAPPINFO   lpAppInfo,
+-  LPVOID          lpContext,
+-  DWORD           dwFlags )
+-{
+-  lpRunApplicationEnumStruct lpData = (lpRunApplicationEnumStruct)lpContext;
+-
+-  if( IsEqualGUID( &lpAppInfo->guidApplication, &lpData->appGUID ) )
+-  {
+-    char  returnBuffer[200];
+-    DWORD returnType, sizeOfReturnBuffer;
+-    LPCSTR clSubKey   = "CommandLine";
+-    LPCSTR cdSubKey   = "CurrentDirectory";
+-    LPCSTR fileSubKey = "File";
+-    LPCSTR pathSubKey = "Path";
+-
+-    /* FIXME: Lazy man hack - dplay struct has the present reg key saved */
+-
+-    sizeOfReturnBuffer = 200;
+-
+-    /* Get all the appropriate data from the registry */
+-    if( RegQueryValueExA( lpData->This->cbkeyhack, clSubKey,
+-                          NULL, &returnType, (LPBYTE)returnBuffer,
+-                          &sizeOfReturnBuffer ) != ERROR_SUCCESS )
+-    {
+-       ERR( ": missing CommandLine registry data member\n" );
+-    }
+-    else
+-    {
+-        lpData->lpszCommandLine = strdup( returnBuffer );
+-    }
+-
+-    sizeOfReturnBuffer = 200;
+-
+-    if( RegQueryValueExA( lpData->This->cbkeyhack, cdSubKey,
+-                          NULL, &returnType, (LPBYTE)returnBuffer,
+-                          &sizeOfReturnBuffer ) != ERROR_SUCCESS )
+-    {
+-       ERR( ": missing CurrentDirectory registry data member\n" );
+-    }
+-    else
+-    {
+-        lpData->lpszCurrentDirectory = strdup( returnBuffer );
+-    }
+-
+-    sizeOfReturnBuffer = 200;
+-
+-    if( RegQueryValueExA( lpData->This->cbkeyhack, fileSubKey,
+-                          NULL, &returnType, (LPBYTE)returnBuffer,
+-                          &sizeOfReturnBuffer ) != ERROR_SUCCESS )
+-    {
+-       ERR( ": missing File registry data member\n" );
+-    }
+-    else
+-    {
+-        lpData->lpszFileName = strdup( returnBuffer );
+-    }
+-
+-    sizeOfReturnBuffer = 200;
+-
+-    if( RegQueryValueExA( lpData->This->cbkeyhack, pathSubKey,
+-                          NULL, &returnType, (LPBYTE)returnBuffer,
+-                          &sizeOfReturnBuffer ) != ERROR_SUCCESS )
+-    {
+-       ERR( ": missing Path registry data member\n" );
+-    }
+-    else
+-    {
+-        lpData->lpszPath = strdup( returnBuffer );
+-    }
+-
+-    return FALSE; /* No need to keep going as we found what we wanted */
+-  }
+-
+-  return TRUE; /* Keep enumerating, haven't found the application yet */
++static char *DPL_QueryStringA( HKEY key, const char *name )
++{
++    DWORD size = 0, type;
++    char *text;
++    LONG error = RegQueryValueExA(key, name, NULL, &type, NULL, &size);
++    if (error == ERROR_FILE_NOT_FOUND) return strdup("");
++    if (error || type != REG_SZ || !size || size > 32768) return NULL;
++    if (!(text = malloc(size))) return NULL;
++    if (RegQueryValueExA(key, name, NULL, &type, (BYTE *)text, &size) ||
++        type != REG_SZ || !size || text[size - 1]) { free(text); return NULL; }
++    return text;
++}
++
++static BOOL CALLBACK RunApplicationA_EnumLocalApplications( LPCDPLAPPINFO app,
++        void *context, DWORD flags )
++{
++    lpRunApplicationEnumStruct data = context;
++    if (!IsEqualGUID(&app->guidApplication, &data->appGUID)) return TRUE;
++    data->lpszCommandLine = DPL_QueryStringA(data->This->cbkeyhack, "CommandLine");
++    data->lpszCurrentDirectory = DPL_QueryStringA(data->This->cbkeyhack, "CurrentDirectory");
++    data->lpszFileName = DPL_QueryStringA(data->This->cbkeyhack, "File");
++    data->lpszPath = DPL_QueryStringA(data->This->cbkeyhack, "Path");
++    return FALSE;
+ }
+ 
+ static BOOL DPL_CreateAndSetLobbyHandles( DWORD dwDestProcessId, HANDLE hDestProcess,
+@@ -859,7 +769,8 @@
+   IDirectPlayLobbyImpl *This = impl_from_IDirectPlayLobby3A( iface );
+   HRESULT hr;
+   RunApplicationEnumStruct enumData;
+-  char temp[200];
++  char *command;
++  SIZE_T pathSize, commandSize;
+   STARTUPINFOA startupInfo;
+   PROCESS_INFORMATION newProcessInfo;
+   LPSTR appName;
+@@ -869,10 +780,10 @@
+   TRACE( "(%p)->(0x%08lx,%p,%p,%p)\n",
+          This, dwFlags, lpdwAppID, lpConn, hReceiveEvent );
+ 
+-  if( dwFlags != 0 )
+-  {
+-    return DPERR_INVALIDPARAMS;
+-  }
++  if (dwFlags || !lpdwAppID || !lpConn || lpConn->dwSize != sizeof(*lpConn) ||
++      !lpConn->lpSessionDesc || lpConn->lpSessionDesc->dwSize != sizeof(DPSESSIONDESC2))
++      return DPERR_INVALIDPARAMS;
++  *lpdwAppID = 0;
+ 
+   if( DPLAYX_AnyLobbiesWaitingForConnSettings() )
+   {
+@@ -890,19 +801,31 @@
+   IDirectPlayLobby_EnumLocalApplications( iface, RunApplicationA_EnumLocalApplications,
+                                           (&enumData), 0 );
+ 
+-  /* First the application name */
+-  strcpy( temp, enumData.lpszPath );
+-  strcat( temp, "\\" );
+-  strcat( temp, enumData.lpszFileName );
+-  free( enumData.lpszPath );
+-  free( enumData.lpszFileName );
+-  appName = strdup( temp );
+-
+-  /* Now the command line */
+-  strcat( temp, " " );
+-  strcat( temp, enumData.lpszCommandLine );
+-  free( enumData.lpszCommandLine );
+-  enumData.lpszCommandLine = strdup( temp );
++  if (!enumData.lpszPath || !enumData.lpszFileName || !*enumData.lpszFileName ||
++      !enumData.lpszCommandLine || !enumData.lpszCurrentDirectory)
++  {
++      free(enumData.lpszPath); free(enumData.lpszFileName);
++      free(enumData.lpszCommandLine); free(enumData.lpszCurrentDirectory);
++      LeaveCriticalSection(&This->lock);
++      return DPERR_UNKNOWNAPPLICATION;
++  }
++  pathSize = strlen(enumData.lpszPath) + strlen(enumData.lpszFileName) + 2;
++  commandSize = pathSize + (enumData.lpszCommandLine ? strlen(enumData.lpszCommandLine) : 0) + 4;
++  appName = malloc(pathSize);
++  command = malloc(commandSize);
++  if (!appName || !command)
++  {
++      free(appName); free(command); free(enumData.lpszPath); free(enumData.lpszFileName);
++      free(enumData.lpszCommandLine); free(enumData.lpszCurrentDirectory);
++      LeaveCriticalSection(&This->lock);
++      return DPERR_OUTOFMEMORY;
++  }
++  snprintf(appName, pathSize, "%s%s%s", enumData.lpszPath,
++           *enumData.lpszPath ? "\\" : "", enumData.lpszFileName);
++  snprintf(command, commandSize, "\"%s\" %s", appName,
++           enumData.lpszCommandLine ? enumData.lpszCommandLine : "");
++  free(enumData.lpszPath); free(enumData.lpszFileName); free(enumData.lpszCommandLine);
++  enumData.lpszCommandLine = command;
+ 
+   ZeroMemory( &startupInfo, sizeof( startupInfo ) );
+   startupInfo.cb = sizeof( startupInfo );
+@@ -949,14 +872,23 @@
+   if( hr != DP_OK )
+   {
+     ERR( "SetConnectionSettings failure %s\n", DPLAYX_HresultToString( hr ) );
++    TerminateProcess(newProcessInfo.hProcess, 1);
++    CloseHandle(newProcessInfo.hThread);
++    CloseHandle(newProcessInfo.hProcess);
+     LeaveCriticalSection( &This->lock );
+     return hr;
+   }
+ 
+   /* Setup the handles for application notification */
+-  DPL_CreateAndSetLobbyHandles( newProcessInfo.dwProcessId,
++  if (!DPL_CreateAndSetLobbyHandles( newProcessInfo.dwProcessId,
+                                 newProcessInfo.hProcess,
+-                                &hStart, &hDeath, &hSettingRead );
++                                &hStart, &hDeath, &hSettingRead ))
++  {
++      TerminateProcess(newProcessInfo.hProcess, 1);
++      CloseHandle(newProcessInfo.hThread); CloseHandle(newProcessInfo.hProcess);
++      LeaveCriticalSection(&This->lock);
++      return DPERR_CANTCREATEPROCESS;
++  }
+ 
+   /* Setup the message thread ID */
+   This->msgtid = CreateLobbyMessageReceptionThread( hReceiveEvent, hStart, hDeath, hSettingRead );
+@@ -974,15 +906,54 @@
+     ERR( "ResumeThread failed with 0x%08lx\n", dwSuspendCount );
+   }
+ 
+-  return DP_OK;
+-}
+-
+-static HRESULT WINAPI IDirectPlayLobby3Impl_RunApplication( IDirectPlayLobby3 *iface, DWORD dwFlags,
+-        DWORD *lpdwAppID, DPLCONNECTION *lpConn, HANDLE hReceiveEvent )
+-{
+-  IDirectPlayLobbyImpl *This = impl_from_IDirectPlayLobby3( iface );
+-  FIXME( "(%p)->(0x%08lx,%p,%p,%p):stub\n", This, dwFlags, lpdwAppID, lpConn, hReceiveEvent );
+-  return DPERR_OUTOFMEMORY;
++  CloseHandle(newProcessInfo.hThread);
++  CloseHandle(newProcessInfo.hProcess);
++  return dwSuspendCount == 1 ? DP_OK : DPERR_CANTCREATEPROCESS;
++}
++
++static char *DPL_Ansi( const WCHAR *text )
++{
++    int size;
++    char *result;
++    if (!text) return NULL;
++    size = WideCharToMultiByte(CP_ACP, 0, text, -1, NULL, 0, NULL, NULL);
++    if (size <= 0 || !(result = malloc(size))) return NULL;
++    if (!WideCharToMultiByte(CP_ACP, 0, text, -1, result, size, NULL, NULL))
++    { free(result); return NULL; }
++    return result;
++}
++
++extern DPSESSIONDESC2 *DP_DuplicateSessionDesc( const DPSESSIONDESC2 *, BOOL, BOOL );
++static HRESULT WINAPI IDirectPlayLobby3Impl_RunApplication( IDirectPlayLobby3 *iface, DWORD flags,
++        DWORD *appId, DPLCONNECTION *connection, HANDLE receiveEvent )
++{
++    IDirectPlayLobbyImpl *This = impl_from_IDirectPlayLobby3(iface);
++    DPLCONNECTION ansi;
++    DPNAME name;
++    DPSESSIONDESC2 *session;
++    HRESULT hr;
++    if (flags || !appId || !connection || connection->dwSize != sizeof(*connection) ||
++        !connection->lpSessionDesc || connection->lpSessionDesc->dwSize != sizeof(DPSESSIONDESC2))
++        return DPERR_INVALIDPARAMS;
++    *appId = 0;
++    session = DP_DuplicateSessionDesc(connection->lpSessionDesc, TRUE, FALSE);
++    if (!session) return DPERR_OUTOFMEMORY;
++    ansi = *connection;
++    ansi.lpSessionDesc = session;
++    if (connection->lpPlayerName)
++    {
++        name = *connection->lpPlayerName;
++        name.lpszShortNameA = DPL_Ansi(connection->lpPlayerName->lpszShortName);
++        name.lpszLongNameA = DPL_Ansi(connection->lpPlayerName->lpszLongName);
++        if ((connection->lpPlayerName->lpszShortName && !name.lpszShortNameA) ||
++            (connection->lpPlayerName->lpszLongName && !name.lpszLongNameA))
++        { free(name.lpszShortNameA); free(name.lpszLongNameA); free(session); return DPERR_OUTOFMEMORY; }
++        ansi.lpPlayerName = &name;
++    }
++    hr = IDirectPlayLobby3AImpl_RunApplication(&This->IDirectPlayLobby3A_iface, 0, appId, &ansi, receiveEvent);
++    if (connection->lpPlayerName) { free(name.lpszShortNameA); free(name.lpszLongNameA); }
++    free(session);
++    return hr;
+ }
+ 
+ /********************************************************************
+@@ -1290,32 +1261,111 @@
+   return DPL_ConnectEx( This, dwFlags, riid, lplpDP, pUnk );
+ }
+ 
++/* The public A/W records have identical pointer layouts. Convert only text. */
++static WCHAR *DPL_Wide( const void *text, BOOL ansi )
++{
++    WCHAR *result;
++    int count;
++    if (!text) text = ansi ? (const void *)"" : (const void *)L"";
++    count = ansi ? MultiByteToWideChar(CP_ACP, 0, text, -1, NULL, 0) : lstrlenW(text) + 1;
++    if (count <= 0 || count > 32768) return NULL;
++    if (!(result = malloc(count * sizeof(WCHAR)))) return NULL;
++    if (ansi) MultiByteToWideChar(CP_ACP, 0, text, -1, result, count);
++    else memcpy(result, text, count * sizeof(WCHAR));
++    return result;
++}
++
++static HRESULT DPL_Register( DWORD flags, DPAPPLICATIONDESC *app, BOOL ansi )
++{
++    static const WCHAR *names[] = {L"File", L"CommandLine", L"Path", L"CurrentDirectory"};
++    const void *input[5];
++    WCHAR *text[5] = {0}, guid[40];
++    HKEY parent, key;
++    LONG error;
++    DWORD i;
++    HRESULT hr = DPERR_OUTOFMEMORY;
++    if (flags || !app || app->dwSize != sizeof(*app) || app->dwFlags ||
++        !app->lpszApplicationName || !app->lpszFilename ||
++        IsEqualGUID(&app->guidApplication, &GUID_NULL)) return DPERR_INVALIDPARAMS;
++    input[0] = app->lpszApplicationName;
++    input[1] = app->lpszFilename;
++    input[2] = app->lpszCommandLine;
++    input[3] = app->lpszPath;
++    input[4] = app->lpszCurrentDirectory;
++    for (i = 0; i < 5; ++i) if (!(text[i] = DPL_Wide(input[i], ansi))) goto done;
++    if (!text[0][0] || !text[1][0]) { hr = DPERR_INVALIDPARAMS; goto done; }
++    for (i = 0; text[0][i]; ++i)
++        if (text[0][i] == '\\' || text[0][i] == '/') { hr = DPERR_INVALIDPARAMS; goto done; }
++    if (!StringFromGUID2(&app->guidApplication, guid, ARRAY_SIZE(guid))) goto done;
++    error = RegCreateKeyExW(HKEY_LOCAL_MACHINE, L"Software\\Microsoft\\DirectPlay\\Applications",
++                            0, NULL, 0, KEY_READ | KEY_WRITE, NULL, &parent, NULL);
++    if (error) { hr = DPERR_ACCESSDENIED; goto done; }
++    error = RegCreateKeyExW(parent, text[0], 0, NULL, 0, KEY_READ | KEY_WRITE, NULL, &key, NULL);
++    RegCloseKey(parent);
++    if (error) { hr = DPERR_ACCESSDENIED; goto done; }
++    error = RegSetValueExW(key, L"Guid", 0, REG_SZ, (const BYTE *)guid, (lstrlenW(guid) + 1) * sizeof(WCHAR));
++    for (i = 0; i < 4 && !error; ++i)
++        error = RegSetValueExW(key, names[i], 0, REG_SZ, (const BYTE *)text[i + 1],
++                               (lstrlenW(text[i + 1]) + 1) * sizeof(WCHAR));
++    RegCloseKey(key);
++    hr = error ? DPERR_ACCESSDENIED : DP_OK;
++done:
++    for (i = 0; i < 5; ++i) free(text[i]);
++    return hr;
++}
++
++static HRESULT DPL_Unregister( DWORD flags, REFGUID guid )
++{
++    HKEY parent, key;
++    WCHAR name[256], value[40], wanted[40];
++    DWORD index = 0, length, bytes, type;
++    LONG error;
++    if (flags || !guid || IsEqualGUID(guid, &GUID_NULL)) return DPERR_INVALIDPARAMS;
++    StringFromGUID2(guid, wanted, ARRAY_SIZE(wanted));
++    if (RegOpenKeyExW(HKEY_LOCAL_MACHINE, L"Software\\Microsoft\\DirectPlay\\Applications",
++                       0, KEY_READ | KEY_WRITE, &parent)) return DPERR_UNKNOWNAPPLICATION;
++    for (;; ++index)
++    {
++        length = ARRAY_SIZE(name);
++        error = RegEnumKeyExW(parent, index, name, &length, NULL, NULL, NULL, NULL);
++        if (error == ERROR_NO_MORE_ITEMS) break;
++        if (error) { RegCloseKey(parent); return DPERR_ACCESSDENIED; }
++        if (RegOpenKeyExW(parent, name, 0, KEY_READ, &key)) continue;
++        bytes = sizeof(value);
++        error = RegQueryValueExW(key, L"Guid", NULL, &type, (BYTE *)value, &bytes);
++        RegCloseKey(key);
++        if (error || type != REG_SZ || bytes < sizeof(WCHAR) || bytes > sizeof(value) ||
++            bytes % sizeof(WCHAR) || value[bytes / sizeof(WCHAR) - 1] || lstrcmpiW(value, wanted)) continue;
++        error = RegDeleteKeyW(parent, name);
++        RegCloseKey(parent);
++        return error ? DPERR_ACCESSDENIED : DP_OK;
++    }
++    RegCloseKey(parent);
++    return DPERR_UNKNOWNAPPLICATION;
++}
++
+ static HRESULT WINAPI IDirectPlayLobby3Impl_RegisterApplication( IDirectPlayLobby3 *iface,
+-        DWORD flags, DPAPPLICATIONDESC *appdesc )
+-{
+-  FIXME(":stub\n");
+-  return DP_OK;
++        DWORD flags, DPAPPLICATIONDESC *app )
++{
++    return DPL_Register(flags, app, FALSE);
+ }
+ 
+ static HRESULT WINAPI IDirectPlayLobby3AImpl_RegisterApplication( IDirectPlayLobby3A *iface,
+-        DWORD flags, DPAPPLICATIONDESC *appdesc )
+-{
+-  FIXME(":stub\n");
+-  return DP_OK;
++        DWORD flags, DPAPPLICATIONDESC *app )
++{
++    return DPL_Register(flags, app, TRUE);
+ }
+ 
+ static HRESULT WINAPI IDirectPlayLobby3Impl_UnregisterApplication( IDirectPlayLobby3 *iface,
+-        DWORD flags, REFGUID appdesc )
+-{
+-  FIXME(":stub\n");
+-  return DP_OK;
++        DWORD flags, REFGUID guid )
++{
++    return DPL_Unregister(flags, guid);
+ }
+ 
+ static HRESULT WINAPI IDirectPlayLobby3AImpl_UnregisterApplication( IDirectPlayLobby3A *iface,
+-        DWORD flags, REFGUID appdesc )
+-{
+-  FIXME(":stub\n");
+-  return DP_OK;
++        DWORD flags, REFGUID guid )
++{
++    return DPL_Unregister(flags, guid);
+ }
+ 
+ static HRESULT WINAPI IDirectPlayLobby3Impl_WaitForConnectionSettings( IDirectPlayLobby3 *iface,

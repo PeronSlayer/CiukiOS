@@ -384,6 +384,29 @@ HANDLE W32API CreateFileMappingA(HANDLE file, SECURITY_ATTRIBUTES *sa,
   SetLastError(a.error);
   return (HANDLE)(uintptr_t)a.result;
 }
+/* fx-hlrun (Half-Life's OpenGL renderer imports it): open a section named
+ * by CreateFileMapping. A missing name is ERROR_INVALID_PARAMETER and an
+ * unknown one ERROR_FILE_NOT_FOUND (Microsoft OpenFileMapping reference;
+ * Wine 10.0 dlls/kernelbase/sync.c OpenFileMappingW). Windows 9x does not
+ * check section access, so the handle is opened with full access (Wine
+ * tries SECTION_MAP_READ|SECTION_MAP_WRITE first when it emulates 9x);
+ * MapViewOfFile still applies the section's own page protection. */
+HANDLE W32API OpenFileMappingA(DWORD access, BOOL inherit, const char *name) {
+  (void)access;
+  if (!name) {
+    SetLastError(87);
+    return 0;
+  }
+  return named_a(W32_OBJ_SECTION, W32_OBJ_OPEN, name, inherit, 0, 0, ~0u);
+}
+HANDLE W32API OpenFileMappingW(DWORD access, BOOL inherit, const WCHAR *name) {
+  (void)access;
+  if (!name) {
+    SetLastError(87);
+    return 0;
+  }
+  return named(W32_OBJ_SECTION, W32_OBJ_OPEN, name, inherit, 0, 0, ~0u);
+}
 void *W32API MapViewOfFileEx(HANDLE h, DWORD access, DWORD high, DWORD low,
                              DWORD bytes, void *base) {
   struct ciuki_w32_view_args a = {.action = W32_VIEW_MAP,

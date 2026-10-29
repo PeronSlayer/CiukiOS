@@ -1,0 +1,11 @@
+{
+  "upstream": "https://git.kernel.org/pub/scm/linux/kernel/git/firmware/linux-firmware.git/",
+  "upstream_whence_sha256": "ee6fcbd18f7b69d331ade28de5a7b0b9ba68220e86f26d445679a3f939906353",
+  "files": {
+    "R100_cp.bin": "ed3acccf755c7270dd8893605f44ff8b9e7f6c542f66ed0738c9fb7bbbd75d7c",
+    "R200_cp.bin": "2b7b4bf988c3f7c69f98ea2ec6c4155fa85e2c9d5f5aee77912baaf50f5f7bac",
+    "WHENCE": "612e1b2f679c92033d2e340dc38cb83650fbac7b7385e99abc107343d099a486",
+    "LICENSE": "fb84d139400ea36a5538827412c9303e317971ac7e0591cce6178994e4a52df9"
+  },
+  "commit": "505662b1f08ba6b5ecdc46da61bf5b30c8592698"
+}

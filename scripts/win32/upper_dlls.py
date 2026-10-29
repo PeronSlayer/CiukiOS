@@ -274,11 +274,18 @@ ABSENT_DELAYED = {
     'gdiplus.dll': {n: 'GpStatus NotImplemented' for n in (
         'GdipCreateFromHDC', 'GdipDeleteGraphics', 'GdipDisposeImage', 'GdipDrawImageRectRectI',
         'GdipGetImageDimension', 'GdipGetImageThumbnail', 'GdipLoadImageFromFile')},
-    'iphlpapi.dll': {'GetAdaptersInfo': 'ERROR_NOT_SUPPORTED'},
+    'iphlpapi.dll': {'GetAdaptersInfo': 'ERROR_NOT_SUPPORTED',
+                    'GetAdaptersAddresses': 'ERROR_NOT_SUPPORTED'},
+    'crypt32.dll': {**{n:'NULL' for n in ('CertCreateCertificateContext', 'CertDuplicateCertificateChain')},
+                    **{n:'FALSE' for n in ('CertFreeCertificateChain', 'CertFreeCertificateContext', 'CertNameToStrA')}},
+    'cryptui.dll': {'CryptUIDlgViewCertificateW':'FALSE'},
+    'dhcpcsvc.dll': {'DhcpRequestParams':'ERROR_NOT_SUPPORTED'},
     'mlang.dll': {'ConvertINetUnicodeToMultiByte': 'E_FAIL'},
     'secur32.dll': {**_SSPI, 'AcquireCredentialsHandleA': 'SEC_E_SECPKG_NOT_FOUND',
                     'AcquireCredentialsHandleW': 'SEC_E_SECPKG_NOT_FOUND',
-                    'GetUserNameExW': 'FALSE'},
+                    'GetUserNameExW': 'FALSE',
+                    'QueryContextAttributesW':'SEC_E_SECPKG_NOT_FOUND',
+                    'QuerySecurityPackageInfoW':'SEC_E_SECPKG_NOT_FOUND'},
     # SHELL32 binds ordinal 218 (IEParseDisplayNameWithBCW, NONAME upstream).
     'shdocvw.dll': {'#218': 'E_NOTIMPL'},
     'urlmon.dll': {n: 'E_NOTIMPL' for n in ('CoInternetParseUrl', 'CreateFormatEnumerator',
@@ -482,7 +489,7 @@ def census_stub_amendments():
     result = {}
     if UPPER_RECORD.is_file():
         for entry in json.loads(UPPER_RECORD.read_text())['decisions']:
-            if entry['rule'] == 'ciukios-stub-dll':
+            if entry['rule'] == 'ciukios-stub-dll' and entry['owner'] not in ABSENT_DELAYED:
                 result.setdefault(entry['owner'], set()).add(entry['name'])
     return {dll: sorted(names) for dll, names in sorted(result.items())}
 

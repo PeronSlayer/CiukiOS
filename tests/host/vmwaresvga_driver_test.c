@@ -2,6 +2,13 @@
  * SPDX-License-Identifier: GPL-2.0-only */
 #include "vmwaresvga_fixture.h"
 #include "../../src/kernel/drivers/video/vmwaresvga/driver.c"
+/* The 2D lifecycle fixture does not exercise the independent 3D owner
+ * (tests/host/vmwaresvga3d_owner_test.c does). */
+static unsigned stops3d;
+const struct render3d_backend *vmsvga3d_backend(void) { return 0; }
+void vmsvga3d_bind_vfs(struct vfs *v) { (void)v; }
+void vmsvga3d_boot_diagnostic(struct vmsvga_engine *s,const struct fb_device *fb) { (void)s; (void)fb; }
+int vmsvga3d_owner_stop(struct vmsvga_engine *s) { CHECK(s==&engine); stops3d++; return 0; }
 const struct display_driver s3savage_driver={0};
 static struct resource resources[4];
 static struct pci_func gpu;
@@ -171,6 +178,9 @@ static void failures(void)
 }
 int main(void)
 {
+    CHECK(vmwaresvga_driver.render3d->status==R3D_UNQUALIFIED && vmwaresvga_driver.render3d->backend==vmsvga3d_backend);
+    CHECK(!strcmp(vmwaresvga_driver.attempt_files[1],"C:/system/settings/accel-3d-vmwaresvga-15ad-%04x.cfg"));
     lifecycle(); refusal(); failures();
+    CHECK(stops3d); /* every runtime stop first stops the 3D owner */
     puts("vmwaresvga registry/lifecycle: PASS (identity, claims, markers, activation, quarantine)"); return 0;
 }

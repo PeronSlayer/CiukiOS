@@ -132,13 +132,19 @@ int acct_owner_reply_decode(struct acct_owner_reply *r, const struct acct_owner_
 }
 int acct_owner_call(struct acct_store *s, unsigned op, const struct acct_owner_request *q, struct acct_owner_reply *r)
 {
+    static const enum acct_boot_step steps[]={ ACCT_BOOT_RECOVER, ACCT_BOOT_PREPARE,
+        ACCT_BOOT_COMMIT, ACCT_BOOT_ABORT, ACCT_BOOT_STATUS, ACCT_BOOT_CHECKPOINT,
+        ACCT_BOOT_COMPACT, ACCT_BOOT_RESERVE };
+    enum acct_boot_step step=op<sizeof(steps)/sizeof(*steps)?steps[op]:ACCT_BOOT_RECOVER;
+    s->firstboot_step=step;
     struct call_frame { uint8_t request[ACCT_OWNER_BODY_MAX], reply[ACCT_OWNER_REPLY_MAX]; };
     struct call_frame *f=acct_frame_alloc(&s->kernel,sizeof(*f)); size_t n=0, m=0;
-    if(!f) return -ENOMEM;
+    if(!f) return acct_boot_result(s,step,-ENOMEM);
     int e=s->owner.authenticate(s->owner.ctx);
     if(!e) e=acct_owner_encode(q,op,f->request,sizeof(f->request),&n);
     if(!e) e=s->owner.call(s->owner.ctx,f->request,n,f->reply,sizeof(f->reply),&m);
     if(!e) e=acct_owner_reply_decode(r,q,f->reply,m);
     if(!e && (op==5 || op==6) && r->state!=ACCT_OWNER_CHECKPOINTED) e=-EIO;
-    acct_frame_free(&s->kernel,f,sizeof(*f)); return e;
+    acct_frame_free(&s->kernel,f,sizeof(*f));
+    return acct_boot_result(s,step,e);
 }

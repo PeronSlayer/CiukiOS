@@ -12,6 +12,13 @@ struct file { char path[IS5_PATH];uint8_t data[16384];unsigned size,exists,opene
 static struct file files[32];
 static DWORD last_error;
 static unsigned started,waits,refuse_start,env_frees,fail_write,live_engine,snapshot_refused;
+/* fx-hlis5: a profile TEMP with spaces and its 8.3 spelling (the kernel's
+ * GetShortPathName answers with the FAT aliases, no trailing separator);
+ * a TEMP folder that does not exist; the recorded start failure and box. */
+static const char *temp_path="C:\\TEMP\\",*missing_dir,*expect_engine="C:\\TEMP\\_INS1235._MP",
+    *expect_args="  -fD:\\SETUP.INS  -z1 -cx -xC:\\TEMP\\ -x1D:\\ -q10010 -s -f1\"C:\\a b.iss\" -SMS -zuser",
+    *expect_handoff="C:\\TEMP\\_INS0432.INI";
+static char diag_reason[128],box_title[64];static DWORD box_flags;static unsigned boxes;
 static struct file *lookup(const char *path,int create) {
     for(unsigned i=0;i<32;i++)if(equal(files[i].path,path))return files+i;
     if(create)for(unsigned i=0;i<32;i++)if(!files[i].path[0]){copy(files[i].path,path);return files+i;}
@@ -23,6 +30,7 @@ void *W32API HeapAlloc(HANDLE h,DWORD flags,DWORD n){(void)h;(void)flags;return 
 BOOL W32API HeapFree(HANDLE h,DWORD flags,void *p){(void)h;(void)flags;free(p);return 1;}
 HANDLE W32API CreateFileA(const char *path,DWORD access,DWORD share,SECURITY_ATTRIBUTES *s,DWORD disposition,DWORD flags,HANDLE template) {
     (void)access;(void)share;(void)s;(void)flags;(void)template;
+    if(missing_dir && disposition!=3 && !strncmp(path,missing_dir,strlen(missing_dir))){last_error=3;return (HANDLE)(uintptr_t)-1;}
     struct file *f=lookup(path,disposition!=3);
     if(!f || (disposition==3 && !f->exists)){last_error=2;return (HANDLE)(uintptr_t)-1;}
     if(disposition==1 && f->exists){last_error=80;return (HANDLE)(uintptr_t)-1;}
@@ -44,7 +52,17 @@ BOOL W32API DeleteFileA(const char *path){
 }
 DWORD W32API GetTickCount(void){return 1234;}
 void W32API Sleep(DWORD ms){(void)ms;}
-DWORD W32API GetTempPathA(DWORD n,char *p){assert(n>16);copy(p,"C:\\TEMP\\");return len(p);}
+DWORD W32API GetTempPathA(DWORD n,char *p){assert(n>len(temp_path));copy(p,temp_path);return len(p);}
+DWORD W32API GetShortPathNameA(const char *path,char *out,DWORD cap){
+    const char *result=path;char trimmed[IS5_PATH];
+    if(!strcmp(path,"C:\\Documents\\Local Settings\\Temp\\"))result="C:\\DOCUME~1\\LOCALS~1\\TEMP";
+    else if(missing_dir && !strncmp(path,missing_dir,strlen(missing_dir))){last_error=3;return 0;}
+    else{copy(trimmed,path);unsigned n=len(trimmed);if(n>3 && trimmed[n-1]=='\\')trimmed[n-1]=0;result=trimmed;}
+    unsigned n=len(result);if(n>=cap)return n+1;copy(out,result);return n;
+}
+void w32_diag(const char *event,const char *module,const char *reason){
+    assert(equal(event,"warning") && equal(module,"is5boot.exe"));assert(len(reason)<sizeof(diag_reason));copy(diag_reason,reason);
+}
 DWORD W32API GetWindowsDirectoryA(char *p,DWORD n){assert(n>16);copy(p,"C:\\WINDOWS");return len(p);}
 DWORD W32API GetPrivateProfileStringA(const char *section,const char *key,const char *fallback,char *out,DWORD cap,const char *path) {
     const char *value=fallback;char saved[IS5_PATH];
@@ -67,8 +85,8 @@ static void assert_text(const char *path,const char *expected) {
 }
 BOOL W32API CreateProcessA(const char *image,char *command,SECURITY_ATTRIBUTES *p,SECURITY_ATTRIBUTES *t,BOOL inherit,DWORD flags,void *env,const char *cwd,struct shell_startup *startup,struct shell_process *child){
     (void)p;(void)t;assert(!*command && !inherit && !flags && !env && equal(cwd,"D:\\"));assert(startup->size==sizeof(*startup));
-    assert(equal(image,"C:\\TEMP\\_INS1235._MP"));started++;
-    assert_text("C:\\TEMP\\_INS0432.INI","  -fD:\\SETUP.INS  -z1 -cx -xC:\\TEMP\\ -x1D:\\ -q10010 -s -f1\"C:\\a b.iss\" -SMS -zuser");
+    assert(equal(image,expect_engine));started++;
+    assert_text(expect_handoff,expect_args);
     assert_text("C:\\WINDOWS\\_isenv31.ini","A=one B=two words");
     struct file *errors=lookup("C:\\WINDOWS\\_iserr31.ini",0);assert(errors && errors->exists);
     assert(!memcmp(errors->data,"[SharedErrors]\r\n7068=",21));
@@ -82,13 +100,16 @@ BOOL W32API Process32First(HANDLE h,struct process_entry *p){assert(h==(HANDLE)2
 BOOL W32API Process32Next(HANDLE h,struct process_entry *p){(void)h;(void)p;last_error=18;return 0;}
 HANDLE W32API OpenProcess(DWORD access,BOOL inherit,DWORD pid){assert(access==0x100000 && !inherit && pid==99);return (HANDLE)12;}
 char *W32API GetCommandLineA(void){return "D:\\SETUP.EXE";}
-int W32API MessageBoxA(HANDLE h,const char *text,const char *title,DWORD flags){(void)h;(void)text;(void)title;(void)flags;abort();}
+int W32API MessageBoxA(HANDLE h,const char *text,const char *title,DWORD flags){
+    assert(!h && text && *text && len(title)<sizeof(box_title));copy(box_title,title);box_flags=flags;boxes++;return 1;
+}
 void W32API ExitProcess(DWORD code){(void)code;abort();}
 static void put(uint8_t *p,unsigned v,unsigned n){for(unsigned i=0;i<n;i++)p[i]=(uint8_t)(v>>(8*i));}
 static unsigned bitpos;
 static void bits(uint8_t *p,unsigned v,unsigned n){for(unsigned i=0;i<n;i++,bitpos++)p[bitpos/8]|=((v>>i)&1)<<(bitpos%8);}
 static void initialize(void) {
-    memset(files,0,sizeof(files));started=waits=refuse_start=env_frees=fail_write=live_engine=snapshot_refused=0;
+    memset(files,0,sizeof(files));started=waits=refuse_start=env_frees=fail_write=live_engine=snapshot_refused=boxes=0;
+    diag_reason[0]=0;missing_dir=0;
     struct file *stub=lookup("D:\\SETUP.EXE",1);stub->exists=1;stub->size=192;
     stub->data[0]='M';stub->data[1]='Z';put(stub->data+60,128,4);stub->data[128]='N';stub->data[129]='E';stub->data[182]=2;
     struct file *a=lookup("D:\\_INST32I.EX_",1);a->exists=1;uint8_t *b=a->data;
@@ -131,6 +152,23 @@ int main(void) {
     memset(&s,0,sizeof(s));assert(run(&s,"D:\\_ISDEL.EXE","",&failure)==0 && !started);
     assert(is5_cleanup_text((char *)ini->data,sizeof(ini->data),"C:\\Documents\\keep.txt",s.dll[0],s.dll[1]));ini->size=len((char *)ini->data);
     assert(cleanup(&s)==1);
-    puts("PASS production IS5 helper: collisions, handoffs, empty command/CD cwd, waited exit, rollback and confined cleanup");
+    /* fx-hlis5: a profile TEMP below "Local Settings" is handed to the
+     * engine in its 8.3 spelling, as the 16-bit stub sees it. */
+    initialize();memset(&s,0,sizeof(s));temp_path="C:\\Documents\\Local Settings\\Temp\\";
+    expect_engine="C:\\DOCUME~1\\LOCALS~1\\TEMP\\_INS1234._MP";expect_handoff="C:\\DOCUME~1\\LOCALS~1\\TEMP\\_INS0432.INI";
+    expect_args="  -fD:\\SETUP.INS  -z1 -cx -xC:\\DOCUME~1\\LOCALS~1\\TEMP\\ -x1D:\\ -q10010 -s -f1\"C:\\a b.iss\" -SMS -zuser";
+    assert(run(&s,"D:\\SETUP.EXE","-SMS -zuser",&failure)==77 && failure==4 && started==1);
+    assert(equal(s.dll[0],"C:\\DOCUME~1\\LOCALS~1\\TEMP\\ZDataI51.dll") && !strchr(s.temp,' '));
+    /* fx-hlis5: a TEMP folder that does not exist (a fresh profile before
+     * the desktop created Local Settings\\Temp, QEMU c02b6731): the engine
+     * cannot be written; the step, its error and a system-modal box. */
+    initialize();memset(&s,0,sizeof(s));temp_path="C:\\Profile\\Local Settings\\Temp\\";missing_dir="C:\\Profile\\Local Settings\\Temp";
+    assert(run(&s,"D:\\SETUP.EXE","",&failure)==1 && failure==1 && !started);
+    assert(s.step && equal(s.step,"engine-file") && s.error==3);
+    report(&s,failure,1);
+    assert(equal(diag_reason,"is5-engine-file-3") && boxes==1 && box_flags==0x1010 && equal(box_title,"Authored Setup"));
+    temp_path="C:\\TEMP\\";expect_engine="C:\\TEMP\\_INS1235._MP";expect_handoff="C:\\TEMP\\_INS0432.INI";
+    puts("PASS production IS5 helper: collisions, handoffs, empty command/CD cwd, waited exit, rollback and confined cleanup; "
+         "8.3 TEMP handoff, missing TEMP recorded with a system-modal error box (fx-hlis5)");
     return 0;
 }

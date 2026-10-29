@@ -5,6 +5,10 @@
 #include <ciuki/w32_core.h>
 #include <ciuki/w32_objects.h>
 #include <ciuki/w32_fonts.h>
+#include <ciuki/com.h>
+#include <ciuki/security_device.h>
+#pragma weak com_control
+#pragma weak com_rw_user
 /* fs/spool_ring.c; absent from host fixtures that include this file. */
 extern bool spool_publication(const char *) __attribute__((weak));
 extern void spool_ring(struct vfs *) __attribute__((weak));
@@ -30,6 +34,10 @@ static uint32_t dos_error(int e) {
     return 36;
   case -EBADF:
     return 6;
+  case -EBUSY:
+    return 170;
+  case -ENODEV:
+    return 55;
   case -ENXIO:
     return 21; /* fx-emptydrive: ERROR_NOT_READY, an empty CD-ROM/floppy drive */
   case -EINTR:
@@ -81,6 +89,15 @@ static bool driver_destination(const char *full){
  * UNC and device prefixes are classified before slash conversion. */
 uint32_t w32_native_path(struct process *p, const char *name,
                          char out[CIUKI_PATH_MAX], char full[FS_PATH_BYTES]) {
+  const char *port=name;
+  if (!strncmp(port,"\\\\.\\",4)) port+=4;
+  if (path_upper((uint8_t)port[0])=='C' &&
+      path_upper((uint8_t)port[1])=='O' &&
+      path_upper((uint8_t)port[2])=='M' && port[3]>='1' && port[3]<='8' &&
+      (!port[4] || (port[4]==':' && !port[5]))) {
+    memcpy(out,"/dev/com1",10); out[8]=port[3];
+    memcpy(full,"COM1",5);full[3]=port[3];return 0;
+  }
   if ((name[0] == '\\' || name[0] == '/') &&
       (name[1] == '\\' || name[1] == '/'))
     return name[2] == '?' || name[2] == '.' ? 2 : 53;
@@ -488,7 +505,7 @@ uint32_t w32_file_call(struct proc_thread *t, struct ciuki_w32_file_args *a) {
   }
   if (a->action == W32_F_READ || a->action == W32_F_WRITE ||
       a->action == W32_F_SEEK || a->action == W32_F_TRUNCATE ||
-      a->action == W32_F_FLUSH || a->action == W32_F_LOCK || a->action == W32_F_UNLOCK ||
+      a->action == W32_F_FLUSH || a->action == W32_F_LOCK || a->action == W32_F_UNLOCK || a->action == W32_F_COMM ||
       ((a->action == W32_F_STAT || a->action == W32_F_TIMES) && !a->path)) {
     struct w32_object *o = w32_lookup(t, a->handle, W32_OBJ_FILE);
     if (!o) {
@@ -497,7 +514,35 @@ uint32_t w32_file_call(struct proc_thread *t, struct ciuki_w32_file_args *a) {
     }
     w32_retain(o);
     struct file_description *d = o->u.file.description;
-    if (a->action == W32_F_LOCK || a->action == W32_F_UNLOCK) {
+    if (a->action == W32_F_COMM) {
+      if(d->node->kind!=PX_COM) {error=6;goto release;}
+      if(!security_device_session(p) && !security_device_system(p)) {error=5;goto release;}
+      if(!security_process_live(p)) {error=5;goto release;}
+      unsigned size=a->flags==COM_GET_LINE || a->flags==COM_SET_LINE ? sizeof(struct ciuki_com_line) :
+          a->flags==COM_GET_STATUS || a->flags==COM_CLEAR_ERRORS ? sizeof(struct ciuki_com_status) :
+          a->flags==COM_SET_MODEM ? sizeof(struct ciuki_com_modem) :
+          a->flags==1 || a->flags==2 ? 20 : a->flags==3 || a->flags==4 ? 4 : a->flags==5 ? 0 : UINT32_MAX;
+      if(size==UINT32_MAX || a->bytes!=size || (size && !a->buffer)) {error=87;goto release;}
+      _Alignas(4) uint8_t record[sizeof(struct ciuki_com_status)]={0};
+      int e=size ? copy_from_user(record,a->buffer,size) : 0;
+      struct ua_pin pin;bool pinned=false;
+      if(!e && a->flags==COM_CLEAR_ERRORS) {
+        e=ua_pin(p->memory,&pin,a->buffer,size,true);pinned=!e;
+      }
+      if(!e && a->flags==1) memcpy(record,o->u.file.comm_timeouts,20);
+      else if(!e && a->flags==2) memcpy(o->u.file.comm_timeouts,record,20);
+      else if(!e && a->flags==3) memcpy(record,&o->u.file.comm_mask,4);
+      else if(!e && a->flags==4) memcpy(&o->u.file.comm_mask,record,4);
+      else if(!e && a->flags>5) {
+        e=com_control ? com_control(d->node->drive,d->com_generation,a->flags,record,size,
+              !!(o->u.file.access&0x40000000u)) : -ENODEV;
+        if(!e && a->flags==COM_SET_MODEM) memcpy(&o->u.file.comm_outputs,record+8,4);
+      }
+      if(!e && (a->flags==1 || a->flags==3 || a->flags==COM_GET_LINE || a->flags==COM_GET_STATUS || a->flags==COM_CLEAR_ERRORS))
+        e=copy_to_user(a->buffer,record,size);
+      if(pinned) ua_unpin(p->memory,&pin);
+      a->high=o->u.file.comm_outputs;error=dos_error(e);
+    } else if (a->action == W32_F_LOCK || a->action == W32_F_UNLOCK) {
       if (!(o->u.file.access & 0xc0000000u) || a->flags & ~3u) error=87;
       else {
         struct vfs *v=d->node->space->vfs;
@@ -524,6 +569,12 @@ uint32_t w32_file_call(struct proc_thread *t, struct ciuki_w32_file_args *a) {
       bool write = a->action == W32_F_WRITE;
       if (!(o->u.file.access & (write ? 0x40000000u : 0x80000000u))) {
         error = 5;
+        goto release;
+      }
+      if(d->node->kind==PX_COM) {
+        int n=com_rw_user ? com_rw_user(d,a->buffer,a->bytes,write) : -ENODEV;
+        if(n==-EAGAIN || n==-ETIMEDOUT) a->result=0;
+        else if(n<0) error=dos_error(n);else a->result=(uint32_t)n;
         goto release;
       }
       struct ua_pin pin;
@@ -681,6 +732,8 @@ uint32_t w32_file_call(struct proc_thread *t, struct ciuki_w32_file_args *a) {
         flags |= O_TRUNC;
       struct px_path r;
       bool exists = !px_resolve_as_locked(s, cwd, path, true, px_process_subject(p), &r) && r.node;
+      if(exists && r.node->kind==PX_COM && (a->share || a->disposition!=3)) error=87;
+      if(exists && r.node->kind==PX_COM && (a->flags&0x40000000u)) error=50;
       if (exists && (r.node->kind == PX_DIRECTORY)) {
         if (!(a->flags & 0x02000000u) || a->disposition != 3 ||
             a->access & 0x40000000u || (a->flags&0x04000000u))
@@ -731,6 +784,8 @@ uint32_t w32_file_call(struct proc_thread *t, struct ciuki_w32_file_args *a) {
             d->object.retain(&d->object);
             o->u.file.access = a->access;
             o->u.file.share = a->share;
+            o->u.file.comm_outputs = CIUKI_COM_DTR | CIUKI_COM_RTS;
+            o->u.file.comm_timeouts[0] = UINT32_MAX;
             o->signalled = true;
             error = w32_handle_install(p, o, a->access, !!(a->flags & 0x10000u),
                                        &a->result);

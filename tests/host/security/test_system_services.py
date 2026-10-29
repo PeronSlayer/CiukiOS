@@ -31,7 +31,7 @@ class SystemServicesTests(unittest.TestCase):
                    'src/kernel/fs/path.c', 'src/kernel/fs/fat.c', 'src/kernel/fs/vfs.c',
                    'src/kernel/fs/fs_ro.c', 'src/kernel/fs/iso9660.c', 'tests/host/fs/fake.c',
                    'src/kernel/probes/f2_probes_files.c', 'src/kernel/lib/sha256.c',
-                   'src/kernel/ndis/package.c', 'src/kernel/lib/tzrule.c', *OWNER]
+                   'src/kernel/net/ipx_config.c', 'src/kernel/ndis/package.c', 'src/kernel/lib/tzrule.c', *OWNER]
         program = OUT / 'system_services'
         subprocess.run(['clang', '-std=c17', '-O1', '-g', '-Wall', '-Wextra', '-Werror',
                         '-ffunction-sections', '-fdata-sections', '-Wl,--gc-sections',

@@ -280,3 +280,66 @@ answers), `tests/host/dos_file_api_test.c` (15h mapping),
 prompt, pinned frames). The acceptance item `empty-drive-is-d` of
 `tests/suites/acc-t23.json` is a normal pass condition, and the eject steps
 wait for the record with the kept letter.
+
+## fx-hlis5: ATAPI data bursts and ISO 9660 read runs (2026-10-28)
+
+Round-2 test decision: [ATA/ATAPI-6, sections 8.23.4–8.23.5.2](https://pdos.csail.mit.edu/6.828/2018/readings/hardware/ATA-d1410r3a.pdf)
+limits each DRQ byte count to a nonzero value no larger than the host limit
+or `0xfffe`; intermediate counts must be even. A 65536-byte request must
+therefore span multiple DRQs. Exercise both the exact `0xfffe` boundary
+and smaller phases, then inject CHECK CONDITION after a completed phase.
+At the cache boundary, failed or invalidated fills must leave the demand
+sector untouched and all reserved blocks unhashed. Independently change
+the media generation and invalidate the cache epoch during optical I/O;
+neither stale completion may be published. These are coverage additions;
+change production optical code only if a test demonstrates a defect.
+
+Round-2 evidence: `test_file_data_read_in_64k_runs` exercises ISO/VFS with
+enough optical cache slots for 32-sector reads and verifies the complete
+fixture manifest; the optical Python suite passes all 19 tests.
+`test_packet_bursts` covers `65534 + 2` and `32766 + 32766 + 4` byte DRQs,
+with canaries and one READ(10). `test_packet_cache_fills` uses the real
+ATAPI/cache stack for partial data then CHECK CONDITION, plus media and
+epoch invalidation in both a multi-sector run and a single 2048-byte fill.
+It checks unpublished data, unchanged demand bytes, unhashed reservations
+and fresh I/O on retry. All ATA harness assertions pass; its exit leak
+scan is blocked by the sandbox's ptrace restriction. No production optical
+change was needed. Exact commands and results are in the implementer report.
+
+QEMU image c02b6731 (KVM, PIIX3 IDE, CD as ATAPI) took about 45 s from
+`[win32] start` of the Half-Life disc's `AUTORUN.EXE` to its menu: about 550
+packet commands for about 1.3 MB, the CD worker at 72% of a CPU (`[cpu]
+top=storage-#14:719k`), single reads holding the D: VFS for up to 2.9 s.
+Two causes in CiukiOS, both fixed:
+
+- `iso9660.c read_file` read file data one 2048-byte block per
+  `cache_read`, so every block was a READ(10) of one sector, without
+  read-ahead. Windows 98's CDFS reads ahead of the application into its
+  supplemental cache (owner's Windows 98 Resource Kit, local extraction
+  `build/rskt/wrkc10_6.htm` "VCACHE and CDFS Supplemental Cache" and
+  `wrkc26_4.htm`, CD-ROM access pattern). Decision: file data goes through
+  `cache_read_ahead` with the number of contiguous blocks left in the
+  extent (interleaved files block by block); `cache_read_run` and
+  `cache_read_ahead` accept 2048-byte sectors (2048-byte slots only), one
+  READ(10) of up to `BLKDEV_READ_BYTES` (32 blocks), bounded by the
+  read-ahead setting (`cache_read_limit`) and by half of the cache's
+  2048-byte slots so that a run stays cached for the reads that follow.
+  Directory and descriptor reads are unchanged.
+- `ata.c packet_raw` moved each DRQ block word by word: one `inw`, one 1 µs
+  delay and a deadline check per word and a yield every 64 words, the
+  original IDENTIFY-style pacing. ATA/ATAPI-6 10.2.2 leaves PIO cycle and
+  IORDY timing to the host controller, and Linux transfers ATAPI PIO data
+  with `ioread16_rep` (`drivers/ata/libata-sff.c` `ata_sff_data_xfer`); the
+  ATA data path already uses string bursts since f1-39 (`transfer_block`).
+  Decision: with a string-I/O backend the data phase uses `insw` bursts of
+  at most 2048 bytes, a yield between bursts and the pacing after the
+  phase; an odd final byte comes from one more word as before. Backends
+  without string I/O keep the word loop.
+
+Host evidence: `tests/host/test_optical.py`
+`test_file_data_read_in_runs` (206 device reads before, 73 with the harness's
+six-slot cache), `tests/host/atapi_test.inc` `test_packet_bursts` (odd and
+multi-phase transfers with canaries, a 16-block READ(10) in sixteen 1024-word
+bursts, the ATA peer intact); the packet fake now serves multi-block READ(10)
+in whole-block DRQ phases within the host byte-count limit. The QEMU
+throughput needs the lead's run.

@@ -243,6 +243,8 @@ BOOL W32API MoveToEx(HDC h, int x, int y, POINT *old) {
   if (old)
     *old = d->s.current;
   d->s.current = (POINT){x, y};
+  if (d->path && d->path->open)
+    d->path->fresh = 1;
   return 1;
 }
 BOOL W32API GetCurrentPositionEx(HDC h, POINT *p) {
@@ -353,6 +355,12 @@ BOOL W32API LineTo(HDC h, int x, int y) {
   struct dc *d = gdi_dc(h);
   if (!d)
     return 0;
+  if (d->path && d->path->open) {
+    POINT p = {x, y};
+    if (!gdi_path_poly(h, &p, 1, 1, 0)) return 0;
+    d->s.current = p;
+    return 1;
+  }
   if (d->record) { /* f5-20B metafile DC */
     int16_t v[2] = {(int16_t)y, (int16_t)x};
     d->s.current = (POINT){x, y};
@@ -369,6 +377,8 @@ BOOL W32API Polyline(HDC h, const POINT *p, int count) {
   struct dc *d = gdi_dc(h);
   if (!d || !p || count < 2 || count > 8192)
     return 0;
+  if (d->path && d->path->open)
+    return gdi_path_poly(h,p,(unsigned)count,0,0);
   if (d->record)
     return gdi_record_poly(d, 0x0325u, p, 0, (unsigned)count);
   POINT *copy = gdi_alloc((DWORD)count * sizeof(POINT));
@@ -385,6 +395,8 @@ BOOL W32API PolyBezier(HDC h, const POINT *p, DWORD count) {
   struct dc *d = gdi_dc(h);
   if (!d || !p || count < 4 || count > 766 || (count - 1) % 3)
     return 0;
+  if (d->path && d->path->open)
+    return gdi_path_bezier(h,p,count,0);
   for (unsigned i = 0; i < count; i++)
     if (p[i].x < -GDI_LIMIT || p[i].x > GDI_LIMIT || p[i].y < -GDI_LIMIT ||
         p[i].y > GDI_LIMIT)
@@ -416,6 +428,22 @@ BOOL W32API PolyPolygon(HDC h, const POINT *p, const int *counts,
   struct dc *d = gdi_dc(h);
   if (!d)
     return 0;
+  if (d->path && d->path->open) {
+    if (!p || !counts || polygons <= 0 || polygons > 8192) return 0;
+    unsigned base=0;
+    for(int i=0;i<polygons;i++) {
+      if(counts[i]<2 || counts[i]>8192 || base>8192u-(unsigned)counts[i]) return 0;
+      base+=(unsigned)counts[i];
+    }
+    unsigned old=d->path->count; base=0;
+    for(int i=0;i<polygons;i++) {
+      if(!gdi_path_poly(h,p+base,(unsigned)counts[i],0,1)) {
+        d->path->count=old;return 0;
+      }
+      base+=(unsigned)counts[i];
+    }
+    return 1;
+  }
   if (d->record && p && counts && polygons > 0) /* f5-20B metafile DC */
     return polygons == 1
                ? gdi_record_poly(d, 0x0324u, p, 0, (unsigned)counts[0])
@@ -448,6 +476,12 @@ BOOL W32API Rectangle(HDC h, int l, int t, int r, int b) {
   struct dc *d = gdi_dc(h);
   if (!d)
     return 0;
+  if (d->path && d->path->open) {
+    if(l>=r || t>=b) return 1;
+    if(l< -GDI_LIMIT || r>GDI_LIMIT || t< -GDI_LIMIT || b>GDI_LIMIT) return 0;
+    POINT p[4]={{l,t},{r-1,t},{r-1,b-1},{l,b-1}};
+    return gdi_path_poly(h,p,4,0,1);
+  }
   if (d->record) {
     int16_t v[4] = {(int16_t)b, (int16_t)r, (int16_t)t, (int16_t)l};
     return gdi_record(d, 0x041bu, v, 4);
@@ -557,6 +591,11 @@ BOOL W32API Ellipse(HDC h, int l, int t, int r, int b) {
   struct dc *d = gdi_dc(h);
   if (!d)
     return 0;
+  if(d->path && d->path->open) {
+    if(l>=r || t>=b) return 1;
+    if(l< -GDI_LIMIT || r>GDI_LIMIT || t< -GDI_LIMIT || b>GDI_LIMIT) return 0;
+    return gdi_path_shape(h,l,t,r,b,r-l,b-t);
+  }
   if (d->record) {
     int16_t v[4] = {(int16_t)b, (int16_t)r, (int16_t)t, (int16_t)l};
     return gdi_record(d, 0x0418u, v, 4);
@@ -570,6 +609,8 @@ BOOL W32API RoundRect(HDC h, int l, int t, int r, int b, int w, int height) {
       height > GDI_LIMIT)
     return 0;
   struct dc *d = gdi_dc(h);
+  if(d && d->path && d->path->open)
+    return gdi_path_shape(h,l,t,r,b,w<0 ? -w : w,height<0 ? -height : height);
   if (d && d->record) {
     int16_t v[6] = {(int16_t)height, (int16_t)w, (int16_t)b,
                     (int16_t)r,      (int16_t)t, (int16_t)l};
@@ -584,8 +625,8 @@ static int angle_before(int64_t ax, int64_t ay, int64_t bx, int64_t by) {
   int a = angle_half(ax, ay), b = angle_half(bx, by);
   return a != b ? a < b : ax * by - ay * bx > 0;
 }
-BOOL W32API Arc(HDC h, int l, int t, int r, int b, int sx, int sy, int ex,
-                int ey) {
+BOOL gdi_arc(HDC h, int l, int t, int r, int b, int sx, int sy, int ex,
+                int ey, int mode) {
   GDI_GUARD;
   struct dc *d = gdi_dc(h);
   if (!d || l >= r || t >= b || l < -GDI_LIMIT || r > GDI_LIMIT ||
@@ -650,8 +691,24 @@ BOOL W32API Arc(HDC h, int l, int t, int r, int b, int sx, int sy, int ex,
     count = 128;
   for (unsigned i = 0; i <= count; i++)
     out[i] = all[(first + i) % 128];
+  if (d->s.arc_direction == 2) {
+    count = 128-count;
+    if (!count) count=128;
+    for (unsigned i=0;i<=count;i++) out[i]=all[(first+128-i)%128];
+  }
+  if (mode == 1) {
+    return PolylineTo(h,out,count+1);
+  }
+  if (mode == 3) out[++count]=(POINT){(l+r)/2,(t+b)/2};
+  if (d->path && d->path->open)
+    return gdi_path_poly(h,out,count+1,0,mode>=2);
+  if(d->record) return mode>=2 ? Polygon(h,out,(int)count+1) : Polyline(h,out,(int)count+1);
+  if (mode >= 2) return Polygon(h,out,(int)count+1);
   return gdi_transform(d, out, (int)count + 1, 0) &&
          stroke(d, out, count + 1, 0);
+}
+BOOL W32API Arc(HDC h,int l,int t,int r,int b,int sx,int sy,int ex,int ey) {
+  return gdi_arc(h,l,t,r,b,sx,sy,ex,ey,0);
 }
 BOOL W32API ExtFloodFill(HDC h, int x, int y, COLORREF boundary,
                          unsigned mode) {
