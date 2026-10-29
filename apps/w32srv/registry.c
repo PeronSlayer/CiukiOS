@@ -530,6 +530,7 @@ uint32_t wr_dispatch(struct wr_server *s, uint32_t pid, const void *input, size_
         r.key = r.name_bytes; r.name_bytes = 0;
     } else r.error = 120;
 done:
+    wr_session_wake(s);
     if (r.error) r.data_bytes = r.name_bytes = 0;
     *used = sizeof(r) + (r.name_bytes || (n >= sizeof(a) && a.op == W32R_ENUM_VALUE && !r.error) ? r.name_bytes + 1 : 0) + r.data_bytes;
     memcpy(output, &r, sizeof(r)); return 0;

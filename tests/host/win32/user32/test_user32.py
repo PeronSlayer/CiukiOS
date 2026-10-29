@@ -113,6 +113,12 @@ class User32Tests(unittest.TestCase):
                      'TRACE CF_BITMAP','TRACE DrawIconEx','TRACE palette callbacks','TRACE ddraw on USER seam'):
             self.assertIn(line,output)
         self.assertIn('PASS USER windows messages input paint clipboard',output)
+        for line in ('idle requests=0 elapsed_ms=1000 wait_enrollments=1',
+                     'timer=10 latency_ms=0', 'timer=55 latency_ms=0',
+                     'timer=1000 latency_ms=0', 'PostMessage latency_ms=0',
+                     'SendMessage latency_ms=1', 'paint latency_ms=0'):
+            self.assertIn('TRACE fx-w32idle '+line,output)
+        self.assertIn('TRACE fx-w32idle disconnected session wake drained, application timeout preserved',output)
         print(output,end='')
 
     def test_public_pe32_layout(self):

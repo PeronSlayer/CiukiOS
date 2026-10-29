@@ -8,6 +8,7 @@ extern uint32_t file_description_count(void) __attribute__((weak));
 extern uint32_t net_socket_count(void) __attribute__((weak));
 struct process;
 extern void net_fd_changed(struct process *, unsigned) __attribute__((weak));
+extern void w32_changed_wake(void) __attribute__((weak));
 #include <ciuki/desktop.h>
 #include <ciuki/signal.h>
 #include <ciuki/security.h>
@@ -42,6 +43,7 @@ struct channel {
 
 static void channel_security_discard(struct channel *c);
 static void channel_security_reclaim(struct channel *c);
+static int channel_security_server_fd(const struct channel *, const struct process *);
 static int channel_security_frame(struct channel *, unsigned, const struct ciuki_message *);
 static void channel_security_timeout(struct channel *c);
 static bool channel_security_readable(struct channel *c, unsigned side)
@@ -121,6 +123,7 @@ void channel_release(struct desktop_description *d)
     kwait_wake_all(&c->changed[0]);
     kwait_wake_all(&c->changed[1]);
     if (net_fd_changed) net_fd_changed(0, 0);
+    if (w32_changed_wake) w32_changed_wake();
     if (c->service) channel_security_discard(c);
     if (!c->open[side ^ 1]) {
         struct channel **at=&security_channels;
@@ -280,6 +283,7 @@ int channel_send(struct process *p, int32_t fd, uint32_t message, uint32_t flags
             if (!err) {
                 kwait_wake_all(&c->changed[peer]);
                 if (net_fd_changed) net_fd_changed(0,0);
+                if (w32_changed_wake) w32_changed_wake();
                 /* sec-own: PID 1 serves OWNER in its maintenance turn; wake
                  * it for a complete request instead of the 100-tick poll. */
                 if (c->service==CIUKI_SECURITY_SERVICE_OWNER && !d->u.endpoint.side && c->complete[0] && proc_notify) proc_notify();
@@ -306,6 +310,7 @@ int channel_send(struct process *p, int32_t fd, uint32_t message, uint32_t flags
             irq_restore(f);
             kwait_wake_all(&c->changed[peer]);
             if (net_fd_changed) net_fd_changed(0, 0);
+            if (w32_changed_wake) w32_changed_wake();
             op->message = 0;
             return channel_end(op, 0);
         }
@@ -556,6 +561,14 @@ void channel_process_abort(struct process *child) { (void)child; }
 
 /* Readiness is observed before poll atomically registers/rechecks its global
  * wake generation; channel waits retain their existing queue predicates. */
+bool channel_service_pending(struct process *p, uint32_t service)
+{
+    for (struct channel *c=security_channels;c;c=c->security_next)
+        if (c->service==service && !c->accepted && !c->revoked[0] && !c->revoked[1] &&
+            c->subjects[1]==p->subject && channel_security_server_fd(c,p)>=0 &&
+            security_subject_live(c->subjects[0]) && security_subject_live(c->subjects[1])) return true;
+    return false;
+}
 int channel_poll_events(struct desktop_description *d)
 {
     struct channel *c = d->u.endpoint.channel; unsigned side = d->u.endpoint.side;
@@ -628,6 +641,7 @@ int channel_kernel_notify(struct proc_object *end, const void *data, uint32_t le
     desktop_objects.messages++;
     kwait_wake_all(&c->changed[peer]);
     if (net_fd_changed) net_fd_changed(0,0);
+    if (w32_changed_wake) w32_changed_wake();
     return 1;
 }
 /* --- sec-k07 (end) --- */
@@ -873,6 +887,7 @@ int channel_security_link(struct process *p, uint32_t operation, const struct ci
     c->service=in->service; c->service_generation=generation;
     d->object.inheritable=false; desktop_fd(server,fds[1])->object.inheritable=false;
     channel_link_output(c,0,fds[0],out);
+    if (w32_changed_wake) w32_changed_wake();
     return 0;
 }
 /* Private readiness dequeue. It consumes only the exact retained child end,

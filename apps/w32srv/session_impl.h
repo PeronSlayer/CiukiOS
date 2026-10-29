@@ -160,6 +160,7 @@ static uint32_t wr_end_call(struct wr_server *s,uint32_t pid,const struct w32r_r
     if(a->index!=W32R_SESSION_POLL && a->index!=W32R_SESSION_REPLY)return 87;
     if(!a->type || (a->index==W32R_SESSION_POLL && (a->key || a->flags)))return 87;
     wr_end_advance(s);if(!e || e->stage==2)return wr_power_turn(s,pid,a,r);   /* G11: no session pending */
+    if(e->at>=e->count)return a->index==W32R_SESSION_POLL?0:6;
     struct wr_end_window *w=&e->windows[e->at];
     if(w->w.pid!=pid || w->w.tid!=a->type)return a->index==W32R_SESSION_POLL?0:5;
     if(a->index==W32R_SESSION_POLL){
@@ -171,4 +172,36 @@ static uint32_t wr_end_call(struct wr_server *s,uint32_t pid,const struct w32r_r
     if(!e->stage){w->queried=1;if(!a->flags && !(e->flags&4)){e->veto=1;e->at=e->count;}}
     else w->ended=1;
     w->delivered=0;e->at++;wr_end_advance(s);return 0;
+}
+
+/* Notify the next undelivered turn. The kernel latch coalesces notifications
+ * until its owning USER thread consumes one; unrelated threads do no RPC. */
+void wr_session_wake(struct wr_server *s)
+{
+    if (!s->session_notify) return;
+    wr_end_advance(s);
+    struct wr_end *e=s->ending;
+    if (e && e->stage<2) {
+        if (e->at<e->count && !e->windows[e->at].delivered)
+            s->session_notify(e->windows[e->at].w.pid,e->windows[e->at].w.tid);
+        return;
+    }
+    wr_power_advance(s);
+    struct wr_power *p=s->power;
+    if (p && p->at<p->count && !p->windows[p->at].delivered)
+        s->session_notify(p->windows[p->at].w.pid,p->windows[p->at].w.tid);
+}
+uint64_t wr_deadline(struct wr_server *s)
+{
+    uint64_t deadline=UINT64_MAX;
+    if (!s->session_only)
+        for (unsigned h=0;h<2;h++)
+            if (s->hive[h].dirty && s->hive[h].dirty_since+2000<deadline)
+                deadline=s->hive[h].dirty_since+2000;
+    struct wr_end *e=s->ending;
+    if (e && e->stage<2 && e->at<e->count && e->deadline<deadline) deadline=e->deadline;
+    struct wr_power *p=s->power;
+    if (p && p->at<p->count && p->deadline &&
+        (!p->windows[p->at].delivered || p->event>1) && p->deadline<deadline) deadline=p->deadline;
+    return deadline;
 }

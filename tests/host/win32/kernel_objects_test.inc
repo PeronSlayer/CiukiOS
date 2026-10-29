@@ -146,6 +146,19 @@ static void relay_interleave(void)
     g_current = saved;
     on_schedule = 0;
 }
+static struct proc_thread *idle_channel_client;
+static uint32_t idle_channel_fd;
+static unsigned idle_service_sleeps;
+static void idle_service_arrival(uint64_t deadline)
+{
+    CHECK(deadline==UINT64_MAX);
+    idle_service_sleeps++;
+    g_ticks+=1000; /* no producer work for a whole second */
+    struct task *saved=g_current;g_current=idle_channel_client->task;
+    CHECK(!channel_send(idle_channel_client->process,(int32_t)idle_channel_fd,
+        idle_channel_client->teb+512,DONTWAIT));
+    g_current=saved;
+}
 static void test_services(struct proc_thread *client)
 {
     struct process *desktop, *server;
@@ -187,6 +200,69 @@ static void test_services(struct proc_thread *client)
         && service.pid == client->process->pid);
     struct proc_object *peer_end = server->fds[service.endpoint].object;
     CHECK(peer_end && !peer_end->inheritable);
+    /* Pending secure channels belong to an exact server subject/fd, even
+     * when another process has identical credentials. Match ACCEPT. */
+    struct channel *pending=desktop_fd(server,(int32_t)service.endpoint)->u.endpoint.channel;
+    pending->service=CIUKI_SECURITY_SERVICE_W32SRV;
+    CHECK(channel_service_pending(server,CIUKI_SECURITY_SERVICE_W32SRV));
+    CHECK(security_same(server,desktop) && !channel_service_pending(desktop,CIUKI_SECURITY_SERVICE_W32SRV));
+    server->fds[service.endpoint].object=0;
+    CHECK(!channel_service_pending(server,CIUKI_SECURITY_SERVICE_W32SRV));
+    server->fds[service.endpoint].object=peer_end;
+    pending->accepted=true;
+    CHECK(!channel_service_pending(server,CIUKI_SECURITY_SERVICE_W32SRV));
+    pending->accepted=false;pending->service=0;
+    /* No 20-ms runnable grace: a completed reply and the next fragment use
+     * the same channel readiness. One infinite enrollment spans idle time. */
+    struct task *idle_saved=g_current;g_current=st->task;g_current->state=T_RUNNING;
+    struct ciuki_message idle_message={.length=1,.data={42}};
+    CHECK(!ua_write(client->process->memory,client->teb+512,&idle_message,sizeof(idle_message)));
+    idle_channel_client=client;idle_channel_fd=endpoint;idle_service_sleeps=0;
+    on_kwait=idle_service_arrival;
+    uint64_t idle_start=g_ticks;
+    struct ciuki_w32_service_args idle_wait={.action=W32_SVC_WAIT,.service=2,.pid=W32_INFINITE};
+    CHECK(!w32_service_call(st,&idle_wait) && !idle_wait.error && idle_wait.result && idle_service_sleeps==1);
+    CHECK(g_ticks==idle_start+1000);
+    on_kwait=0;
+    CHECK(channel_recv(server,(int32_t)service.endpoint,st->tls+512,DONTWAIT)==1);
+    struct ciuki_w32_service_args notify={.action=W32_SVC_NOTIFY,.service=2,
+        .pid=client->process->pid,.endpoint=client->tid};
+    CHECK(!w32_service_call(client,&notify) && notify.error==5);
+    notify.error=0;
+    CHECK(!w32_service_call(st,&notify) && !notify.error && notify.result);
+    struct ciuki_w32_wait_args gui_wait={.reserved=W32_WAIT_SERVICES,.timeout=W32_INFINITE};
+    g_current=client->task;
+    CHECK(!w32_wait_call(client,&gui_wait) && !gui_wait.error && gui_wait.result==W32_WAIT_SERVICE);
+    struct ciuki_w32_service_args consume={.action=W32_SVC_SESSION,.service=2};
+    CHECK(!w32_service_call(client,&consume) && !consume.error && consume.result);
+    consume.result=0;
+    CHECK(!w32_service_call(client,&consume) && !consume.error && !consume.result);
+    /* Real desktop channel input wakes USER independently of queue bits.
+     * A reused fd is not a retained service endpoint; session-only waits
+     * ignore desktop readability after USER has handled a disconnect. */
+    struct service_link *desktop_link=links;
+    while(desktop_link && !(desktop_link->client==client->process && desktop_link->service==1))
+        desktop_link=desktop_link->next;
+    CHECK(desktop_link);
+    CHECK(!ua_write(desktop->memory,dt->tls+512,&idle_message,sizeof(idle_message)));
+    g_current=dt->task;g_current->state=T_RUNNING;
+    CHECK(!channel_send(desktop,desktop_link->server_fd,dt->tls+512,DONTWAIT));
+    CHECK(w32_service_ready(client,true) && !w32_service_ready(client,false));
+    struct proc_object *saved_endpoint=client->process->fds[desktop_endpoint].object;
+    client->process->fds[desktop_endpoint].object=client->process->fds[endpoint].object;
+    CHECK(!w32_service_ready(client,true));
+    client->process->fds[desktop_endpoint].object=saved_endpoint;
+    g_current=client->task;
+    gui_wait=(struct ciuki_w32_wait_args){.reserved=W32_WAIT_SERVICES,.timeout=W32_INFINITE};
+    CHECK(!w32_wait_call(client,&gui_wait) && !gui_wait.error && gui_wait.result==W32_WAIT_SERVICE);
+    CHECK(channel_recv(client->process,(int32_t)desktop_endpoint,client->teb+512,DONTWAIT)==1);
+    client->w32->session_pending=true;
+    gui_wait=(struct ciuki_w32_wait_args){.reserved=W32_WAIT_SESSION,.timeout=W32_INFINITE};
+    CHECK(!w32_wait_call(client,&gui_wait) && !gui_wait.error && gui_wait.result==W32_WAIT_SERVICE);
+    consume=(struct ciuki_w32_service_args){.action=W32_SVC_SESSION,.service=2};
+    CHECK(!w32_service_call(client,&consume) && !consume.error && consume.result);
+    g_current=idle_saved;
+    puts("TRACE fx-w32idle w32srv idle_ms=1000 runnable_ms=0 requests=0 enrollments=1; authenticated session latch wakes waiter");
     /* Native CONNECT is restricted to the current display owner and its
      * exact Control Panel child; a basename and an inherited role cannot do it. */
     struct process *control,*random;
@@ -267,6 +343,10 @@ static void test_services(struct proc_thread *client)
     proc_collect();
     CHECK(server->fds[kept_fd].object == kept_end);
     CHECK(channel_poll_events(desktop_fd(server, kept_fd)) & POLLHUP);
+    g_current=st->task;g_current->state=T_RUNNING;
+    idle_wait=(struct ciuki_w32_service_args){.action=W32_SVC_WAIT,.service=2,.pid=0};
+    CHECK(!w32_service_call(st,&idle_wait) && !idle_wait.error && idle_wait.result);
+    g_current=&controller;
     CHECK(!desktop_close(server, kept_fd) && !server->fds[kept_fd].object);
     /* q3crash 2026-10-25 (2): the desktop died; its window server is an
      * orphan of PID 1 and still registered. The supervisor's hook retires it;

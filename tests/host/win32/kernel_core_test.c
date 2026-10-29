@@ -159,8 +159,9 @@ int px_getcwd_locked(struct px_node *n, char path[CIUKI_PATH_MAX]) { (void)n; st
 void vfs_lock(struct vfs *v,uint32_t mask) { CHECK(!mask); fs_lock_take(&v->lock); }
 void vfs_unlock(struct vfs *v) { fs_lock_drop(&v->lock); }
 uint64_t deadline_after_ms(uint32_t ms) { return g_ticks + ms; }
+static void (*on_kwait)(uint64_t deadline);
 bool kwait_wait_until(struct kwait *q, bool (*p)(void *), void *arg, uint64_t deadline)
-{ (void)q; thread_context(); if(p(arg))return true; CHECK(deadline>=g_ticks); schedule();return p(arg); }
+{ if(on_kwait && !p(arg))on_kwait(deadline); (void)q; thread_context(); if(p(arg))return true; CHECK(deadline>=g_ticks); schedule();return p(arg); }
 void kwait_set_owner(struct kwait *q,struct task *owner) { q->owner=owner; }
 bool kwait_wait_ticket_until(struct kwait *q,kwait_cond_fn p,void *arg,uint64_t deadline,uint32_t *ticket)
 { (void)ticket;return kwait_wait_until(q,p,arg,deadline); }

@@ -20,9 +20,11 @@ void u32_session_pump(void)
 {
     U32_GUARD;
     DWORD tid=u32_tid();struct u32_thread *thread=u32_thread();
-    DWORD now=u32_ticks();
-    if(!thread || thread->session_active || (thread->session_poll_set && (int32_t)(now-thread->session_poll)<0))return;
-    thread->session_active=1;thread->session_poll_set=1;
+    if(!thread || thread->session_active)return;
+    struct ciuki_w32_service_args wake={.header=K32_HEADER(W32_SERVICE,wake),
+        .action=W32_SVC_SESSION,.service=W32_SERVICE_W32SRV};
+    if(u32_backend.call(&wake,sizeof(wake)) || wake.error || !wake.result)return;
+    thread->session_active=1;
     DWORD saved=GetLastError();struct w32r_reply r;
     BOOL polled=session_call(0,W32R_SESSION_POLL,tid,0,&r);
     if(polled && r.key){
@@ -38,17 +40,6 @@ void u32_session_pump(void)
             answer=r.type==W32R_POWERBROADCAST ? (uint32_t)result!=0x424D5144u : !!result;
         }
         session_call(h,W32R_SESSION_REPLY,tid,answer,&r);
-        now=u32_ticks();thread->session_fast=1;
-        thread->session_fast_until=now+U32_SESSION_FAST_MS;
-        thread->session_poll=now; /* next pump drains the next window */
-    }else{
-        now=u32_ticks();
-        if(thread->session_fast && (!polled || (int32_t)(now-thread->session_fast_until)<0))
-            thread->session_poll=polled?thread->session_fast_until:now+U32_SESSION_FAST_MS;
-        else{
-            thread->session_fast=0;
-            thread->session_poll=now+U32_SESSION_POLL_MS;
-        }
     }
     SetLastError(saved);thread->session_active=0;
 }

@@ -8,6 +8,7 @@
 #include <ciuki/supervisor.h>
 #include <ciuki/display.h>
 #include <ciuki/security.h>
+#include <ciuki/signal.h>
 /* Private launch permission, not a registrable server role. Never inherited. */
 enum { NATIVE_CONTROL_REGISTRY = 3 };
 static bool registry_desktop(struct process *p)
@@ -172,6 +173,8 @@ void w32_services_cleanup(struct process *p)
         struct service_link *l = *at;
         if (l->client == p || l->server == p) {
             *at = l->next;
+            if (l->accepted && l->server!=p && l->server->w32)
+                l->server->w32->service_pending=true;
             if (l->client->fds && l->client->fds[l->client_fd].object == l->client_end)
                 desktop_close(l->client, l->client_fd);
             /* A dying client's end is released with its table. An accepted
@@ -198,6 +201,45 @@ void w32_services_cleanup(struct process *p)
     }
     w32_changed_wake();
 }
+/* A service wait observes only retained link identities, never an arbitrary fd
+ * supplied by the caller. Enrollment and predicate recheck are atomic in kwait. */
+bool w32_service_ready(struct proc_thread *t, bool desktop)
+{
+    if (t->w32->session_pending) return true;
+    if (!desktop) return false;
+    struct process *p=t->process;
+    for (struct service_link *l=links;l;l=l->next) {
+        if (l->client!=p || l->service!=W32_SERVICE_DESKTOP || !p->fds ||
+            p->w32->endpoint[0]!=(uint32_t)l->client_fd+1 ||
+            p->fds[l->client_fd].object!=l->client_end) continue;
+        struct desktop_description *d=desktop_fd(p,l->client_fd);
+        if (d && d->kind==DESKTOP_CHANNEL &&
+            (channel_poll_events(d)&(POLLIN|POLLHUP))) return true;
+    }
+    return false;
+}
+struct service_wait { struct proc_thread *thread; uint32_t service; };
+static bool service_work_ready(void *opaque)
+{
+    struct service_wait *w=opaque;
+    struct process *p=w->thread->process;
+    if (p->state!=PROC_LIVE || !security_process_live(p) ||
+        w->thread->stopped || proc_signal_caught(w->thread)) return true;
+    if (p->w32->service_pending) return true;
+    if (w->service==W32_SERVICE_W32SRV && channel_service_pending(p,CIUKI_SECURITY_SERVICE_W32SRV)) return true;
+    for (struct service_link *l=links;l;l=l->next) {
+        if (l->server!=p || l->service!=w->service || !p->fds ||
+            p->fds[l->server_fd].object!=l->server_end) continue;
+        if (!l->accepted) {
+            if (security_process_live(l->client) && security_same(p,l->client) &&
+                l->client->fds && l->client->fds[l->client_fd].object==l->client_end) return true;
+            continue;
+        }
+        struct desktop_description *d=desktop_fd(p,l->server_fd);
+        if (d && d->kind==DESKTOP_CHANNEL && (channel_poll_events(d)&(POLLIN|POLLHUP))) return true;
+    }
+    return false;
+}
 uint32_t w32_service_call(struct proc_thread *t, struct ciuki_w32_service_args *a)
 {
     struct process *p = t->process;
@@ -211,7 +253,44 @@ uint32_t w32_service_call(struct proc_thread *t, struct ciuki_w32_service_args *
         a->error = 87;
         return 0;
     }
-    if (a->action == W32_SVC_REGISTER) {
+    if (a->action == W32_SVC_SESSION) {
+        if (p->personality!=PROC_WIN32 || a->service!=W32_SERVICE_W32SRV || a->pid || a->endpoint) {
+            a->error=87; return 0;
+        }
+        uint32_t f=irq_save();
+        a->result=t->w32->session_pending;
+        t->w32->session_pending=false;
+        irq_restore(f);
+    } else if (a->action == W32_SVC_WAIT || a->action == W32_SVC_NOTIFY) {
+        const struct ciuki_credential *credential=security_credential(p);
+        bool registered=security_roles_active() ? credential &&
+            (a->service==W32_SERVICE_W32SRV ? security_service_server(CIUKI_SECURITY_SERVICE_W32SRV,credential->session_id)==p :
+                security_session_desktop(credential->session_id)==p) : server_for(a->service)==p;
+        if (p->personality!=PROC_NATIVE || !registered || p->w32->service!=a->service) {
+            a->error=5; return 0;
+        }
+        if (a->action==W32_SVC_WAIT) {
+            if (a->endpoint) { a->error=87; return 0; }
+            struct service_wait w={t,a->service};
+            uint64_t deadline=a->pid==W32_INFINITE ? UINT64_MAX : w32_now()+a->pid;
+            a->result=kwait_wait_until(&w32_changed,service_work_ready,&w,deadline);
+            p->w32->service_pending=false;
+            if (p->state!=PROC_LIVE || !security_process_live(p) || t->stopped || proc_signal_caught(t)) a->error=995;
+        } else {
+            struct process *client=proc_find(a->pid);
+            struct proc_thread *target=client ? proc_thread_find(client,a->endpoint) : 0;
+            bool connected=false;
+            for (struct service_link *l=links;l;l=l->next)
+                if (l->server==p && l->client==client && l->service==W32_SERVICE_W32SRV && l->accepted &&
+                    p->fds && client->fds && p->fds[l->server_fd].object==l->server_end &&
+                    client->fds[l->client_fd].object==l->client_end) connected=true;
+            if (a->service!=W32_SERVICE_W32SRV || !connected || !target || !target->w32 ||
+                target->stopped || !security_same(p,client) || !security_process_live(client)) { a->error=5; return 0; }
+            target->w32->session_pending=true;
+            a->result=1;
+            w32_changed_wake();
+        }
+    } else if (a->action == W32_SVC_REGISTER) {
         if (p->personality != PROC_NATIVE || p->w32->service != a->service) {
             a->error = 5;
             return 0;

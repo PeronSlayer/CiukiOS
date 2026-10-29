@@ -319,6 +319,20 @@ void u32_mark(void) {
       .bits = bits,
       .message = {.wparam = QS_PAINT | QS_TIMER}};
   u32_message(&a);
+  /* A different GUI thread can invalidate our windows while we are blocked.
+   * Publish its paint readiness now; the owner still synthesizes WM_PAINT. */
+  DWORD marked[U32_WINDOWS];UINT count=0;
+  for (UINT i=0;i<U32_WINDOWS;i++) {
+    struct u32_window *w=&u32_windows[i];
+    if (!w->handle || w->tid==tid || !w->redraw ||
+        (!w->update.n && !w->internal_paint) || IsIconic(w->handle) || !u32_paintable(w)) continue;
+    UINT j=0;while(j<count && marked[j]!=w->tid)j++;
+    if(j<count)continue;
+    marked[count++]=w->tid;
+    struct ciuki_w32_message_args paint={.action=W32_MSG_MARK,.tid=w->tid,
+        .bits=QS_PAINT,.message={.wparam=QS_PAINT}};
+    u32_message(&paint);
+  }
 }
 static void msg_from(MSG *m, const struct ciuki_w32_message *n) {
   *m = (MSG){(HWND)(uintptr_t)n->window, n->message, n->wparam,
@@ -506,11 +520,10 @@ DWORD W32API MsgWaitForMultipleObjectsEx(DWORD n, const HANDLE *handles,
   for (;;) {
     u32_pump();
     u32_mark();
-    DWORD slice = ms;
-    if (slice > 10)
-      slice = 10;
+    DWORD elapsed = u32_ticks() - start;
+    DWORD slice = ms == W32_INFINITE ? W32_INFINITE : elapsed >= ms ? 0 : ms - elapsed;
     for (UINT i = 0; i < U32_TIMERS; i++)
-      if (u32_timers[i].tid == u32_tid()) {
+      if ((mask & QS_TIMER) && u32_timers[i].tid == u32_tid()) {
         int32_t left = (int32_t)(u32_timers[i].due - u32_ticks());
         if (left > 0 && (DWORD)left < slice)
           slice = left;
@@ -523,7 +536,8 @@ DWORD W32API MsgWaitForMultipleObjectsEx(DWORD n, const HANDLE *handles,
         .alertable = !!(flags & MWMO_ALERTABLE),
         .timeout = slice,
         .wake_mask = mask,
-        .reserved = flags & MWMO_INPUTAVAILABLE ? 0 : W32_WAIT_NEW_INPUT};
+        .reserved = (flags & MWMO_INPUTAVAILABLE ? 0 : W32_WAIT_NEW_INPUT) |
+                    (u32_desktop.disconnected ? W32_WAIT_SESSION : W32_WAIT_SERVICES)};
     UINT saved = u32_suspend();
     int32_t status = u32_backend.call(&a, sizeof(a));
     u32_resume(saved);
@@ -531,6 +545,8 @@ DWORD W32API MsgWaitForMultipleObjectsEx(DWORD n, const HANDLE *handles,
       u32_fail(a.error ? a.error : 87);
       return W32_WAIT_FAILED;
     }
+    if (a.result == W32_WAIT_SERVICE)
+      continue;
     if (a.result != W32_WAIT_TIMEOUT)
       return a.result;
     if (ms != W32_INFINITE && (DWORD)(u32_ticks() - start) >= ms)

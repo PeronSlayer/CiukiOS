@@ -15,6 +15,8 @@
 #include <ciuki/display.h>
 #include <ciuki/proc.h>
 #include <ciuki/security.h>
+/* Private transport constants are not installed in the native SDK. */
+#include "../../src/kernel/include/ciuki/w32_transport.h"
 #endif
 /* W32SRV_GUEST: the image's service, linked with libfont (build_w32srv.py);
  * host replays of this loop build without the font engine. */
@@ -30,6 +32,21 @@ static int service(unsigned action,struct w32r_service *a)
 {
     *a=(struct w32r_service){.version=1,.size=sizeof(*a),.operation=0x200,.action=action,.service=2};
     uint32_t r=CU_CALL(W32,CU_PTR(a),sizeof(*a),0,0,0,0);return r||a->error?-1:(int)a->result;
+}
+static void session_notify(uint32_t pid,uint32_t tid)
+{
+    struct w32r_service a={.version=1,.size=sizeof(a),.operation=W32_SERVICE,
+        .action=W32_SVC_NOTIFY,.service=W32_SERVICE_W32SRV,.pid=pid,.endpoint=tid};
+    (void)CU_CALL(W32,CU_PTR(&a),sizeof(a),0,0,0,0);
+}
+static int wait_work(uint64_t deadline)
+{
+    uint64_t time=now(),left=deadline>time ? deadline-time : 0;
+    struct w32r_service a={.version=1,.size=sizeof(a),.operation=W32_SERVICE,
+        .action=W32_SVC_WAIT,.service=W32_SERVICE_W32SRV,
+        .pid=deadline==UINT64_MAX ? W32_INFINITE : left>=W32_INFINITE ? W32_INFINITE-1 : (uint32_t)left};
+    uint32_t status=CU_CALL(W32,CU_PTR(&a),sizeof(a),0,0,0,0);
+    return status || (a.error && a.error!=995) ? -1 : 0;
 }
 static struct {struct ciuki_proc_system system;struct ciuki_proc_record records[CIUKI_PROCESS_MAX];} snapshot;
 static int alive(void *unused,uint32_t pid)
@@ -130,23 +147,18 @@ int main(int argc,char **argv)
         }
     }
     /* --- sec-user-03 (end) --- */
-    uint64_t display_deadline=now()+2000;
+    s.session_notify=session_notify;
     static struct {int fd;struct wr_session session;} clients[64];
     for(unsigned i=0;i<64;i++){clients[i].fd=-1;memset(&clients[i].session,0,sizeof(clients[i].session));}
     signal(SIGTERM,stop);signal(SIGINT,stop);
-    /* A transaction is a stop-and-wait sequence of 256-byte fragments. While
-     * one is in flight (20 ms after the last fragment) the loop yields
-     * instead of sleeping 10 ms per fragment (f5-10C2: glyph replies). */
-#ifdef W32SRV_GUEST
-    uint64_t active_until=0;
-#endif
+    /* Readiness covers both the next fragment and newly connected clients. */
     while(!stopping){
         int busy=0;
 #if !defined(__linux__)
         /* --- sec-user-03: the session DESKTOP connects once to call-101
          * service 6; the ACCEPT record's peer role/session (kernel output)
          * names the end-session writer. No pid or name is trusted. --- */
-        if(logon_launched&&!s.compat_writer_pid){
+        if(logon_launched){
             struct ciuki_credential own;
             for(unsigned n=0;n<4&&!ciuki_security_self(&own);n++){
                 struct ciuki_security_link in={.version=1,.size=64,.service=CIUKI_SECURITY_SERVICE_W32SRV},out;
@@ -157,7 +169,6 @@ int main(int argc,char **argv)
                 if(out.peer_role==CIUKI_SECURITY_ROLE_DESKTOP&&out.session_id==own.session_id&&own.session_id)
                     s.compat_writer_pid=out.peer_pid;
                 close(out.endpoint_fd);
-                if(s.compat_writer_pid)break;
             }
         }
 #endif
@@ -188,22 +199,21 @@ int main(int argc,char **argv)
             if(ciuki_channel_send(clients[i].fd,&m,1)<0){wr_exit(&s,clients[i].session.pid);wr_session_close(&clients[i].session);close(clients[i].fd);clients[i].fd=-1;}
         }
         uint64_t time=now();
-        if(shell&&ws_restart_tick(shell))busy=1; /* one WININIT.INI line per iteration */
-        if(wr_tick(&s,time))fprintf(stderr,"[win32] registry periodic-commit-failed\n");
-        if(time>=display_deadline){
+        int restart_work=shell&&ws_restart_tick(shell); /* one WININIT.INI line per iteration */
+        if(wr_tick(&s,time)){
+            fprintf(stderr,"[win32] registry periodic-commit-failed\n");
+            /* A failed write retries at the commit interval, never a zero-time loop. */
+            for(unsigned h=0;h<2;h++)if(s.hive[h].dirty)s.hive[h].dirty_since=time;
+        }
+        if(busy){
             struct ciuki_display_info active={.version=CIUKI_DISPLAY_VERSION,.size=sizeof(active)};
             if(!ciuki_display_query(&active)&&(active.width!=display.width||active.height!=display.height||active.bpp!=display.bpp)){
                 if(!s.session_only&&wr_defaults(&s,active.width,active.height,active.bpp))display=active;
             }
-            display_deadline=time+2000;
         }
-#ifdef W32SRV_GUEST
-        if(busy)active_until=time+20;
-        if(time<active_until){(void)ciuki_raw_yield(0,0,0,0,0,0);continue;}
-#else
-        (void)busy;
-#endif
-        struct timespec delay={.tv_sec=0,.tv_nsec=10000000};nanosleep(&delay,NULL);
+        wr_session_wake(&s);
+        if(restart_work)continue;
+        if(wait_work(wr_deadline(&s))<0){io.log(io.opaque,"[win32] w32srv wait-failed");break;}
     }
     for(unsigned i=0;i<64;i++)if(clients[i].fd>=0){wr_session_close(&clients[i].session);close(clients[i].fd);}
 #ifdef W32SRV_GUEST

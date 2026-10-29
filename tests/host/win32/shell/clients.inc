@@ -111,11 +111,11 @@ static void shell_clients(const char *directory)
     for(unsigned i=0;i<7;i++){
         more[i]=CreateWindowExA(0,cls.lpszClassName,"session",WS_POPUP,0,0,32,32,0,0,0,0);CHECK(more[i]);
     }
-    /* Real pump pacing, including cold idle detection, on one USER thread. */
+    /* Notification-driven session delivery on one USER thread. */
     for(unsigned force=0;force<3;force++){
         struct w32r_reply status;session_answer=force==2;session_ended=-1;
         session_queries=session_ends=0;
-        u32_session_pump();ui_kernel_pause(U32_SESSION_FAST_MS);u32_session_pump();
+        u32_session_pump();ui_kernel_pause(20u);u32_session_pump();
         DWORD begin=u32_ticks();
         session_action(W32R_SESSION_BEGIN,force==1?4:0,&status);
         for(unsigned i=0;i<570 && session_ends<8;i++){
@@ -123,19 +123,18 @@ static void shell_clients(const char *directory)
         }
         session_action(W32R_SESSION_STATUS,0,&status);
         CHECK(status.key==(force==0?2u:1u) && session_ended==(force!=0) && session_queries==8 && session_ends==8);
-        CHECK(u32_ticks()-begin<=8*2*U32_SESSION_FAST_MS+U32_SESSION_POLL_MS);
+        CHECK(u32_ticks()-begin<=8*2*20u+250u);
         printf("TRACE USER 8 windows query/end case=%u ticks=%u\n",force,u32_ticks()-begin);
         session_action(W32R_SESSION_RESET,0,&status);
     }
-    /* Empty polls remain fast for a full interval after the last notification,
-     * then thousands of same-tick pumps and 1 ms pumps stay at idle cadence. */
-    u32_session_pump();ui_kernel_pause(U32_SESSION_FAST_MS);u32_session_pump();
+    /* Neither repeated pumps nor elapsed idle time cause a session RPC. */
+    u32_session_pump();ui_kernel_pause(20u);u32_session_pump();
     unsigned polls=session_polls,allocs=allocation_calls;
     for(unsigned i=0;i<1000;i++)u32_session_pump();
     CHECK(session_polls==polls && allocation_calls==allocs);
     for(unsigned i=0;i<1000;i++){ui_kernel_pause(1);u32_session_pump();}
-    CHECK(session_polls==polls+4 && allocation_calls==allocs);
-    puts("PASS USER idle 250 ms and zero allocations per poll, fast session drain");
+    CHECK(session_polls==polls && allocation_calls==allocs);
+    puts("PASS USER idle zero session RPCs and zero allocations, notified session drain");
     {   /* G11 (docs/design/power-policy.md): WM_POWERBROADCAST on the owning
          * USER thread through the same pump, eight top-level windows. */
         struct w32r_reply status;
