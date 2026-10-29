@@ -172,7 +172,7 @@ struct desk_shell {
      * (selected unless focus_unselected); anchor for Shift ranges; the
      * rubber band in screen coordinates and the selection it started from. */
     int focus_unselected, anchor, icon_button, icon_pending;
-    int icon_editing; char icon_edit[FM_NAME]; unsigned icon_edit_cursor;
+    int icon_editing, icon_edit_select_all; char icon_edit[FM_NAME]; unsigned icon_edit_cursor;
     char icon_typeahead[FM_NAME]; unsigned icon_typeahead_length; uint64_t icon_typeahead_ns;
     int band, band_x0, band_y0, band_x1, band_y1; unsigned band_modifiers;
     uint8_t *band_original; int band_capacity;

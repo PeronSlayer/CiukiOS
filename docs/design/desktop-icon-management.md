@@ -14,8 +14,8 @@ desktop selection model.
 
 The Windows 98 shell exposes Arrange Icons by Name, Type, Size, and Date,
 Auto Arrange, and Line Up Icons. CiukiOS already persists free icon coordinates
-in `desktop.cfg`; its current Arrange action only clears coordinates, while
-Line Up snaps existing icons to cells. G19 sorts the projected desktop folder
+in `desktop.cfg`; before fx-desk-arrange, Arrange only cleared coordinates,
+while Line Up snapped existing icons to cells. G19 sorts the projected desktop folder
 entries by those four keys, preserves fixed system icon order, makes automatic
 placement deterministic and persisted, and keeps manual placement available
 when automatic arrangement is off.
@@ -32,13 +32,15 @@ owner/protocol instead of writing shell state from clients.
 
 ## Decisions
 
-* Keep My Computer, My Documents, and Recycle Bin in their established order; sort
-  only user entries. Name and type compare case-insensitively, ties use the
-  original entry name, size and date use the FAT metadata already in the Files
-  model.
+* Packed placement keeps My Computer, My Documents, Network Neighborhood and
+  Recycle Bin ahead of user entries. Name and type compare case-insensitively,
+  ties use the original entry name; folders precede files, and size and date
+  use the FAT metadata already in the Files model. Cached installed links use
+  their source file size/date, collected by the existing worker.
 * Auto Arrange uses the existing icon grid, fills top-to-bottom then left-to-
-  right, persists its mode and generated positions, and is disabled by a manual
-  drag. Line Up only snaps current positions to the grid.
+  right, and persists its mode and generated positions. A manual drop keeps
+  Auto Arrange enabled and snaps back into the packed grid. Line Up only snaps
+  current positions to the grid.
 * Type-ahead selects the next case-insensitive prefix match, wrapping once;
   Home/End focus the first/last icon. Ctrl+A remains select-all.
 * Wallpaper paths are absolute and must name a readable supported image.
@@ -119,7 +121,7 @@ continues to use Background's existing toggle and the same transaction.
 `cfg_icon_position_at` and `cfg_icon_move_at` use keys of the form
 `icon.WIDTHxHEIGHT.HEXNAME=x,y`. The old unqualified key is a migration fallback
 for a name without a position at the selected resolution. Explicit Arrange
-clears only the selected resolution and records its layout marker, which
+replaces only the selected resolution and records its layout marker, which
 prevents old migration coordinates from reappearing there. Rename changes
 the name in every resolution profile and legacy position; deletion removes
 all profiles for that name. Other profiles and similarly suffixed names are
@@ -163,8 +165,9 @@ an old worker result cannot overwrite a newer choice.
 
 The file-model projection retains its established index offset of three;
 Network Neighborhood follows that projection, while installed Windows desktop
-links follow it with their own source-path position keys. All four system
-labels have stable identity keys independent of the displayed name. The
+links follow it with their own source-path position keys. Renamable system
+labels have stable identity keys independent of the displayed name; Recycle
+Bin keeps its default label and cannot be renamed. The
 approved Ciuki portrait and Tango icon family are retained; links add Tango's
 existing symbolic-link overlay.
 
@@ -180,3 +183,59 @@ Appearance reload compares spacing and font as visual state before rebuilding
 the icon layer. Resolution rename preflights a settings copy before renaming
 the file, so a full position budget cannot silently lose other resolutions.
 Refresh preserves remaining file selections and source identity while rescanning.
+
+## fx-desk-arrange reference check and decisions
+
+Research checked on 2026-10-29 before implementation:
+
+* The local Microsoft Windows 98 Resource Kit, `wrkappg_1.htm`, keyboard
+  shortcuts table, specifies F2 for Rename. `wrkc06_2.htm` describes the
+  Documents desktop folder's target separately from its shell presentation
+  and Start menu item rename. Neither section specifies the four desktop
+  sort keys or the complete system-icon sort precedence.
+* Microsoft's [list-view styles](https://learn.microsoft.com/en-us/windows/win32/controls/list-view-window-styles)
+  specify that `LVS_AUTOARRANGE` keeps icons arranged; sorting item indices
+  alone does not move icon-view positions. Explicit Arrange must therefore
+  replace the current resolution's coordinates as well as sort the entries.
+* Microsoft's [SetNameOf contract](https://learn.microsoft.com/en-us/windows/win32/api/shobjidl_core/nf-shobjidl_core-ishellfolder-setnameof)
+  distinguishes namespace display names and rename capability. Raymond Chen's
+  [Recycle Bin explanation](https://devblogs.microsoft.com/oldnewthing/20080317-00/?p=23103)
+  describes namespace rename as an opt-in implementation. This is supporting
+  API context, not a claim that modern API requirements describe Windows 98.
+* The contemporary vendor [D-Link DFE-528TX manual](https://files.dlink.com.au/products/DFE-528TX/Manuals/DFE-528TX_Manual.pdf),
+  Networking Basics / Computer Identification, shows Rename in Network
+  Neighborhood's Windows 95/98 context menu. Paul McFedries's
+  [Windows 98 Unleashed, May 1998](https://www.oreilly.com/library/view/windows-r-98-unleashed/0672312352/0672312352_ch13lev1sec2.html)
+  confirms that the desktop icons can be renamed except Recycle Bin.
+  [KnowWare's original Windows 98 manual](https://knowware.dk/down/get-going-with-windows-98.pdf),
+  printed page 26, documents inline caption rename and Line Up Icons.
+* Microsoft's *A+ Certification Training Kit*, lesson 1, Managing the Windows
+  95 File System ([archived text](https://flylib.com/books/en/2.893.1.104/1/)),
+  documents ascending name, type, size and modification date, with folders
+  first, and automatic packing after moves and additions. This adjacent
+  Windows 95 reference supplies the ordering direction; it does not establish
+  a different Windows 98 desktop system-icon precedence.
+
+Repository check: the submenu, `icon_sort`, `icon_auto_arrange` and hex-keyed
+label overrides already existed. Sort did not clear free positions; drop
+disabled Auto Arrange; Recycle Bin allowed rename; other views did not read
+the overrides. Keep the existing stable indices (Computer 0, Documents 1,
+Recycle Bin 2, files at 3 + model index). Packed placement puts Computer,
+Documents, Network Neighborhood and Recycle Bin before user entries, without
+renumbering filesystem targets. This preserves the existing Computer-before-
+Documents project decision; the sources above do not establish a universal
+Windows 98 order for those first two, so that historical detail needs lead
+confirmation. Pictures remains an ordinary folder, after system icons.
+
+My Computer, My Documents and Network Neighborhood accept F2/context rename;
+Recycle Bin does not. Empty input removes an override. Labels remain per user
+in the existing `desktop.cfg`; paths, launch arguments and position keys keep
+their identities. Files reads the same bounded label records on its existing
+scan worker and publishes captions to Places, its tree, Go menu, address and
+window title; no filesystem read is added to drawing or input handling.
+
+Packed coordinate writes are preflighted on a settings copy. An explicit sort
+or Auto Arrange toggle that cannot fit its complete profile leaves the old
+settings and mode intact and reports a recoverable error. The existing 16 KiB
+extra-key budget is unchanged. Existing free-layout positioning and Line Up
+remain covered by the desktop replay and its unchanged frame hashes.

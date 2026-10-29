@@ -5,6 +5,7 @@
 #include "fake_vfs.h"
 #include "../../../apps/desktop/media_notice.h"
 #include "../../../apps/files/app.h"
+#include "../../../apps/desktop/icon_labels.h"
 #include <assert.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -710,6 +711,59 @@ static void ntfs_warning_tests(void)
     files_destroy(&app); fake_assert_clean();
     puts("PASS Round 2 Files: refused NTFS volumes carry plain-language recovery/hibernation reasons, shown once in Computer");
 }
+static void system_name_tests(void)
+{
+    fake_image_tree(); memset(&app,0,sizeof(app));
+    memset(&media_state,0,sizeof(media_state)); app.media_read=read_media;
+    assert(!setenv("CIUKI_SETTINGS","/system/settings/user-desktop.cfg",1));
+    char computer_key[1540],documents_key[1540],text[4096];
+    assert(icon_label_key(computer_key,"/Computer") && icon_label_key(documents_key,"/Documents"));
+    int size=snprintf(text,sizeof(text),"%sWork & play\n%sMy work\n",computer_key,documents_key);
+    int node=fake_file("/system/settings/user-desktop.cfg",(unsigned)size,0);
+    memcpy(fake_nodes[node].data,text,(size_t)size);
+    du_init(&ui,pixels,WIDTH,HEIGHT); assert(!files_setup(&app,&ui,&fake_vfs,FM_COMPUTER));
+    assert(!strcmp(app.places[0].name,"Work & play") && !strcmp(app.tree[0].name,"Work & play"));
+    assert(!strcmp(app.go_items[6].label,"Work && play") && !strcmp(app.go_items[8].label,"My work"));
+    assert(!strcmp(du_get(&ui,100)->text,"Work & play"));
+    char display[FM_PATH]; assert(!files_display_path(&app,display,FM_COMPUTER) && !strcmp(display,"Work & play"));
+    struct du_event commit={.type=DU_EV_COMMIT,.id=100}; files_event(&ui,&commit,&app);
+    assert(!app.model.path[0] && !du_dialog_id(&ui));
+    assert(!files_navigate(&app,"/Documents"));
+    assert(!strcmp(app.places[2].name,"My work") && !strcmp(du_get(&ui,100)->text,"My work"));
+    assert(!files_display_path(&app,display,"/Documents") && !strcmp(display,"My work"));
+    files_event(&ui,&commit,&app); assert(!strcmp(app.model.path,"/Documents") && !du_dialog_id(&ui));
+    assert(!files_display_path(&app,display,"/Documents/Desktop") && !strcmp(display,"C:\\Documents\\Desktop"));
+    files_properties_path(&app,"/Documents"); tick();
+    assert(strstr(ui.dialog.title,"My work Properties") && strstr(ui.dialog.text,"My work"));
+    du_dialog_close(&ui);
+    /* An open Files window learns saved renames on its existing worker poll. */
+    size=snprintf(text,sizeof(text),"%sNotebook\n%sCurrent documents\n",computer_key,documents_key);
+    fake_nodes[node].meta.size=(uint64_t)size; memcpy(fake_nodes[node].data,text,(size_t)size);
+    struct du_event poll={.type=DU_EV_TICK,.id=2}; files_event(&ui,&poll,&app);
+    /* Media scans do not set reading: wait for publication explicitly. */
+    for (unsigned i=0;strcmp(app.system_labels[0],"Notebook") && i<5000;i++) {
+        struct timespec pause={.tv_sec=0,.tv_nsec=1000000}; nanosleep(&pause,NULL);
+        struct du_event tick_event={.type=DU_EV_TICK,.id=3}; files_event(&ui,&tick_event,&app);
+    }
+    if (strcmp(app.tree[0].name,"Notebook") || strcmp(app.places[0].name,"Notebook"))
+        fprintf(stderr,"system labels: saved=%s tree=%s place=%s address=%s reading=%d\n",app.system_labels[0],app.tree[0].name,app.places[0].name,du_get(&ui,100)->text,app.reading);
+    assert(!strcmp(app.tree[0].name,"Notebook") && !strcmp(app.places[0].name,"Notebook"));
+    assert(!strcmp(du_get(&ui,100)->text,"Current documents"));
+    fake_nodes[node].meta.size=0; files_event(&ui,&poll,&app);
+    for (unsigned i=0;app.system_labels[0][0] && i<5000;i++) {
+        struct timespec pause={.tv_sec=0,.tv_nsec=1000000}; nanosleep(&pause,NULL);
+        struct du_event tick_event={.type=DU_EV_TICK,.id=3}; files_event(&ui,&tick_event,&app);
+    }
+    assert(!app.system_labels[0][0] && !strcmp(app.places[0].name,"Computer") && !strcmp(app.tree[0].name,"Computer"));
+    /* Empty/reset records and another user's settings have independent defaults. */
+    files_destroy(&app); fake_assert_clean(); memset(&app,0,sizeof(app));
+    assert(!setenv("CIUKI_SETTINGS","/system/settings/other-desktop.cfg",1));
+    du_init(&ui,pixels,WIDTH,HEIGHT); assert(!files_setup(&app,&ui,&fake_vfs,FM_COMPUTER));
+    assert(!strcmp(app.places[0].name,"Computer") && !strcmp(app.tree[0].name,"Computer"));
+    assert(!strcmp(du_get(&ui,100)->text,"Computer"));
+    files_destroy(&app); fake_assert_clean(); assert(!unsetenv("CIUKI_SETTINGS"));
+    puts("PASS fx-desk-arrange Files names: shared persisted labels in Places/tree/Go/address/title formatter, live worker reload, per-user isolation");
+}
 int main(int argc, char **argv)
 {
     out_dir = argc > 1 ? argv[1] : NULL;
@@ -936,6 +990,7 @@ int main(int argc, char **argv)
     activate(303); assert(!strcmp(app.model.path,"/Documents/Desktop"));
     files_destroy(&app); fake_assert_clean();
     file_drag_tests();
+    system_name_tests();
     free(pixels);
     puts("PASS Files UI: script checkpoints 1-5, views, sorting, selection, context menus, properties, replace, Copy of, rename errors, tree, address, open, help/about");
     return 0;
