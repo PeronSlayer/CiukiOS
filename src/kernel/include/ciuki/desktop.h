@@ -60,6 +60,7 @@ void *desktop_buffer_alloc(uint32_t bytes, enum mm_owner);
 void desktop_buffer_free(void *, uint32_t bytes, enum mm_owner);
 
 int channel_pair(struct process *p, int32_t fds[2]);
+int channel_poll_events(struct desktop_description *d);
 bool channel_service_pending(struct process *, uint32_t service);
 bool channel_connected(const struct process *a, const struct process *b);
 int channel_send(struct process *p, int32_t fd, uint32_t message, uint32_t flags);
