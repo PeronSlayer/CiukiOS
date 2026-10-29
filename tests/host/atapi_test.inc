@@ -21,8 +21,12 @@ struct packet_fake {
     uint32_t read_cd_lba, read_cd_sectors; uint8_t play_start[3], play_end[3], pause_resume;
     /* fx-hlis5: the host's byte count limit (LBA mid/high), string bursts. */
     unsigned host_limit, bursts, burst_words;
+    /* Round 2: deterministic phase boundaries and mid-command failures. */
+    unsigned read_phase_bytes, fail_after_phase, failed_at, phase_errors;
+    void (*phase_complete)(struct packet_fake *);
 };
 static void packet_be32_put(uint8_t *p, uint32_t v) { p[0]=(uint8_t)(v>>24); p[1]=(uint8_t)(v>>16); p[2]=(uint8_t)(v>>8); p[3]=(uint8_t)v; }
+static uint8_t packet_data_byte(unsigned offset) { return (uint8_t)(offset*13+offset/2048); }
 /* Deterministic CD-DA sample pattern: sector and offset recoverable. */
 static uint8_t packet_cdda_byte(uint32_t lba, uint32_t offset) { return (uint8_t)(lba*31+offset*7+(offset>>8)); }
 static struct packet_fake *packet_running;
@@ -56,6 +60,16 @@ static void packet_out8(void *ctx, uint16_t port, uint8_t value)
 }
 static void packet_next(struct packet_fake *f)
 {
+    if (f->cdb[0]==0x28 && f->phase_index) {
+        if (f->phase_complete) {
+            void (*callback)(struct packet_fake *)=f->phase_complete;
+            f->phase_complete=0; callback(f);
+        }
+        if (f->fail_after_phase==f->phase_index) {
+            f->fail_after_phase=0; f->failed_at=f->pos; f->phase_errors++;
+            f->status=0x41; f->reason=3; return;
+        }
+    }
     if (f->phase_index==f->phase_count) { f->status=f->zero_status ? 0 : 0x40; f->reason=3; return; }
     f->phase_bytes=f->phases[f->phase_index++]; f->remaining=f->phase_bytes;
     f->status=0x48; f->reason=f->bad_direction ? 0 : 2;
@@ -180,10 +194,11 @@ static void packet_out16(void *ctx, uint16_t port, uint16_t value)
                 if (f->bad_iso && lba<=16 && 16<lba+blocks) memset(f->bytes+(16-lba)*2048,0,2048);
             } else {
                 CHECK(!f->cdb[2] && !f->cdb[3] && !f->cdb[4] && f->cdb[5]==7);
-                for (unsigned i=0;i<blocks*2048;i++) f->bytes[i]=(uint8_t)(i*13);
+                for (unsigned i=0;i<blocks*2048;i++) f->bytes[i]=packet_data_byte(i);
                 if (blocks==1) { f->phases[0]=1024; f->phases[1]=1024; f->phase_count=2; break; }
             }
             unsigned per=f->host_limit/2048*2048; CHECK(per);
+            if (f->read_phase_bytes) { CHECK(f->read_phase_bytes<=f->host_limit); per=f->read_phase_bytes; }
             f->phase_count=0;
             for (unsigned left=blocks*2048;left;) { unsigned n=left<per ? left : per; CHECK(f->phase_count<4); f->phases[f->phase_count++]=n; left-=n; }
             break;
@@ -289,10 +304,10 @@ static void test_packets(void)
 }
 /* fx-hlis5: with string I/O the data phases move as bursts of at most 1024
  * words (2048 bytes): odd, short and multi-phase transfers keep their bytes
- * and canaries; a 16-block READ(10) is one command in bursts. */
+ * and canaries; a 32-block READ(10) crosses the byte-count limit. */
 static void test_packet_bursts(void)
 {
-    struct packet_fake f; uint8_t p[12]={0x12}, data[32768+2]; uint32_t done;
+    struct packet_fake f; uint8_t p[12]={0x12}, data[65536+2]; uint32_t done;
     packet_fresh(&f,12); f.disk.channel.ops=&packet_burst_ops;
     for (unsigned i=0;i<sizeof(f.bytes);i++) f.bytes[i]=(uint8_t)(i*13);
     f.phases[0]=2; f.phases[1]=4; f.phases[2]=3; f.phase_count=3;
@@ -307,10 +322,135 @@ static void test_packet_bursts(void)
     unsigned issued=f.packets; f.bursts=f.burst_words=0; memset(data,0xa5,sizeof(data)); on_yield=packet_yield_check;
     CHECK(!d->block.read(&d->block,7,16,data+1)); on_yield=0;
     CHECK(f.packets==issued+1 && f.cdb[0]==0x28 && f.cdb[8]==16 && data[0]==0xa5 && data[32769]==0xa5);
-    for (unsigned i=0;i<32768;i++) if (data[1+i]!=(uint8_t)(i*13)) { CHECK(!"burst data"); break; }
+    for (unsigned i=0;i<32768;i++) if (data[1+i]!=packet_data_byte(i)) { CHECK(!"burst data"); break; }
     CHECK(f.bursts==16 && f.burst_words==1024 && d->read_blocks>=16);
+    /* 64 KiB cannot be encoded as one DRQ count. Test both the maximum
+     * legal phase (0xfffe + 2) and three smaller phases; neither the
+     * host limit nor offsets may wrap at 16 bits (ATA/ATAPI-6 8.23.4–5). */
+    const unsigned phase_sizes[]={0xfffe,32766};
+    for (unsigned test=0;test<2;test++) {
+        unsigned per=phase_sizes[test];
+        f.read_phase_bytes=per; issued=f.packets; f.bursts=f.burst_words=0;
+        memset(data,0xa5,sizeof(data)); on_yield=packet_yield_check;
+        CHECK(!d->block.read(&d->block,7,32,data+1)); on_yield=0;
+        CHECK(f.packets==issued+1 && f.cdb[0]==0x28 && f.cdb[7]==0 && f.cdb[8]==32);
+        CHECK(f.host_limit==0xfffe && f.phase_count==(per==0xfffe ? 2u : 3u) && f.phase_index==f.phase_count);
+        CHECK(data[0]==0xa5 && data[65537]==0xa5 && f.burst_words==1024);
+        CHECK(f.bursts==33);
+        for (unsigned i=0;i<65536;i++) if (data[1+i]!=packet_data_byte(i)) { CHECK(!"64 KiB burst data"); break; }
+    }
+    /* A completed phase followed by CHECK CONDITION must report no valid
+     * transfer, even though the transport buffer contains partial bytes. */
+    f.read_phase_bytes=32766; f.fail_after_phase=1; f.sense_key=3; f.asc=0x11;
+    uint8_t read32[12]={0x28,0,0,0,0,7,0,0,32};
+    memset(data,0xa5,sizeof(data)); done=123; issued=f.packets;
+    CHECK(atapi_packet(d,read32,sizeof(read32),data+1,65536,&done)==-FS_EIO);
+    CHECK(!done && f.failed_at==32766 && f.phase_errors==1 && f.packets==issued+2);
+    for (unsigned i=0;i<32766;i++) if (data[1+i]!=packet_data_byte(i)) { CHECK(!"partial phase data"); break; }
+    CHECK(data[0]==0xa5 && data[32767]==0xa5 && data[65537]==0xa5);
+    CHECK(!d->block.quarantined && !f.disk.channel.stopped);
     CHECK(!f.disk.channel.devices[0].block.read(&f.disk.channel.devices[0].block,0,1,peer));
-    puts("PASS fx-hlis5 ATAPI string-I/O bursts: odd/multi-phase canaries, 16-block READ(10) in 2048-byte bursts, peer intact");
+    puts("PASS fx-hlis5 ATAPI string-I/O bursts: odd/multi-phase canaries, 16/32-block READ(10), 0xfffe boundary, post-DRQ error with done=0, peer intact");
+}
+/* Exercise cache publication on the production packet transport, after one
+ * successful DRQ. No scheduling timing or second thread is required. */
+static struct {
+    struct block_cache *cache;
+    struct cache_block *reserved[32];
+    unsigned mode, count, captured, callbacks;
+} packet_fill;
+static unsigned packet_cached_blocks(struct block_cache *c,struct blkdev *d)
+{
+    unsigned count=0; /* Caller holds the cache lock. */
+    for (unsigned i=0;i<cache_hash_buckets(c);i++)
+        for (struct cache_block *b=*cache_hash_bucket(c,i);b;b=b->hash_next)
+            if (b->dev==d) count++;
+    return count;
+}
+static void packet_fill_phase(struct packet_fake *f)
+{
+    struct block_cache *c=packet_fill.cache;
+    struct blkdev *d=&f->disk.channel.devices[f->packet_unit].block;
+    packet_fill.callbacks++;
+    CHECK(f->phase_index==1 && f->pos && f->pos<packet_fill.count*2048);
+    fs_lock_take(&c->lock);
+    CHECK(packet_cached_blocks(c,d)==packet_fill.count);
+    for (unsigned i=0;i<cache_hash_buckets(c);i++)
+        for (struct cache_block *b=*cache_hash_bucket(c,i);b;b=b->hash_next) if (b->dev==d) {
+            CHECK(b->busy && b->sector_size==2048 && b->capacity==2048);
+            CHECK(packet_fill.captured<32);
+            if (packet_fill.captured<32) packet_fill.reserved[packet_fill.captured++]=b;
+        }
+    fs_lock_drop(&c->lock);
+    uint8_t sector[2048]; memset(sector,0xa5,sizeof(sector));
+    CHECK(cache_peek(c,d,7,sector)==-FS_EAGAIN);
+    for (unsigned i=0;i<sizeof(sector);i++) if (sector[i]!=0xa5) { CHECK(!"busy fill published"); break; }
+    if (packet_fill.mode==2 || packet_fill.mode==4) d->media_generation++;
+    if (packet_fill.mode==3 || packet_fill.mode==5) cache_invalidate(c,d,false);
+}
+static void test_packet_cache_fills(void)
+{
+    /* First prove 64 KiB read-ahead really issues one 32-sector command,
+     * then fail it after phase one. Also invalidate both run and single-
+     * sector (2048-byte) fills by media generation and by cache epoch. */
+    for (unsigned mode=0;mode<6;mode++) {
+        struct packet_fake f; packet_fresh(&f,12);
+        f.disk.channel.ops=&packet_burst_ops; f.responses=true;
+        struct ata_device *d=&f.disk.channel.devices[1];
+        CHECK(!atapi_ready(d));
+        struct block_cache c; CHECK(!cache_init(&c,2u*1024*1024));
+        CHECK(!cache_attach(&c,&d->block) && c.slots[1]/2>=32);
+        unsigned count=mode<2 ? 32 : mode<4 ? 2 : 1;
+        memset(&packet_fill,0,sizeof(packet_fill));
+        packet_fill.cache=&c; packet_fill.mode=mode; packet_fill.count=count;
+        f.read_phase_bytes=count==32 ? 32766 : 2048;
+        if (mode) f.phase_complete=packet_fill_phase;
+        if (mode==1) { f.fail_after_phase=1; f.sense_key=3; f.asc=0x11; }
+        uint32_t gen=d->block.media_generation, epoch=c.device_epoch;
+        unsigned issued=f.packets; uint64_t blocks=d->read_blocks;
+        uint8_t demand[2048+2]; memset(demand,0xa5,sizeof(demand));
+        CHECK(cache_read_ahead(&c,&d->block,7,count,demand+1)==(mode ? -FS_EIO : 0));
+        CHECK(demand[0]==0xa5 && demand[2049]==0xa5);
+        if (!mode) {
+            CHECK(f.host_limit==0xfffe && f.cdb[8]==32 && f.phase_count==3);
+            CHECK(f.packets==issued+1 && d->read_blocks==blocks+32);
+            for (unsigned i=0;i<2048;i++) CHECK(demand[i+1]==packet_data_byte(i));
+            uint8_t sector[2048];
+            for (unsigned block=0;block<32;block++) {
+                CHECK(!cache_peek(&c,&d->block,7+block,sector));
+                for (unsigned i=0;i<2048;i++) if (sector[i]!=packet_data_byte(block*2048+i)) { CHECK(!"cached run data"); break; }
+            }
+        } else {
+            CHECK(packet_fill.callbacks==1 && packet_fill.captured==count && !c.fills);
+            CHECK(f.packets==issued+(mode==1 ? 2u : 1u));
+            if (mode==1) CHECK(f.phase_errors==1 && f.failed_at==32766 && d->read_blocks==blocks);
+            CHECK(d->block.media_generation==gen+((mode==2 || mode==4) ? 1u : 0u));
+            CHECK((c.device_epoch!=epoch)==(mode==3 || mode==5));
+            for (unsigned i=0;i<sizeof(demand);i++) if (demand[i]!=0xa5) { CHECK(!"failed demand changed"); break; }
+            fs_lock_take(&c.lock); CHECK(!packet_cached_blocks(&c,&d->block));
+            for (unsigned bucket=0;bucket<cache_hash_buckets(&c);bucket++)
+                for (struct cache_block *b=*cache_hash_bucket(&c,bucket);b;b=b->hash_next)
+                    for (unsigned i=0;i<packet_fill.captured;i++) CHECK(b!=packet_fill.reserved[i]);
+            fs_lock_drop(&c.lock);
+            for (unsigned i=0;i<packet_fill.captured;i++) {
+                struct cache_block *b=packet_fill.reserved[i];
+                CHECK(!b->dev && !b->hash_next && !b->busy && !b->dirty && !b->pins);
+            }
+            uint8_t sector[2048]; memset(sector,0xa5,sizeof(sector));
+            for (unsigned block=0;block<count;block++) CHECK(cache_peek(&c,&d->block,7+block,sector)==-FS_EAGAIN);
+            for (unsigned i=0;i<sizeof(sector);i++) if (sector[i]!=0xa5) { CHECK(!"failed cache data published"); break; }
+            /* New/current generation must perform fresh I/O, then cache it. */
+            issued=f.packets;
+            CHECK(!cache_read_ahead(&c,&d->block,7,count,demand+1) && f.packets==issued+1);
+            CHECK(demand[0]==0xa5 && demand[2049]==0xa5);
+            for (unsigned i=0;i<2048;i++) CHECK(demand[i+1]==packet_data_byte(i));
+        }
+        CHECK(!d->block.quarantined && !f.disk.channel.stopped);
+        uint8_t peer[512]; CHECK(!f.disk.channel.devices[0].block.read(&f.disk.channel.devices[0].block,0,1,peer));
+        cache_destroy(&c);
+    }
+    memset(&packet_fill,0,sizeof(packet_fill));
+    puts("PASS fx-hlis5 optical cache fills: 64 KiB/three DRQs, post-DRQ error, demand untouched, reservations unhashed, media/epoch invalidation of 2048-byte and run fills, fresh retry");
 }
 static struct storage optical_store;
 static struct vfs_table optical_handles;

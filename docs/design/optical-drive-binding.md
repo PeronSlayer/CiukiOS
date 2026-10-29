@@ -283,6 +283,29 @@ wait for the record with the kept letter.
 
 ## fx-hlis5: ATAPI data bursts and ISO 9660 read runs (2026-10-28)
 
+Round-2 test decision: [ATA/ATAPI-6, sections 8.23.4–8.23.5.2](https://pdos.csail.mit.edu/6.828/2018/readings/hardware/ATA-d1410r3a.pdf)
+limits each DRQ byte count to a nonzero value no larger than the host limit
+or `0xfffe`; intermediate counts must be even. A 65536-byte request must
+therefore span multiple DRQs. Exercise both the exact `0xfffe` boundary
+and smaller phases, then inject CHECK CONDITION after a completed phase.
+At the cache boundary, failed or invalidated fills must leave the demand
+sector untouched and all reserved blocks unhashed. Independently change
+the media generation and invalidate the cache epoch during optical I/O;
+neither stale completion may be published. These are coverage additions;
+change production optical code only if a test demonstrates a defect.
+
+Round-2 evidence: `test_file_data_read_in_64k_runs` exercises ISO/VFS with
+enough optical cache slots for 32-sector reads and verifies the complete
+fixture manifest; the optical Python suite passes all 19 tests.
+`test_packet_bursts` covers `65534 + 2` and `32766 + 32766 + 4` byte DRQs,
+with canaries and one READ(10). `test_packet_cache_fills` uses the real
+ATAPI/cache stack for partial data then CHECK CONDITION, plus media and
+epoch invalidation in both a multi-sector run and a single 2048-byte fill.
+It checks unpublished data, unchanged demand bytes, unhashed reservations
+and fresh I/O on retry. All ATA harness assertions pass; its exit leak
+scan is blocked by the sandbox's ptrace restriction. No production optical
+change was needed. Exact commands and results are in the implementer report.
+
 QEMU image c02b6731 (KVM, PIIX3 IDE, CD as ATAPI) took about 45 s from
 `[win32] start` of the Half-Life disc's `AUTORUN.EXE` to its menu: about 550
 packet commands for about 1.3 MB, the CD worker at 72% of a CPU (`[cpu]

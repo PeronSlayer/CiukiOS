@@ -1508,7 +1508,7 @@ int main(int argc, char **argv)
         return failures ? 1 : 0;
     }
     test_t23_discovery(); test_discovery_topologies(); test_identify(); test_data(); test_multiple(); test_faults(); test_views(); test_claims(); test_probe_fixtures();
-    test_storage_cache_faults(); test_packets(); test_packet_bursts(); test_optical_lifecycle(); test_cd_audio(); test_media_cd();
+    test_storage_cache_faults(); test_packets(); test_packet_bursts(); test_packet_cache_fills(); test_optical_lifecycle(); test_cd_audio(); test_media_cd();
     test_dma(); test_f192(); test_constant_pic_masks(); test_emergency_recorder(); test_standby_timer(); test_profile_optical_binding();
     printf("ata/blkpart host tests: %s (waits=%u wakes=%u yields=%u)\n",
            failures ? "FAIL" : "PASS", schedules, wakes, yields);
