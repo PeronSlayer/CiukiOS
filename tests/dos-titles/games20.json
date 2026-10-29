@@ -382,7 +382,7 @@
         "directory": "build/downloads/dos-titles/hexen-installed",
         "files": []
       },
-      "terms_reviewed": false,
+      "terms_reviewed": true,
       "music": "opl"
     },
     {
