@@ -133,6 +133,24 @@ changed the system palette) and
 
 ## fx-w32idle: blocking message waits
 
+Round 3 applies the same event-driven contract to overlapping coordinators.
+Comparing the production session wake path with Microsoft's blocking
+[GetMessage](https://learn.microsoft.com/en-us/windows/win32/api/winuser/nf-winuser-getmessage)
+and [MsgWaitForMultipleObjects](https://learn.microsoft.com/en-us/windows/win32/api/winuser/nf-winuser-msgwaitformultipleobjects)
+contracts and Wine's
+[queue wait/recheck loop](https://github.com/wine-mirror/wine/blob/master/dlls/win32u/message.c)
+shows two private bookkeeping requirements: a session that prevents delivery
+invalidates the undelivered power turn's notification, and its power deadline
+cannot schedule a wake while that session retains priority. Once reset,
+cancelled or completed, the session releases priority; the usual wake step
+evaluates the deferred power turn against the refreshed clock and signals it
+once if still pending. Delivered power callbacks retain their existing state.
+Hive commit deadlines remain eligible during a hold; finite sessions keep
+their own deadlines. These are CiukiOS coordination decisions derived from
+the blocking model, rather than claims that Windows exposes the same private
+protocol. The original queue
+order, timer synthesis and round-2 race fixes remain unchanged.
+
 Round 2 refines the same blocking contract using the Microsoft references and
 Wine's [wait_message implementation](https://raw.githubusercontent.com/wine-mirror/wine/master/dlls/win32u/message.c):
 internal event processing retains an absolute application timeout and checks

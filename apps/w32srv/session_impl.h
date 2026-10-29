@@ -182,6 +182,13 @@ void wr_session_wake(struct wr_server *s)
     wr_end_advance(s);
     struct wr_end *e=s->ending;
     if (e && e->stage<2) {
+        /* A USER thread can consume its power latch while this session
+         * owns POLL. The undelivered power turn needs a fresh notification
+         * once the session releases priority, even if its old latch was
+         * already consumed. Delivered callbacks keep their existing state. */
+        struct wr_power *p=s->power;
+        if (p && p->at<p->count && !p->windows[p->at].delivered)
+            p->windows[p->at].notified=0;
         if (e->at<e->count && !e->windows[e->at].delivered && !e->windows[e->at].notified) {
             e->windows[e->at].notified=1;
             s->session_notify(e->windows[e->at].w.pid,e->windows[e->at].w.tid);
@@ -205,7 +212,9 @@ uint64_t wr_deadline(struct wr_server *s)
     struct wr_end *e=s->ending;
     if (e && e->stage<2 && e->at<e->count && e->deadline<deadline) deadline=e->deadline;
     struct wr_power *p=s->power;
-    if (p && p->at<p->count && p->deadline &&
+    /* Match wr_session_wake: a power deadline cannot advance while a
+     * session has priority. The release iteration evaluates it at s->now. */
+    if ((!e || e->stage==2) && p && p->at<p->count && p->deadline &&
         (!p->windows[p->at].delivered || p->event>1) && p->deadline<deadline) deadline=p->deadline;
     return deadline;
 }
