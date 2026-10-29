@@ -52,6 +52,53 @@ int main(void) {
     assert(!CALL(sem) && !sem.error && sem.result!=wait_handle);
     sem.handle=sem.result; sem.action=W32_OBJ_CLOSE; assert(!CALL(sem));
 
+    /* WinINet init_urlcache/free_urlcache: an auto-reset unload event and
+     * a semaphore initially at one, acquired during detach and released. */
+    struct ciuki_w32_object_args event={.header={1,sizeof(event),W32_OBJECT,0},
+        .action=W32_OBJ_CREATE,.type=W32_OBJ_EVENT};
+    assert(!CALL(event) && !event.error && event.result);
+    uint32_t event_handle=event.result;
+    sem.action=W32_OBJ_CREATE; sem.name=0; sem.value=1;
+    assert(!CALL(sem) && !sem.error && sem.result!=event_handle);
+    uint32_t semaphore_handle=sem.result;
+    event.action=W32_OBJ_SET; event.handle=event_handle;
+    assert(!CALL(event) && !event.error);
+    wait_handle=event_handle;
+    assert(!CALL(wait) && wait.result==W32_WAIT_OBJECT_0);
+    assert(CALL(wait)==-38); /* unsignalled infinite wait is not fabricated */
+    wait.timeout=0;
+    assert(!CALL(wait) && wait.result==W32_WAIT_TIMEOUT);
+    wait_handle=semaphore_handle; wait.timeout=UINT32_MAX;
+    assert(!CALL(wait) && wait.result==W32_WAIT_OBJECT_0);
+    sem.action=W32_OBJ_RELEASE; sem.handle=semaphore_handle;
+    assert(!CALL(sem) && !sem.error && !sem.result);
+    sem.action=W32_OBJ_CLOSE; assert(!CALL(sem));
+    event.action=W32_OBJ_CLOSE; assert(!CALL(event) && !h1_shared_live());
+    assert(CALL(event)==-38);
+
+    /* Named manual-reset events retain state/mode on reuse and share the
+     * namespace with semaphores/sections; close each retained reference. */
+    event.action=W32_OBJ_CREATE; event.name=(uint32_t)(uintptr_t)name;
+    event.value=1; event.maximum=1;
+    assert(!CALL(event) && !event.error && event.result!=event_handle);
+    event_handle=event.result;
+    event.value=0; event.maximum=0;
+    assert(!CALL(event) && event.error==183 && event.result==event_handle);
+    sem.action=W32_OBJ_CREATE; sem.name=event.name;
+    assert(!CALL(sem) && sem.error==6 && !sem.result);
+    wait_handle=event_handle;
+    assert(!CALL(wait) && wait.result==W32_WAIT_OBJECT_0);
+    assert(!CALL(wait) && wait.result==W32_WAIT_OBJECT_0);
+    event.handle=event_handle; event.action=W32_OBJ_RESET;
+    assert(!CALL(event) && !event.error);
+    wait.timeout=0;
+    assert(!CALL(wait) && wait.result==W32_WAIT_TIMEOUT);
+    event.action=W32_OBJ_PULSE; assert(CALL(event)==-38);
+    event.action=W32_OBJ_CLOSE;
+    assert(!CALL(event) && h1_shared_live()==1);
+    assert(!CALL(event) && !h1_shared_live());
+    assert(CALL(wait)==-38);
+
     struct ciuki_w32_section_args section={.header={1,sizeof(section),W32_SECTION,0},
         .kind=W32_SEC_PAGEFILE,.bytes=sizeof(pages),.protect=4u|0x08000000u,
         .name=(uint32_t)(uintptr_t)section_name};
@@ -67,7 +114,7 @@ int main(void) {
     assert(mappings==1 && !pages[0] && !pages[sizeof(pages)-1]);
     pages[0]=7; view.address=view.result; view.action=W32_VIEW_FLUSH;
     assert(!CALL(view) && !view.error && pages[0]==7);
-    sem.handle=section_handle; assert(!CALL(sem) && h1_shared_live()==1);
+    sem.action=W32_OBJ_CLOSE; sem.handle=section_handle; assert(!CALL(sem) && h1_shared_live()==1);
     assert(!CALL(sem) && h1_shared_live()==1); /* view retains storage after last close */
     assert(!CALL(view) && !view.error && pages[0]==7);
     view.action=W32_VIEW_UNMAP;
@@ -85,7 +132,16 @@ int main(void) {
     sem.action=W32_OBJ_CLOSE;
     for (unsigned i=0;i<8;i++) { sem.handle=handles[i]; assert(!CALL(sem)); }
     assert(!h1_shared_live());
+    event.action=W32_OBJ_CREATE; event.name=0;
+    for (unsigned i=0;i<8;i++) {
+        assert(!CALL(event) && !event.error); handles[i]=event.result;
+    }
+    assert(!CALL(event) && event.error==8 && !event.result);
+    event.action=W32_OBJ_CLOSE;
+    for (unsigned i=0;i<8;i++) { event.handle=handles[i]; assert(!CALL(event)); }
+    assert(!h1_shared_live());
     puts("PASS H1 semaphore/shared data: waits, overflow, generations, named reuse, map failure, view lifetime, teardown and unsupported services");
+    puts("PASS H1 events: WinINet attach/detach sequence, auto/manual reset, named reuse/collision, bounds and teardown");
     fflush(stdout);
     return 0;
 }

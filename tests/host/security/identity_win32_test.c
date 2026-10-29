@@ -42,6 +42,7 @@ static void meta_release_all(void) { for (unsigned i = 0; i < 64; i++) { free(me
 NTSTATUS w32_ciuki_start(struct w32_loader *, struct w32_peb *, const char *, const char *, const char *,
                          const char *, struct w32_module **);
 HRESULT W32API SHGetFolderPathW(HANDLE, int, HANDLE, DWORD, WCHAR *);
+BOOL W32API SHGetSpecialFolderPathW(HANDLE, WCHAR *, int, BOOL);
 static const struct w32_services services = {.alloc = meta_alloc, .free = meta_free};
 const struct w32_services w32_ciuki_services = {.alloc = meta_alloc, .free = meta_free};
 void w32_ldr_init(struct w32_loader *l, const struct w32_services *s, struct w32_peb *p)
@@ -153,14 +154,17 @@ DWORD W32API GetEnvironmentVariableA(const char *name, char *out, DWORD cap)
     memcpy(out, environment_profile, n + 1); return (DWORD)n;
 }
 static const char *hkcu_local_appdata; /* HKCU Shell Folders "Local AppData", or NULL */
+static const char *hkcu_internet_name, *hkcu_internet_path;
 LONG W32API RegOpenKeyExA(DWORD key, const char *path, DWORD o, DWORD a, DWORD *out)
 { (void)o; (void)a; CHECK(key == 0x80000001u && strstr(path, "Shell Folders")); *out = 7; return 0; }
 LONG W32API RegQueryValueExA(DWORD key, const char *name, void *r, DWORD *type, void *data, DWORD *n)
 {
     (void)r; CHECK(key == 7);
-    if (strcmp(name, "Local AppData") || !hkcu_local_appdata) return 2;
-    size_t len = strlen(hkcu_local_appdata) + 1; if (*n < len) return 234;
-    memcpy(data, hkcu_local_appdata, len); *n = (DWORD)len; *type = 1; return 0;
+    const char *value = !strcmp(name, "Local AppData") ? hkcu_local_appdata :
+        hkcu_internet_name && !strcmp(name, hkcu_internet_name) ? hkcu_internet_path : NULL;
+    if (!value) return 2;
+    size_t len = strlen(value) + 1; if (*n < len) return 234;
+    memcpy(data, value, len); *n = (DWORD)len; *type = 1; return 0;
 }
 LONG W32API RegCloseKey(DWORD key) { CHECK(key == 7); return 0; }
 HANDLE W32API GetProcessHeap(void) { return (HANDLE)1; }
@@ -254,10 +258,36 @@ int main(void)
         {11, "C:\\Windows\\Profiles\\u00000003\\Start Menu"}, {22, "C:\\WINDOWS\\Start Menu"}};
     for (unsigned i = 0; i < sizeof(xp) / sizeof(*xp); i++)
         CHECK(SHGetSpecialFolderPathA(0, path, xp[i].id, 0) && !strcmp(path, xp[i].path));
+    /* WinINet's three cache containers use private Windows 98 locations.
+     * Resolve and create through the production A/W facade and mkdir path. */
+    static const struct { int id; const char *name, *suffix; } internet[] = {
+        {32, "Cache", "Temporary Internet Files"}, {33, "Cookies", "Cookies"}, {34, "History", "History"}};
+    for (unsigned i = 0; i < sizeof(internet) / sizeof(*internet); i++) {
+        char expected[260];
+        snprintf(expected, sizeof(expected), "%s\\%s", environment_profile, internet[i].suffix);
+        unsigned before = ndirs;
+        CHECK(SHGetSpecialFolderPathA(0, path, internet[i].id, 0) && !strcmp(path, expected) && ndirs == before);
+        CHECK(SHGetSpecialFolderPathW(0, wide, internet[i].id, 1) && find(dirs, ndirs, expected) >= 0);
+        for (unsigned b = 0; b <= strlen(expected); b++) CHECK(wide[b] == (uint8_t)expected[b]);
+        hkcu_internet_name = internet[i].name;
+        hkcu_internet_path = "C:\\Windows\\Profiles\\u00000003\\Redirected";
+        CHECK(SHGetSpecialFolderPathA(0, path, internet[i].id, 1) && !strcmp(path, hkcu_internet_path));
+        hkcu_internet_path = "invalid";
+        CHECK(!SHGetSpecialFolderPathA(0, path, internet[i].id, 0) && last_error == 13);
+        hkcu_internet_name = hkcu_internet_path = NULL;
+    }
+    hkcu_internet_name = "Cache"; hkcu_internet_path = "C:\\WINDOWS\\TEMP\\Internet";
+    CHECK(!SHGetSpecialFolderPathA(0, path, 32, 1) && last_error == 5); /* no fallback after access denied */
+    hkcu_internet_name = hkcu_internet_path = NULL;
     /* Without a profile: the Windows 98 single-user layout; no CSIDL_PROFILE. */
     environment_profile[0] = 0;
     CHECK(SHGetSpecialFolderPathA(0, path, 28, 0) && !strcmp(path, "C:\\WINDOWS\\Application Data"));
     CHECK(!SHGetSpecialFolderPathA(0, path, 40, 0) && last_error == 87);
+    for (unsigned i = 0; i < sizeof(internet) / sizeof(*internet); i++) {
+        char expected[260]; snprintf(expected, sizeof(expected), "C:\\WINDOWS\\%s", internet[i].suffix);
+        CHECK(SHGetSpecialFolderPathA(0, path, internet[i].id, 0) && !strcmp(path, expected));
+    }
+    puts("PASS integ9 WinINet folders: A/W private creation, HKCU redirection, corrupt/denied refusal, Windows 98 defaults");
     /* A traversal in USERPROFILE is not a location. */
     snprintf(environment_profile, sizeof(environment_profile), "C:\\Windows\\Profiles\\..\\..\\Program Files");
     CHECK(!SHGetSpecialFolderPathA(0, path, 40, 0));
@@ -265,5 +295,6 @@ int main(void)
     admin_member = 0; CHECK(!IsUserAnAdmin() && membership_calls == 2);
     puts("H11 shell folders: CSIDL_PROFILE/LOCAL_APPDATA and the XP per-user Programs/Desktop/StartUp/Start Menu from the profile, HKCU value wins, CSIDL_COMMON_* machine, no-profile layout, IsUserAnAdmin membership PASS");
     printf("H11 Win32 facades: checks=%u PASS\n", checks);
+    fflush(stdout);
     return 0;
 }

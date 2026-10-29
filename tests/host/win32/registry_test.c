@@ -243,6 +243,18 @@ static void default_deletions(void)
         CHECK(!rpc(&s,10,W32R_CLOSE,folders,"","",0,NULL,0,0));
     }
     /* --- end sec-user-04 --- */
+    static const char *const internet[][2]={{"Cache","C:\\WINDOWS\\Temporary Internet Files"},
+        {"Cookies","C:\\WINDOWS\\Cookies"},{"History","C:\\WINDOWS\\History"}};
+    for (unsigned root=0;root<2;root++) for (unsigned user=0;user<2;user++) {
+        char path[128];snprintf(path,sizeof(path),"Software\\Microsoft\\Windows\\CurrentVersion\\Explorer\\%sShell Folders",user?"User ":"");
+        CHECK(!rpc(&s,10,W32R_OPEN,root ? W32R_HKCU : W32R_HKLM,path,"",0,NULL,0,0));uint32_t folders=r.key;
+        for (unsigned i=0;i<3;i++) {
+            CHECK(!get(&s,folders,internet[i][0]) && r.type==1 && r.data_bytes==(strlen(internet[i][1])+1)*2);
+            for (unsigned b=0;b<r.data_bytes/2;b++) CHECK(result[40+b*2]==(uint8_t)internet[i][1][b] && !result[41+b*2]);
+        }
+        if (root && !user) CHECK(!rpc(&s,10,W32R_DELETE_VALUE,folders,"","Cache",0,NULL,0,0));
+        CHECK(!rpc(&s,10,W32R_CLOSE,folders,"","",0,NULL,0,0));
+    }
     const char *providers = "Software\\Microsoft\\DirectPlay\\Service Providers";
     CHECK(!rpc(&s,10,W32R_OPEN,W32R_HKLM,providers,"",0,NULL,0,0));
     uint32_t provider_root = r.key;
@@ -260,6 +272,10 @@ static void default_deletions(void)
     CHECK(get(&s,key,"RegisteredOwner")==2);
     CHECK(rpc(&s,10,W32R_OPEN,key,"Run","",0,NULL,0,0)==2);
     CHECK(wr_defaults(&s,800,600,32));CHECK(!s.hive[0].dirty&&!s.hive[1].dirty);
+    CHECK(!rpc(&s,10,W32R_OPEN,W32R_HKCU,"Software\\Microsoft\\Windows\\CurrentVersion\\Explorer\\Shell Folders","",0,NULL,0,0));
+    uint32_t folders=r.key;CHECK(get(&s,folders,"Cache")==2);
+    CHECK(!rpc(&s,10,W32R_CLOSE,folders,"","",0,NULL,0,0));
+    puts("PASS integ9 registry: default cache/cookies/history in both folder families, persisted deletion preserved");
     CHECK(rpc(&s,10,W32R_OPEN,W32R_HKLM,
               "Software\\Microsoft\\DirectPlay\\Service Providers\\Internet TCP/IP Connection For DirectPlay",
               "",0,NULL,0,0)==2);
@@ -730,12 +746,12 @@ static void user_profiles(void)
     CHECK(!rpc(&s,10,W32R_OPEN,W32R_HKCU,"Seed","",0,NULL,0,0)); key=r.key;
     CHECK(!get(&s,key,"Marker") && r.data_bytes==6 && !memcmp(result+40,"alice",6));
     CHECK(!rpc(&s,10,W32R_CLOSE,key,"","",0,NULL,0,0));
-    const char *names[]={"Personal","Desktop","Programs","Start Menu","Favorites","AppData","Recent","SendTo","Templates"};
-    const char *suffix[]={"Documents","Documents\\Desktop","Start Menu\\Programs","Start Menu","Favorites","Application Data","Recent","SendTo","Templates"};
+    const char *names[]={"Personal","Desktop","Programs","Start Menu","Favorites","AppData","Recent","SendTo","Templates","Cache","Cookies","History"};
+    const char *suffix[]={"Documents","Documents\\Desktop","Start Menu\\Programs","Start Menu","Favorites","Application Data","Recent","SendTo","Templates","Temporary Internet Files","Cookies","History"};
     for (unsigned u=0;u<2;u++) {
         char path[160];snprintf(path,sizeof(path),"Software\\Microsoft\\Windows\\CurrentVersion\\Explorer\\%sShell Folders",u ? "User " : "");
         CHECK(!rpc(&s,10,W32R_OPEN,W32R_HKCU,path,"",0,NULL,0,0));key=r.key;
-        for (unsigned i=0;i<9;i++) {
+        for (unsigned i=0;i<sizeof(names)/sizeof(*names);i++) {
             CHECK(!get(&s,key,names[i]) && r.type==1);
             char expected[260];snprintf(expected,sizeof(expected),"C:\\Windows\\Profiles\\u00000001\\%s",suffix[i]);
             CHECK(r.data_bytes==(strlen(expected)+1)*2);
@@ -756,6 +772,8 @@ static void user_profiles(void)
     uint8_t redirected[sizeof(redirect)*2];
     for(unsigned i=0;i<sizeof(redirect);i++){redirected[i*2]=(uint8_t)redirect[i];redirected[i*2+1]=0;}
     CHECK(!rpc(&s,10,W32R_SET,key,"","Personal",1,redirected,sizeof(redirected),0));
+    CHECK(!rpc(&s,10,W32R_SET,key,"","History",1,redirected,sizeof(redirected),0));
+    CHECK(!rpc(&s,10,W32R_DELETE_VALUE,key,"","Cache",0,NULL,0,0));
     CHECK(!rpc(&s,10,W32R_DELETE_VALUE,key,"","Favorites",0,NULL,0,0));
     CHECK(!rpc(&s,10,W32R_CLOSE,key,"","",0,NULL,0,0));
     const char *user_key="Software\\Microsoft\\Windows\\CurrentVersion\\Explorer\\User Shell Folders";
@@ -766,6 +784,8 @@ static void user_profiles(void)
         CHECK(!wr_select_profile(&s,"Alice","/Windows/Profiles/u00000001"));
         CHECK(!rpc(&s,10,W32R_OPEN,W32R_HKCU,folder_key,"",0,NULL,0,0));key=r.key;
         CHECK(!get(&s,key,"Personal") && r.data_bytes==sizeof(redirected) && !memcmp(result+40,redirected,sizeof(redirected)));
+        CHECK(!get(&s,key,"History") && r.data_bytes==sizeof(redirected) && !memcmp(result+40,redirected,sizeof(redirected)));
+        CHECK(get(&s,key,"Cache")==2);
         CHECK(get(&s,key,"Favorites")==2);
         CHECK(!rpc(&s,10,W32R_CLOSE,key,"","",0,NULL,0,0));
         CHECK(rpc(&s,10,W32R_OPEN,W32R_HKCU,user_key,"",0,NULL,0,0)==2);

@@ -78,6 +78,8 @@ static const struct {unsigned id;const char *path;} folders[]={
  {23,"C:\\WINDOWS\\Start Menu\\Programs"},{24,"C:\\WINDOWS\\Start Menu\\Programs\\StartUp"},
  {25,"C:\\WINDOWS\\Desktop"},{26,"C:\\WINDOWS\\Application Data"},
  {28,"C:\\WINDOWS\\Application Data"},
+ {32,"C:\\WINDOWS\\Temporary Internet Files"},{33,"C:\\WINDOWS\\Cookies"},
+ {34,"C:\\WINDOWS\\History"},
  {35,"C:\\WINDOWS\\Application Data"},{36,"C:\\WINDOWS"},
  {37,"C:\\WINDOWS\\SYSTEM"},{38,"C:\\Program Files"},
  {40,0},
@@ -100,7 +102,9 @@ static const struct {unsigned id;const char *name,*suffix;} personal[]={
   {6,"Favorites","Favorites"},{7,"Startup","Start Menu\\Programs\\StartUp"},
   {8,"Recent","Recent"},{9,"SendTo","SendTo"},{11,"Start Menu","Start Menu"},
   {21,"Templates","Templates"},{26,"AppData","Application Data"},
-  {28,"Local AppData","Local Settings\\Application Data"},{40,0,""}};
+  {28,"Local AppData","Local Settings\\Application Data"},
+  {32,"Cache","Temporary Internet Files"},{33,"Cookies","Cookies"},
+  {34,"History","History"},{40,0,""}};
 /* USERPROFILE as an absolute drive path without "." or ".." components. */
 static int profile_root(char out[200])
 {

@@ -1,6 +1,7 @@
 /* SPDX-License-Identifier: LGPL-2.1-or-later
- * Single-process H1 services for Wine's DPLAYX_ConstructData: semaphores and
- * pagefile sections, with one whole-section view. No network or IPC service.
+ * Single-process H1 services for Wine's DPLAYX_ConstructData and WinINet's
+ * init_urlcache: events, semaphores and pagefile sections, with one
+ * whole-section view. No network or IPC service.
  * Unsupported operations remain ENOSYS; this is not the production kernel.
  * host.services owns every mapping, including after its last handle closes.
  */
@@ -58,13 +59,18 @@ static int32_t h1_shared_call(void *record,uint32_t size) {
     if (h->operation==W32_OBJECT && size==sizeof(struct ciuki_w32_object_args)) {
         struct ciuki_w32_object_args *a=record;
         a->error=0; a->result=0;
-        if (a->action==W32_OBJ_CREATE && a->type==W32_OBJ_SEMAPHORE) {
-            if (!a->maximum || a->maximum>0x7fffffffu || a->value>a->maximum) {
+        if (a->action==W32_OBJ_CREATE &&
+            (a->type==W32_OBJ_SEMAPHORE || a->type==W32_OBJ_EVENT)) {
+            if (a->type==W32_OBJ_SEMAPHORE &&
+                (!a->maximum || a->maximum>0x7fffffffu || a->value>a->maximum)) {
                 a->error=87; return 0;
             }
             struct h1_shared_object *o=h1_shared_create(a->type,a->name,&a->error);
             if (!o) return 0;
-            if (!a->error) { o->value=a->value; o->maximum=a->maximum; }
+            if (!a->error) {
+                o->value=a->type==W32_OBJ_EVENT ? !!a->value : a->value;
+                o->maximum=a->type==W32_OBJ_EVENT ? !!a->maximum : a->maximum;
+            }
             a->result=o->handle; return 0;
         }
         struct h1_shared_object *o=h1_shared_handle(a->handle);
@@ -77,14 +83,21 @@ static int32_t h1_shared_call(void *record,uint32_t size) {
             else { a->result=o->value; o->value+=a->value; }
             return 0;
         }
+        if ((a->action==W32_OBJ_SET || a->action==W32_OBJ_RESET) && o->type==W32_OBJ_EVENT) {
+            o->value=a->action==W32_OBJ_SET;
+            a->result=1; return 0;
+        }
     } else if (h->operation==W32_WAIT && size==sizeof(struct ciuki_w32_wait_args)) {
         struct ciuki_w32_wait_args *a=record;
         if (a->count!=1 || !a->handles || a->alertable || a->wake_mask || a->signal)
             return -38;
         struct h1_shared_object *o=h1_shared_handle(*(const uint32_t *)(uintptr_t)a->handles);
-        if (!o || o->type!=W32_OBJ_SEMAPHORE) return -38;
+        if (!o || (o->type!=W32_OBJ_SEMAPHORE && o->type!=W32_OBJ_EVENT)) return -38;
         a->error=0;
-        if (o->value) { o->value--; a->result=W32_WAIT_OBJECT_0; return 0; }
+        if (o->value) {
+            if (o->type==W32_OBJ_SEMAPHORE || !o->maximum) o->value--;
+            a->result=W32_WAIT_OBJECT_0; return 0;
+        }
         /* No scheduler: never pretend to complete a blocking wait. */
         if (a->timeout) return -38;
         a->result=W32_WAIT_TIMEOUT; return 0;

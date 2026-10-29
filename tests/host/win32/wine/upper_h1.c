@@ -17,7 +17,8 @@
  * " A "), and the w32srv atom directory (ATOM_ADD/FIND/DELETE/NAME, the
  * apps/w32srv/directory.c rules: integer atoms #1..#0xbfff, string atoms from
  * 0xc000, case-insensitive names, global or per-process scope, reference
- * counts), plus bounded semaphore/pagefile shared-data services for dplayx.
+ * counts), plus bounded event/semaphore/pagefile shared-data services for
+ * dplayx and wininet.
  * Every other kernel record is ENOSYS and every other w32srv
  * operation fails with 120; both are counted and reported. */
 #include "linux.h"
@@ -231,7 +232,8 @@ static int32_t h1_kernel(void *record, uint32_t size) {
         return status;
     }
 #endif
-    /* DPLAYX_ConstructData needs local shared data, not a network service.
+    /* DPLAYX_ConstructData and init_urlcache need local synchronization,
+     * not a network service.
      * Installer/game modes retain their existing service implementations. */
 #ifdef H1_INSTALLERS
     if (!installer_exec && !installer_fixture && !game_exec)

@@ -365,6 +365,7 @@ MAP['devctl'] = {
     **{n: ('own-session port owner (COM fd, generation)', 'tests/host/com_test.c::' + n) for n in (
         'COM_GET_OWNER', 'COM_GET_STATUS', 'COM_SET_LINE', 'COM_SET_MODEM')},
     'COM_GET_LINE': ('own-session port owner (COM fd, generation)', 'tests/host/dosvm_uart_seams.inc::COM_GET_LINE'),
+    'COM_CLEAR_ERRORS': ('own-session port owner (COM fd, generation)', 'tests/host/win32/hlutils/comm_test.c::COM_CLEAR_ERRORS::ClearCommError'),
     'COM_SET_MOUSE': (ADMIN + ' (machine input binding, k04)', 'tests/host/com_test.c::COM_SET_MOUSE'),
     'DISK_GET_INFO': (ANY + ' (copied geometry)', 'tests/host/libdisk_test.c::DISK_GET_INFO'),
     'DISK_LEASE_STATE': (ANY + ' (bounded lease state)', 'tests/host/proc/disk_test.c::DISK_LEASE_STATE'),

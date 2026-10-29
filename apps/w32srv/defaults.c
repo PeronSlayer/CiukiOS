@@ -70,6 +70,8 @@ int wr_defaults(struct wr_server *s,unsigned width,unsigned height,unsigned bpp)
         {"Personal","C:\\Documents"},{"Fonts","C:\\WINDOWS\\FONTS"},{"AppData","C:\\WINDOWS\\Application Data"},
         {"Recent","C:\\WINDOWS\\Recent"},{"SendTo","C:\\WINDOWS\\SendTo"},
         {"Favorites","C:\\WINDOWS\\Favorites"},{"Templates","C:\\WINDOWS\\Templates"},
+        {"Cache","C:\\WINDOWS\\Temporary Internet Files"},{"Cookies","C:\\WINDOWS\\Cookies"},
+        {"History","C:\\WINDOWS\\History"},
         {"Common Desktop","C:\\WINDOWS\\Desktop"},{"Common Programs","C:\\WINDOWS\\Start Menu\\Programs"}};
     for(unsigned root=0;root<2;root++)for(unsigned user=0;user<2;user++){
         char path[256];snprintf(path,sizeof(path),"%s%s\\Explorer\\%sShell Folders",root?".DEFAULT\\":"",cv,user?"User ":"");
