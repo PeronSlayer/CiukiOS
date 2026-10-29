@@ -174,10 +174,13 @@ class OpticalHarness(unittest.TestCase):
     @classmethod
     def tearDownClass(cls): cls.temp.cleanup()
 
-    def check_image(self,manifest,refused=False,sector_size=BLOCK,sectors=None):
+    def check_image(self,manifest,refused=False,sector_size=BLOCK,sectors=None,cache_bytes=None):
         before=iso_fixtures.sha(manifest['path'])
         args=[str(self.binary),manifest['path'],str(manifest.get('session',0)),str(sector_size)]
+        if cache_bytes is not None and sectors is None:
+            sectors=Path(manifest['path']).stat().st_size//sector_size-manifest.get('session',0)
         if sectors is not None: args.append(str(sectors))
+        if cache_bytes is not None: args.append(str(cache_bytes))
         result=subprocess.run(args,capture_output=True,text=True,env={**os.environ,'ASAN_OPTIONS':'detect_leaks=0','UBSAN_OPTIONS':'halt_on_error=1'})
         self.assertEqual(result.returncode,0,result.stdout+'\n'+result.stderr)
         self.assertEqual(before,iso_fixtures.sha(manifest['path']))
@@ -240,6 +243,19 @@ class RootRecords(OpticalHarness):
         # 200 data blocks plus descriptors and directories: one device read
         # per block was 206 reads; runs of three need about a third.
         self.assertLess(reads,100,counters)
+
+    def test_file_data_read_in_64k_runs(self):
+        """Round 2: a cache with enough optical slots reaches the full
+        32-sector limit through ISO/VFS, preserving every manifest hash."""
+        source=self.directory/'runs-64k-source'
+        source.mkdir()
+        (source/'BIG.BIN').write_bytes(bytes((i*7+i//2048)&255 for i in range(400*1024)))
+        a=iso_fixtures.generate_directory(source,self.directory/'runs-64k.iso',False)
+        output=self.check_image(a,cache_bytes=2*1024*1024)
+        counters=next(line for line in output.splitlines() if line.startswith('COUNTERS'))
+        fields=dict(field.split('=') for field in counters.split('\t')[1:])
+        self.assertEqual(int(fields['max_read_sectors']),32,counters)
+        self.assertLess(int(fields['reads']),20,counters)
 
     def test_python_root_quirks_and_nested_records(self):
         for joliet in (False,True):

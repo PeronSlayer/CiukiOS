@@ -241,6 +241,19 @@ that fails with `-ENOEXEC` is always explained to the user.
 
 ## The disc menu in a profile session (fx-hlis5, 2026-10-28)
 
+Round-2 review: `profile_temp_ready_at` must re-stat a component when
+`mkdir` reports `EEXIST`, accepting only a directory. A concurrent creator
+can put a regular file at that name between the initial stat and mkdir.
+[Linux man-pages mkdir](https://man7.org/linux/man-pages/man2/mkdir.2.html)
+documents `EEXIST` for an existing path, without promising a directory;
+[Microsoft GetTempPath](https://learn.microsoft.com/en-us/windows/win32/api/fileapi/nf-fileapi-gettemppatha)
+also leaves existence checks to the caller. Keep `ENOTDIR` (or a failed
+re-stat's errno) flowing to the existing desktop diagnostic. The host test
+injects both a competing directory and a regular file named `Temp` at mkdir.
+The regular-file race assertion fails before the fix. After the fix, the
+sanitized host fixture reaches its final PASS; its exit leak scan is blocked
+by the sandbox's ptrace restriction, so this is not a green sanitizer run.
+
 A QEMU run of image c02b6731 (integration 8) started the setup as a user
 does: AutoPlay, the disc's own menu `AUTORUN.EXE`, its install item. The
 kernel admitted `D:\setup.exe` and started the helper (`[win32] start

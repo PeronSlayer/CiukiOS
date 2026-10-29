@@ -2,10 +2,29 @@
  * (apps/desktop/profile.h profile_temp_ready_at), as Windows 2000/XP copy it
  * from Default User. Host directories stand for the profile volume.
  * SPDX-License-Identifier: MIT */
+#include <sys/stat.h>
+static int competing_mkdir(const char *path,mode_t mode);
+#define mkdir competing_mkdir
 #include "../../../apps/desktop/profile.h"
+#undef mkdir
 #include <assert.h>
 #include <fcntl.h>
 #include <unistd.h>
+static const char *race_path;
+static int race_directory, race_calls;
+static int competing_mkdir(const char *path,mode_t mode)
+{
+    if(race_path && !strcmp(path,race_path)) {
+        race_calls++;
+        if(race_directory) assert(!mkdir(path,mode));
+        else {
+            int fd=open(path,O_CREAT|O_WRONLY|O_EXCL,0600);
+            assert(fd>=0); assert(!close(fd));
+        }
+        errno=EEXIST; return -1;
+    }
+    return mkdir(path,mode);
+}
 static int directory(const char *path) { struct stat st; return !stat(path,&st) && S_ISDIR(st.st_mode); }
 int main(int argc,char **argv)
 {
@@ -32,6 +51,14 @@ int main(int argc,char **argv)
     int fd=open(blocked,O_CREAT|O_WRONLY|O_EXCL,0600); assert(fd>=0); close(fd);
     snprintf(other,sizeof(other),"%s/Blocked/Temp",root);
     errno=0; assert(profile_temp_ready_at(root,other)==-1 && errno==ENOTDIR);
+    /* Deterministic race: initial stat sees ENOENT, but another creator
+     * wins at mkdir. Only a competing directory is usable TEMP. */
+    assert(!rmdir(temp)); race_path=temp; race_directory=1;
+    assert(!profile_temp_ready_at(root,temp) && directory(temp) && race_calls==1);
+    assert(!rmdir(temp)); race_directory=0;
+    errno=0; assert(profile_temp_ready_at(root,temp)==-1 && errno==ENOTDIR && race_calls==2);
+    assert(!stat(temp,&st) && S_ISREG(st.st_mode));
+    race_path=NULL;
     puts("PASS profile Local Settings\\Temp created below the committed root, idempotent, confined (fx-hlis5)");
     return 0;
 }

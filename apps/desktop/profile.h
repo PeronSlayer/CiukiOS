@@ -61,7 +61,11 @@ static inline int profile_temp_ready_at(const char *root,const char *temp)
         if(path[i-1]=='/') continue;
         char c=path[i]; path[i]=0; struct stat st; int failed=0;
         if(!stat(path,&st)) { if(!S_ISDIR(st.st_mode)) { errno=ENOTDIR; failed=1; } }
-        else if(errno!=ENOENT || (mkdir(path,0700) && errno!=EEXIST)) failed=1;
+        else if(errno!=ENOENT) failed=1;
+        else if(mkdir(path,0700)) {
+            if(errno!=EEXIST || stat(path,&st)) failed=1;
+            else if(!S_ISDIR(st.st_mode)) { errno=ENOTDIR; failed=1; }
+        }
         path[i]=c; if(failed) return -1;
     }
     return 0;
