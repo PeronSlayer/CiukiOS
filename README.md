@@ -58,14 +58,14 @@ QEMU captures of the 1.0.1 alpha ([details](docs/screenshots/1.0.1-alpha/README.
   audio chips, several network cards. Hardware qualification is not finished.
 
 More detail, the plan and the evidence behind each item:
-[Overview](docs/overview.md) and [release notes](docs/release-notes-1.0-alpha.md).
+[Overview](docs/overview.md) and [release notes](docs/release-notes-1.0-beta.md).
 
 ## Status
 
-**1.0.1 alpha** on `main`: the first published alpha, with the fixes from the
-hardware trial of the earlier images (faster applications, NetSurf and DOS game
-video, a responsive Control Panel and storage) and new games. Hardware
-qualification on real machines continues ([Changelog](CHANGELOG.md)). The frozen
+**1.0.2 beta** on `main` (unreleased): kernel-enforced user accounts, expanded
+OpenGL and LAN support, DOS game and sound improvements, and Setup CD account
+provisioning. Publication requires acceptance and self-test qualification of the
+release image; hardware qualification continues ([Changelog](CHANGELOG.md)). The frozen
 0.8 line lives on the branch
 [`legacy-0.8`](https://github.com/PeronSlayer/CiukiOS/tree/legacy-0.8).
 

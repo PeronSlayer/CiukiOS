@@ -57,8 +57,8 @@ class VersionTests(unittest.TestCase):
     def test_documentation_carries_the_current_version_and_identity(self):
         """f2-97: the docs that describe the image and the About credits agree with config/version.json."""
         current = version.load()
-        notes = (ROOT / "docs/release-notes-1.0-alpha.md").read_text()
-        self.assertIn(f"{current['number'].rsplit('.', 1)[0]} {current['stage'].title()}", notes)   # "1.0 Alpha"
+        notes = (ROOT / f"docs/release-notes-1.0-{current['stage']}.md").read_text()
+        self.assertIn(f"{current['number'].rsplit('.', 1)[0]} {current['stage'].title()}", notes)
         for name in ("README.md", "docs/build-and-run.md"):
             self.assertIn(current["display"], (ROOT / name).read_text(), name)
         # No stale pre-alpha version in the sections that describe the build.

@@ -45,7 +45,7 @@ def write_json(path, value):
     path.write_text(json.dumps(value), encoding="utf-8")
 
 
-def fixture(root):
+def fixture(root, stage="alpha"):
     directory = root / "build/f0"
     directory.mkdir(parents=True)
     volume = root / "fixture.fat"
@@ -70,7 +70,7 @@ def fixture(root):
         stream.seek(2048 * 512)
         shutil.copyfileobj(source_stream, stream)
     volume.unlink()
-    disk = {"schema_version": 1, "version": "1.0.0 alpha", "git_revision": COMMIT,
+    disk = {"schema_version": 1, "version": f"1.0.0 {stage}", "git_revision": COMMIT,
             "git_dirty": False, "image": image.name, "image_sha256": release.digest(image),
             "payloads": [{"path": n, "size": len(b), "sha256": hashlib.sha256(b).hexdigest()}
                          for n, b in payloads.items()]}
@@ -92,14 +92,14 @@ def fixture(root):
               "components": [{"id": "system", "class": "copyleft", "paths": ["/system/"],
                               "archives": ["CIUKIOS.ZIP", "WINE100.TXZ"],
                               "licence_files": ["third_party/wine/COPYING.LIB"]}]}
-    blobs = {"config/version.json": json.dumps({"version": "1.0.0", "stage": "alpha"}).encode(),
+    blobs = {"config/version.json": json.dumps({"version": "1.0.0", "stage": stage}).encode(),
              "config/cd-components.json": json.dumps(config).encode(),
              "config/wine-pin.json": json.dumps({"archive_sha256": release.digest(wine)}).encode(),
              "config/wine-upper.json": b"{}\n", "scripts/win32/recipe.py": b"# fixture recipe\n",
              "third_party/wine/patches/0001.patch": b"fixture patch\n",
              "third_party/wine/SOURCE-OFFER.txt": b"fixture source offer\n",
              "third_party/wine/COPYING.LIB": b"fixture component notice\n",
-             "CHANGELOG.md": "# Changelog\n\n## 1.0.0 alpha (unreleased)\n\nFixture release.\n\n## 0.9.2\nOld.\n".encode()}
+             "CHANGELOG.md": f"# Changelog\n\n## 1.0.0 {stage} (unreleased)\n\nFixture release.\n\n## 0.9.2\nOld.\n".encode()}
     source_files = {}
     with zipfile.ZipFile(tree / "SOURCES/CIUKIOS.ZIP", "w") as archive:
         for name, data in blobs.items():
@@ -110,6 +110,9 @@ def fixture(root):
             entry.external_attr = 0o100644 << 16
             archive.writestr(entry, data)
             source_files[entry.filename] = ("100644", hashlib.sha1(f"blob {len(data)}\0".encode() + data).hexdigest())
+    # Release text is read from the built commit, outside this fixture's source-tree includes.
+    for channel in ("alpha", "beta"):
+        blobs[f"docs/release-notes-1.0-{channel}.md"] = f"# Fixture {channel} notes\n\n{channel} limitations.\n".encode()
     for package in release.build_games_disk.PACKAGES:
         blobs[f"third_party/games/{package}/UPSTREAM.json"] = json.dumps(
             {"install": {"files": []}, "license_files": []}).encode()
@@ -235,12 +238,16 @@ class StableReleaseTests(unittest.TestCase):
             if args[:2] == ("git", "tag"):
                 if "-alpha." in args[-1]:
                     return "v1.0.0-alpha.1\nv0.9.2-alpha.8"
+                if "-beta." in args[-1]:
+                    return "v1.0.0-beta.1\nv0.9.2-beta.8"
                 return "v1.0.0-stable.1\nv0.9.2-stable.8"
             if args[0] == "gh":
                 self.network.append(args)
                 if args[1] == "api":
                     if "-alpha." in args[-1]:
                         return '[{"ref": "refs/tags/v1.0.0-alpha.2"}]'
+                    if "-beta." in args[-1]:
+                        return '[{"ref": "refs/tags/v1.0.0-beta.2"}]'
                     return '[{"ref": "refs/tags/v1.0.0-stable.2"}]'
                 return "https://example.invalid/synthetic-release"
             return original_command(*args, root=root)
@@ -595,6 +602,52 @@ class StableReleaseTests(unittest.TestCase):
         self.assertIn("--prerelease", publish)
         self.assertEqual(publish[publish.index("--title") + 1], "CiukiOS 1.0.0 alpha 3")
         self.assertIn("pre-release", (destination / "RELEASE-NOTES.md").read_text())
+        self.assertIn("Fixture alpha notes", (destination / "RELEASE-NOTES.md").read_text())
+        self.assertNotIn("Fixture beta notes", (destination / "RELEASE-NOTES.md").read_text())
+
+    def test_beta_stage_dry_run_and_publication(self):
+        with tempfile.TemporaryDirectory(dir=self.root, prefix="beta-") as temporary:
+            root = Path(temporary)
+            disk, _, _, blobs, source_files = fixture(root, "beta")
+            with patch.object(release, "git_bytes", lambda root, commit, name: blobs[name]), \
+                 patch.object(release, "source_files", lambda *args: deepcopy(source_files)):
+                with self.assertRaisesRegex(release.Refusal, "not the alpha channel"):
+                    release.inputs(root, "1.0.0", disk["image_sha256"], "alpha")
+                self.assertIn("Fixture beta notes", release.inputs(
+                    root, "1.0.0", disk["image_sha256"], "beta")["channel_notes"])
+                with io.StringIO() as output, redirect_stdout(output):
+                    release.release(root, "1.0.0", disk["image_sha256"], True, "beta")
+                    printed = output.getvalue()
+                self.assertFalse(self.network)
+                self.assertIn('"tag": "v1.0.0-beta.2"', printed)
+                self.assertIn("--prerelease", printed)
+                with io.StringIO() as output, redirect_stdout(output):
+                    destination = release.release(root, "1.0.0", disk["image_sha256"], False, "beta")
+                self.assertEqual(destination.name, "v1.0.0-beta.3")
+                self.assertIn("--prerelease", self.network[-1])
+                self.assertIn("Fixture beta notes", (destination / "RELEASE-NOTES.md").read_text())
+                self.assertNotIn("Fixture alpha notes", (destination / "RELEASE-NOTES.md").read_text())
+
+    def test_notes_come_from_built_commit_and_stable_output_is_unchanged(self):
+        with patch.object(release, "git_bytes", side_effect=lambda root, commit, name: self.blobs[name]) as read:
+            info = release.inputs(self.root, "1.0.0", self.disk["image_sha256"], "alpha")
+            read.assert_any_call(self.root, COMMIT, "docs/release-notes-1.0-alpha.md")
+        info.update(title="fixture", tag="v1.0.0-alpha.1")
+        self.assertIn("Fixture alpha notes", release.notes(info))
+        stable = self.info()
+        self.assertEqual(stable["channel_notes"], "")
+        stable.update(title="fixture", tag="v1.0.0-stable.1")
+        legacy = dict(stable)
+        del legacy["channel_notes"]
+        self.assertEqual(release.notes(stable), release.notes(legacy))
+        self.assertNotIn("Fixture alpha notes", release.notes(stable))
+        with self.assertRaisesRegex(release.Refusal, "not the beta channel"):
+            release.inputs(self.root, "1.0.0", self.disk["image_sha256"], "beta")
+        blobs = dict(self.blobs)
+        blobs["docs/release-notes-1.0-alpha.md"] = b" \n"
+        with patch.object(release, "git_bytes", lambda root, commit, name: blobs[name]):
+            with self.assertRaisesRegex(release.Refusal, "empty alpha release notes"):
+                release.inputs(self.root, "1.0.0", self.disk["image_sha256"], "alpha")
 
     def test_alpha_title_has_no_number_for_first_release(self):
         self.assertEqual(release.release_title("1.0.0", "alpha", 1), "CiukiOS 1.0.0 alpha")
@@ -605,11 +658,8 @@ class StableReleaseTests(unittest.TestCase):
     def test_channel_refusals(self):
         with self.assertRaisesRegex(release.Refusal, "channel must be"):
             release.inputs(self.root, "1.0.0", self.disk["image_sha256"], "nightly")
-        blobs = dict(self.blobs)
-        blobs["config/version.json"] = json.dumps({"version": "1.0.0", "stage": "beta"}).encode()
-        with patch.object(release, "git_bytes", lambda root, commit, name: blobs[name]):
-            with self.assertRaisesRegex(release.Refusal, "not the alpha channel|differs from built"):
-                release.inputs(self.root, "1.0.0", self.disk["image_sha256"], "alpha")
+        with self.assertRaisesRegex(release.Refusal, "not the beta channel"):
+            release.inputs(self.root, "1.0.0", self.disk["image_sha256"], "beta")
 
     def test_generated_public_files_name_no_pc_models(self):
         destination = None
@@ -630,11 +680,13 @@ class StableReleaseTests(unittest.TestCase):
         self.assertIsNotNone(release.PUBLIC_FORBIDDEN.search("Armada E500"))
 
     def test_real_changelog_and_public_doc_name_no_pc_models(self):
-        section = release.changelog_section((ROOT / "CHANGELOG.md").read_text(), "1.0.1")
-        self.assertIn("Known issues", section)
-        self.assertIsNone(release.PUBLIC_FORBIDDEN.search(section))
-        doc = (ROOT / "docs/release-notes-1.0-alpha.md").read_text()
-        self.assertIsNone(release.PUBLIC_FORBIDDEN.search(doc))
+        for version in ("1.0.1", "1.0.2"):
+            section = release.changelog_section((ROOT / "CHANGELOG.md").read_text(), version)
+            self.assertIn("Known issues", section)
+            self.assertIsNone(release.PUBLIC_FORBIDDEN.search(section))
+        for channel in ("alpha", "beta"):
+            doc = (ROOT / f"docs/release-notes-1.0-{channel}.md").read_text()
+            self.assertIsNone(release.PUBLIC_FORBIDDEN.search(doc))
 
     def test_cli_refuses_without_approval(self):
         result = run(sys.executable, ROOT / "scripts/release_stable.py", "--help")
