@@ -58,6 +58,7 @@ struct files_app {
     uint32_t ciuki16[256], ciuki32[1024]; int ciuki;
     int width, height, split, test, stage, rename_index, rename_new, job_active, close_pending, context_folder, tree_dirty;
     char note[160], rename_original[FM_NAME];
+    char system_labels[2][64], system_menu_labels[2][128];
     struct du_menu menus[6];
     struct du_menu_item tools_items[2];
     struct fm_search_query find_edit;
@@ -172,6 +173,7 @@ void files_find(struct files_app *);
 void files_launch_failed(struct files_app *, int error);
 void files_layout(struct files_app *);
 void files_update(struct files_app *);
+int files_display_path(const struct files_app *, char *, const char *);
 int files_navigate(struct files_app *, const char *);
 void files_size_text(char *out, size_t n, uint64_t bytes);
 int files_maintenance_open(struct files_app *, unsigned drive, int convert);

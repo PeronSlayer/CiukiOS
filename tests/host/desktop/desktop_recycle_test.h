@@ -43,7 +43,8 @@ static void recycle_desktop_cases(void)
     /* Open and Properties launch Files at the bin. */
     d.sh.icon_selected=2; d.sh.icons[2].selected=1; program[0]=0; launched[0]=0; key(DU_KEY_ENTER);
     assert(!strcmp(program,"files") && !strcmp(launched,"Recycle Bin"));
-    bin_menu(); key(DU_KEY_DOWN); key(DU_KEY_DOWN); key(DU_KEY_DOWN); program[0]=0; key(DU_KEY_ENTER);   /* Empty is disabled: Down skips it */
+    bin_menu(); assert(menu_flags("Rename")==SH_ITEM_DISABLED);
+    key(DU_KEY_DOWN); key(DU_KEY_DOWN); program[0]=0; key(DU_KEY_ENTER);   /* Empty and Rename are disabled. */
     assert(!strcmp(program,"files") && !strcmp(launched,"recycle:properties"));
     d.sh.icons[2].selected=0;
 

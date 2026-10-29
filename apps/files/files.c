@@ -128,7 +128,7 @@ static void idle(void *arg)
     int status;
     while (waitpid(-1, &status, WNOHANG) > 0) { }
     char display[FM_PATH], title[DESK_TITLE_MAX + 1];
-    if (!fm_display_path(display, m->app.model.path)) {
+    if (!files_display_path(&m->app,display, m->app.model.path)) {
         snprintf(title, sizeof(title), "%s - %.*s", m->app.model.searching ? "Find" : "Files", (int)sizeof(title) - 9, display);
         for (unsigned i = 0; title[i]; i++) if ((unsigned char)title[i] < 32 || (unsigned char)title[i] > 126) title[i] = '?';
         if (strcmp(title, m->title) && !du_window_set_title(&m->window, title)) strcpy(m->title, title);
@@ -359,7 +359,7 @@ int main(int argc, char **argv)
     window_size(&width, &height);
     if (test) { width = 760; height = 520; }
     char display[FM_PATH], title[DESK_TITLE_MAX + 1];
-    if (fm_display_path(display, path)) { free(m); return 2; }
+    if (files_display_path(&m->app,display, path)) { free(m); return 2; }
     snprintf(title, sizeof(title), "Files - %.*s", (int)sizeof(title) - 9, display);
     for (unsigned i = 0; title[i]; i++) if ((unsigned char)title[i] < 32 || (unsigned char)title[i] > 126) title[i] = '?';
     strcpy(m->title, title);
