@@ -189,3 +189,4 @@ Documenti di design, validazione, fonti esterne.
 | [Decisioni del proprietario per il lavoro continuo verso la 1.0 Beta](2026-10-28-01-decisioni-proprietario-verso-beta.md) | 28 ottobre 2026 | decisione |
 | [Integrazione 7 su main e primo avvio degli account sul profilo lento](2026-10-28-02-integrazione-7-primo-avvio-account.md) | 28 ottobre 2026 | integrazione |
 | [Integrazioni 8 e 9 su main, scadenza di avvio della sessione (K8-8), versione della Beta](2026-10-29-01-integrazioni-8-9-scadenza-avvio-sessione.md) | 29 ottobre 2026 | integrazione, decisione |
+| [Versione della Beta: 1.0.1 beta al posto di 1.0.2](2026-10-29-02-versione-beta-1-0-1.md) | 29 ottobre 2026 | decisione |

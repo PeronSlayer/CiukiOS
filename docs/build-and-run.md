@@ -165,9 +165,9 @@ PASS* with their directive). Rules and predicates:
 ## Version
 
 `config/version.json` is the single source of the CiukiOS version
-(`1.0.2`, stage `beta`). `scripts/ciuki_version.py` validates it and:
+(`1.0.1`, stage `beta`). `scripts/ciuki_version.py` validates it and:
 
-- `scripts/build_kernel.py` passes `-DCIUKI_VERSION="1.0.2 beta"` to every
+- `scripts/build_kernel.py` passes `-DCIUKI_VERSION="1.0.1 beta"` to every
   kernel object and records `version` in `build/f0/build-clock.json`. The kernel
   logs `CiukiOS <version>` on the line after the `Ciuki VMM F0 build <id> - CiukiOS`
   banner (that banner is parsed by `scripts/test/physical.py` and is unchanged)

@@ -680,8 +680,8 @@ class StableReleaseTests(unittest.TestCase):
         self.assertIsNotNone(release.PUBLIC_FORBIDDEN.search("Armada E500"))
 
     def test_real_changelog_and_public_doc_name_no_pc_models(self):
-        for version in ("1.0.1", "1.0.2"):
-            section = release.changelog_section((ROOT / "CHANGELOG.md").read_text(), version)
+        for stage in ("alpha", "beta"):
+            section = release.changelog_section((ROOT / "CHANGELOG.md").read_text(), "1.0.1", stage)
             self.assertIn("Known issues", section)
             self.assertIsNone(release.PUBLIC_FORBIDDEN.search(section))
         for channel in ("alpha", "beta"):
@@ -716,6 +716,11 @@ class SmallReleaseTests(unittest.TestCase):
                          "## 1.0.0 alpha\nnew")
         with self.assertRaises(release.Refusal):
             release.changelog_section("## 1.0.01\nwrong", "1.0.0")
+        both = "## 1.0.1 beta — unreleased\nb\n## 1.0.1 alpha — 2026-10-25\na"
+        self.assertEqual(release.changelog_section(both, "1.0.1", "alpha"), "## 1.0.1 alpha — 2026-10-25\na")
+        self.assertEqual(release.changelog_section(both, "1.0.1", "beta"), "## 1.0.1 beta — unreleased\nb")
+        with self.assertRaises(release.Refusal):
+            release.changelog_section(both, "1.0.1", "stable")
 
     def test_push_prereleases_remain_suspended(self):
         policy = json.loads((ROOT / "config/release-policy.json").read_text())

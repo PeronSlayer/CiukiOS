@@ -62,7 +62,7 @@ More detail, the plan and the evidence behind each item:
 
 ## Status
 
-**1.0.2 beta** on `main` (unreleased): kernel-enforced user accounts, expanded
+**1.0.1 beta** on `main` (unreleased): kernel-enforced user accounts, expanded
 OpenGL and LAN support, DOS game and sound improvements, and Setup CD account
 provisioning. Publication requires acceptance and self-test qualification of the
 release image; hardware qualification continues ([Changelog](CHANGELOG.md)). The frozen

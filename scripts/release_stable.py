@@ -316,7 +316,7 @@ def inputs(root: Path, version: str, approved_sha: str, channel: str = "stable")
     verify_file(iso, {"sha256": cd["iso"]["sha256"], "size": cd["iso"]["bytes"]})
     config = git_json(root, commit, "config/cd-components.json")
     changelog = git_bytes(root, commit, "CHANGELOG.md").decode()
-    section = changelog_section(changelog, version)
+    section = changelog_section(changelog, version, None if channel == "stable" else channel)
     channel_notes = ""
     if channel in ("alpha", "beta"):
         channel_notes = git_bytes(root, commit, f"docs/release-notes-1.0-{channel}.md").decode()
@@ -328,13 +328,15 @@ def inputs(root: Path, version: str, approved_sha: str, channel: str = "stable")
             "channel_notes": channel_notes}
 
 
-def changelog_section(changelog: str, version: str) -> str:
+def changelog_section(changelog: str, version: str, stage: str | None = None) -> str:
+    # One version can carry an alpha and a beta section (SemVer pre-releases of the same version).
     sections = re.split(r"(?m)^(?=## )", changelog)
+    tail = r"\]?\s+" + re.escape(stage) + r"\b" if stage else r"(?=[\]\s(]|$)"
     for section in sections:
         heading = section.splitlines()[0] if section else ""
-        if re.match(r"## \[?" + re.escape(version) + r"(?=[\]\s(]|$)", heading):
+        if re.match(r"## \[?" + re.escape(version) + tail, heading):
             return section.strip()
-    raise Refusal(f"CHANGELOG has no section for {version}")
+    raise Refusal(f"CHANGELOG has no section for {version}{' ' + stage if stage else ''}")
 
 
 def shareware_hashes(root: Path, commit: str) -> set[str]:

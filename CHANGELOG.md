@@ -1,6 +1,6 @@
 # Changelog
 
-## 1.0.2 beta — unreleased
+## 1.0.1 beta — unreleased
 
 Changes since 1.0.1 alpha. CiukiOS remains dedicated to Ciuki: *Classic computing, one woof at a time.* Release-image acceptance and self-test qualification are required before publication; hardware qualification continues.
 
