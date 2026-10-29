@@ -273,6 +273,7 @@ MAP = {
         'CIUKI_SYSTEM_SETTING_PERFORMANCE': (ADMIN, SVC),
         'CIUKI_SYSTEM_SETTING_ACCEL_RETRY': (ADMIN, SVC),
         'CIUKI_SYSTEM_SETTING_CLOCK': (ADMIN + ' (sec-k08, S2-5)', SVC),
+        'CIUKI_SYSTEM_SETTING_IPX_FRAME': (ADMIN, SVC + '::test_settings'),
         'CIUKI_SYSTEM_SETTING_POWER': (ADMIN + ' (sec-k08, U4-6)', SVC),
     },
 }

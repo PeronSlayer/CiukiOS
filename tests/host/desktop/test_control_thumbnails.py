@@ -64,6 +64,7 @@ class ControlThumbnailTests(unittest.TestCase):
                  patch.object(image, "desktop_license_payloads", return_value={}), \
                  patch.object(image, "font_payloads", return_value=({}, {})), \
                  patch.object(image, "sound_payloads", return_value=({}, {})), \
+                 patch.object(image, "firmware_payloads", return_value={}), \
                  patch.object(image, "wallpaper_cache_payloads", return_value=({}, {})), \
                  patch.object(image, "wallpaper_thumbnail_payloads", return_value=(first, record)), \
                  patch.object(image, "sha256", return_value="fixture"):

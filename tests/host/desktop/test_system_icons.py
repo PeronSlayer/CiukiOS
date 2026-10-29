@@ -110,6 +110,7 @@ class SystemIconTests(unittest.TestCase):
              patch.object(image, 'wallpaper_cache_payloads', return_value=({}, {})), \
              patch.object(image, 'wallpaper_thumbnail_payloads', return_value=({}, {})), \
              patch.object(image, 'sound_payloads', return_value=({}, {})), \
+             patch.object(image, 'firmware_payloads', return_value={}), \
              patch.object(image, 'sha256', return_value='fixture'):
             sources, directories, _ = image.desktop_payloads()
         staged = {path[len('/system/icons/'):]: source for path, source in sources.items() if path.startswith('/system/icons/')}

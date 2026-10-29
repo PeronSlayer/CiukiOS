@@ -1629,7 +1629,7 @@ static const struct expectation expectations[] = {
     {"constant.CIUKI_SECURITY_SERVICE_BODY_MAX", CIUKI_SECURITY_SERVICE_BODY_MAX, 8192u},
     {"constant.CIUKI_SECURITY_SERVICE_PENDING_MAX", CIUKI_SECURITY_SERVICE_PENDING_MAX, 8u},
     {"constant.CIUKI_SECURITY_SERVICE_FRAGMENT_MAX", CIUKI_SECURITY_SERVICE_FRAGMENT_MAX, 192u},
-    {"constant.CIUKI_SECURITY_LAUNCH_TIMEOUT_MS", CIUKI_SECURITY_LAUNCH_TIMEOUT_MS, 5000u},
+    {"constant.CIUKI_SECURITY_LAUNCH_TIMEOUT_MS", CIUKI_SECURITY_LAUNCH_TIMEOUT_MS, 30000u},
     {"constant.CIUKI_SECURITY_SERVICE_TIMEOUT_MS", CIUKI_SECURITY_SERVICE_TIMEOUT_MS, 5000u},
     {"sizeof.ciuki_security_launch", sizeof(struct ciuki_security_launch), 96u},
     {"alignof.ciuki_security_launch", _Alignof(struct ciuki_security_launch), 4u},

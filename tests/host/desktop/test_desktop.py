@@ -758,6 +758,7 @@ class DesktopTests(unittest.TestCase):
             self.skipTest("run python3 apps/desktop/build_desktop.py first")
         m = build.validate_payloads()
         self.assertEqual(set(m["files"]), {"desktop", "shell-launch", "demo", "gfxdemo", "dosbox", "files", "tasks", "ciuknote", "ciukide", "control", "terminal", "regedit", "libdeskui.a",
+                                           "sectest",  # U6-4: retained in the image; hidden from Start and Add/Remove Programs.
                                            "ciuki-portrait.xrgb",  # f3-02 /Programs/dosbox; desktop shell /Programs/control
                                            "tango.cis", "TANGO.TXT", "AUTHORS.TXT", "CREDITS.TXT",  # Tango store
                                            "calc", "charmap", "clock", "help", "hwreport", "mixer", "music", "paint", "viewer", "mines", "solitaire", "freecell", "hearts", "serial", "clipbrd", "logview", "printers", "printspool", "msconfig", "recorder", "resmeter", "schedtask", "scandisk", "sysinfo", "sysmon", "wordpad"} | set(build.ICON_FILES))  # legacy-recovery accessories, the f9-07 Hardware Report, system tools and games
@@ -772,9 +773,11 @@ class DesktopTests(unittest.TestCase):
         accessories = {f"/Programs/{n}" for n in ("calc", "charmap", "clipbrd", "clock", "help", "mixer", "viewer")}
         expected_paths = {"/System/Win32/shell-launch", "/Programs/desktop", "/Programs/demo", "/Programs/gfxdemo", "/Programs/dosbox", "/Programs/files", "/Programs/tasks",
                                         "/Programs/terminal", "/Programs/ciuknote", "/Programs/ciukide", "/Programs/control", "/Programs/regedit", "/Programs/paint", "/Programs/calc", "/Programs/charmap", "/Programs/clock", "/Programs/help", "/Programs/mixer", "/Programs/viewer", "/Programs/music", "/Programs/mines", "/Programs/solitaire", "/Programs/freecell", "/Programs/hearts", "/Programs/serial", "/Programs/hwreport", "/Programs/clipbrd", "/Programs/logview", "/Programs/printers", "/System/printspool", "/Programs/msconfig", "/Programs/recorder", "/Programs/resmeter", "/Programs/scandisk", "/Programs/schedtask", "/Programs/sysinfo", "/Programs/sysmon", "/Programs/wordpad",
+                                        "/Programs/sectest",  # U6-4: retained runtime probe, hidden from the menus.
                                         "/system/assets/ciuki-portrait.xrgb",
                                         *licenses, "/system/fonts/LICENSES.TXT",
                                         *image.font_payloads()[0],
+                                        *image.firmware_payloads(),
                                         *(f"/system/fonts/{p.name}" for p in (ROOT / "assets/fonts/native").glob("*.CFN")),
                                         *(f"/system/icons/{name}" for name in build.ICON_FILES),
                                         "/system/icons/TANGO.TXT", "/system/icons/AUTHORS.TXT", "/system/icons/CREDITS.TXT",
@@ -804,6 +807,8 @@ class DesktopTests(unittest.TestCase):
             elif r["path"].startswith("/System/hwids/"):
                 # f2-43: hardware id tables generated into assets/hwids, byte-identical.
                 self.assertEqual(r["sha256"], hashlib.sha256((ROOT / "assets/hwids" / Path(r["path"]).name).read_bytes()).hexdigest())
+            elif r["path"].startswith("/System/firmware/"):
+                self.assertEqual(r["sha256"], hashlib.sha256(sources[r["path"]].read_bytes()).hexdigest())
             elif r["path"].startswith("/system/wallpapers/"):
                 # The owner's adaptive Ciuki scenes, byte-identical to the assets (misc/ciukios_bg/adaptive hashes).
                 self.assertEqual(r["sha256"], hashlib.sha256((ROOT / "assets/wallpapers/ciuki" / Path(r["path"]).name).read_bytes()).hexdigest())

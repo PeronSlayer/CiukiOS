@@ -17,7 +17,8 @@
  * " A "), and the w32srv atom directory (ATOM_ADD/FIND/DELETE/NAME, the
  * apps/w32srv/directory.c rules: integer atoms #1..#0xbfff, string atoms from
  * 0xc000, case-insensitive names, global or per-process scope, reference
- * counts). Every other kernel record is ENOSYS and every other w32srv
+ * counts), plus bounded semaphore/pagefile shared-data services for dplayx.
+ * Every other kernel record is ENOSYS and every other w32srv
  * operation fails with 120; both are counted and reported. */
 #include "linux.h"
 #include <ciuki/abi.h>
@@ -25,6 +26,7 @@
 #include <w32/server.h>
 #include "upper_h1_store.h"
 #include <stdarg.h>
+#include "h1_shared.h"
 #ifdef H1_INSTALLERS
 #include "h1_services.h"
 static int installer_exec;
@@ -229,6 +231,15 @@ static int32_t h1_kernel(void *record, uint32_t size) {
         return status;
     }
 #endif
+    /* DPLAYX_ConstructData needs local shared data, not a network service.
+     * Installer/game modes retain their existing service implementations. */
+#ifdef H1_INSTALLERS
+    if (!installer_exec && !installer_fixture && !game_exec)
+#endif
+    {
+        int32_t shared_status=h1_shared_call(record,size);
+        if (shared_status!=-38) return shared_status;
+    }
     kernel_enosys++;
     count_enosys(h->operation);
     host_print("KERNEL ENOSYS op=");
@@ -839,6 +850,8 @@ int host_main(int argc, char **argv) {
     host_number(host.allocations);
     host_print(" mappings=");
     host_number(host.mappings);
+    host_print(" shared_objects=");
+    host_number(h1_shared_live());
     host_print("\n");
     return loaded ? 0 : 1;
 }

@@ -438,6 +438,7 @@ def build_h1(directory, reused, extra_sources=(), extra_flags=()):
     directory = Path(directory)
     main = directory / 'upper_h1.c'
     main.write_text(Path(__file__).with_name('upper_h1.c').read_text())
+    (directory / 'h1_shared.h').write_bytes(Path(__file__).with_name('h1_shared.h').read_bytes())
     ntdll = build_h1_ntdll(directory / 'ntdll')
     rows = store_rows(json.loads((CORE / 'builtin-store.json').read_text()), reused, ntdll)
     (directory / 'upper_h1_store.h').write_text(store_header('h1_store', rows))
@@ -544,6 +545,21 @@ def conformance_run(program, exe, unit):
 class LoadTests(unittest.TestCase):
     """H1: actual i386 execution of every DllMain on the Linux adapter."""
 
+    def test_h1_shared_data_services(self):
+        """Owned dplayx constructor resources, also when PE execution is blocked."""
+        parent = ROOT / 'build/host/win32'
+        parent.mkdir(parents=True, exist_ok=True)
+        with tempfile.TemporaryDirectory(dir=parent) as directory:
+            program = Path(directory) / 'h1-shared'
+            subprocess.run(['clang', '-std=c17', '-O1', '-g', '-Wall', '-Wextra', '-Werror',
+                            '-fsanitize=address,undefined', '-fno-sanitize-recover=all', '-no-pie',
+                            '-I' + str(ROOT / 'src/kernel/include'),
+                            str(Path(__file__).with_name('h1_shared_test.c')), '-o', str(program)], check=True)
+            result = subprocess.run([program], capture_output=True, text=True, timeout=30)
+            self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+            self.assertIn('PASS H1 semaphore/shared data', result.stdout)
+            print(result.stdout, end='')
+
     def test_h1_dllmain_attach_detach_of_each_reused_dll(self):
         store_path = CORE / 'builtin-store.json'
         if not local_build_matches() or not store_path.is_file():
@@ -568,6 +584,7 @@ class LoadTests(unittest.TestCase):
                 # allocations are KERNEL32's process-lifetime command-line
                 # buffers (GetCommandLineA/W, cached as on Windows).
                 self.assertIn(' mappings=0', r['resources'])
+                self.assertIn(' shared_objects=0', r['resources'])
                 self.assertRegex(r['resources'], r' allocations=[02] ')
                 self.assertIn(name, [n for n, _ in r['attach']])
 

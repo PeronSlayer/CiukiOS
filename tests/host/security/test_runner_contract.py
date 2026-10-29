@@ -118,8 +118,9 @@ class SuiteWiring(unittest.TestCase):
         self.assertEqual(case['resets'], 1)
         self.assertEqual([s['wait_event'] for s in steps.values() if 'wait_event' in s], ['RESET', 'SHUTDOWN'])
         total = sum(c['timeout'] for c in self.acc['cases'])
-        # Integration retains fx-games20's separately bounded games and LAN pairs.
-        extra = [c for c in self.acc['cases'] if 'dos_game' in c or 'guests' in c]
+        # Games, LAN guests (f6-28), and installer/sound setup (fx-games20c)
+        # retain their separate 2,400 s bounds.
+        extra = [c for c in self.acc['cases'] if 'dos_game' in c or 'guests' in c or c['id'].startswith('acc-install-')]
         self.assertTrue(all(c['timeout'] <= 2400 for c in extra))
         self.assertLessEqual(total, 7200 * 4 + 2400 * len(extra))
 

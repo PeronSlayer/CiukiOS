@@ -841,7 +841,7 @@ refer to the exact CIUKI_SECURITY_ names here.
 | CIUKI_SECURITY_SERVICE_BODY_MAX | 8192 |
 | CIUKI_SECURITY_SERVICE_PENDING_MAX | 8 total exchanges; one per endpoint |
 | CIUKI_SECURITY_SERVICE_FRAGMENT_MAX | 192; 64-byte header + fragment <= existing 256-byte channel payload |
-| CIUKI_SECURITY_LAUNCH_TIMEOUT_MS | 5000 |
+| CIUKI_SECURITY_LAUNCH_TIMEOUT_MS | 30000 |
 | CIUKI_SECURITY_SERVICE_TIMEOUT_MS | 5000; reassembly/dispatch admission, not durable commit rollback |
 | CIUKI_SECURITY_END_BEGIN | 0x00000001 |
 | CIUKI_SECURITY_END_COLLECT | 0x00000002; mutually exclusive with BEGIN |
@@ -1173,7 +1173,7 @@ Maximum two launch records per session. Ready states are not unlock authority.
 
 Prepare/copy/resource failure rolls back the unpublished child, role registration,
 all endpoints/console/grants and charges, returning unchanged output. Once a child
-is published, exit, negative handshake or the 5000 ms monotonic deadline produces
+is published, exit, negative handshake or the 30000 ms monotonic deadline produces
 FAILED; stop the entire session pair, revoke descriptors/maps, enter CLOSING and
 keep the trusted error gate. LOGON collects teardown before another logon. No
 fallback user desktop or SYSTEM restart of a user process. Desktop/w32srv crash
