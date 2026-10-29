@@ -83,11 +83,18 @@ source's `config/version.json` stage must equal the channel. `n` counts earlier
 tags of that version and channel, local and (outside dry runs) remote. All
 other checks, artifacts and approvals are the same for every channel.
 
+Alpha and beta releases also include `docs/release-notes-1.0-<channel>.md`
+from the built source commit in `RELEASE-NOTES.md`; empty or missing notes
+are refused. Stable retains its generated notes and matching changelog section.
+This keeps qualification limits and source terms tied to the approved revision.
+GitHub's [release documentation](https://docs.github.com/en/repositories/releasing-projects-on-github/managing-releases-in-a-repository)
+defines the prerelease flag; the channel-to-document selection is CiukiOS policy.
+
 Public text rule: the tool's disk README, VM README and `RELEASE-NOTES.md`
 describe hardware generically (late-1990s/early-2000s desktops and laptops,
 component classes). Packaging refuses if they name a specific PC model, and a
 host test fails if the CHANGELOG section of the version or
-`docs/release-notes-1.0-alpha.md` does.
+either `docs/release-notes-1.0-alpha.md` or `docs/release-notes-1.0-beta.md` does.
 
 Fetch release tags before an offline preview. For example:
 

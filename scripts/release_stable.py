@@ -317,10 +317,15 @@ def inputs(root: Path, version: str, approved_sha: str, channel: str = "stable")
     config = git_json(root, commit, "config/cd-components.json")
     changelog = git_bytes(root, commit, "CHANGELOG.md").decode()
     section = changelog_section(changelog, version)
+    channel_notes = ""
+    if channel in ("alpha", "beta"):
+        channel_notes = git_bytes(root, commit, f"docs/release-notes-1.0-{channel}.md").decode()
+        require(channel_notes.strip(), f"empty {channel} release notes")
     return {"root": root, "image": image, "iso": iso, "disk": disk, "cd": cd,
             "disk_manifest": disk_path, "cd_manifest": cd_path, "commit": commit,
             "version": version, "sha256": approved_sha, "config": config,
-            "policy": policy, "changelog": section, "channel": channel}
+            "policy": policy, "changelog": section, "channel": channel,
+            "channel_notes": channel_notes}
 
 
 def changelog_section(changelog: str, version: str) -> str:
@@ -649,6 +654,7 @@ def notes(info: dict) -> str:
             f"Owner approval: {info['policy']['approval_record']}\n\n"
             + ("This is a pre-release (" + info["channel"] + " channel): expect rough edges; see the known issues below.\n\n"
              if info.get("channel", "stable") != "stable" else "")
+            + (info["channel_notes"].rstrip() + "\n\n" if info.get("channel_notes") else "")
             + "## Try this release\n\n"
             "Verify SHA256SUMS before use. Extract the disk ZIP for Rufus (DD mode), "
             "balenaEtcher or dd; writing it erases the destination disk. "
